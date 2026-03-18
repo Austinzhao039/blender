@@ -67,8 +67,7 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
-          APP=$(find build_ios -name "Blender.app" \
-            -path "*/Release-iphoneos/*" | head -1)
+          APP=$(find build_ios -name "Blender.app" -type d | head -1)
           echo "Found app at: $APP"
           mkdir -p IPA/Payload
           cp -r "$APP" IPA/Payload/
