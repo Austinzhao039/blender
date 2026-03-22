@@ -107,6 +107,23 @@ if(OPENIMAGEIO_FOUND)
   else()
     set(OPENIMAGEIO_PUGIXML_FOUND FALSE)
   endif()
+
+  if(NOT TARGET OpenImageIO::OpenImageIO)
+    add_library(OpenImageIO::OpenImageIO UNKNOWN IMPORTED)
+    set_target_properties(OpenImageIO::OpenImageIO PROPERTIES
+      IMPORTED_LOCATION "${OPENIMAGEIO_LIBRARY}"
+      INTERFACE_INCLUDE_DIRECTORIES "${OPENIMAGEIO_INCLUDE_DIR}")
+    if(OPENIMAGEIO_UTIL_LIBRARY)
+      set_property(TARGET OpenImageIO::OpenImageIO APPEND PROPERTY
+        INTERFACE_LINK_LIBRARIES "${OPENIMAGEIO_UTIL_LIBRARY}")
+    endif()
+  endif()
+
+  if(OPENIMAGEIO_TOOL AND NOT TARGET OpenImageIO::oiiotool)
+    add_executable(OpenImageIO::oiiotool IMPORTED)
+    set_target_properties(OpenImageIO::oiiotool PROPERTIES
+      IMPORTED_LOCATION "${OPENIMAGEIO_TOOL}")
+  endif()
 else()
   set(OPENIMAGEIO_PUGIXML_FOUND FALSE)
 endif()
