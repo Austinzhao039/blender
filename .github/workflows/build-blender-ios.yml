@@ -33,7 +33,11 @@ jobs:
         run: git lfs install
 
       - name: Fetch required LFS source assets
-        run: git lfs pull --include="release/datafiles/startup.blend"
+        run: |
+          git remote add blender-upstream https://projects.blender.org/blender/blender.git 2>/dev/null || true
+          git fetch --depth=1 blender-upstream blender-v5.1-release
+          git lfs fetch blender-upstream --include="release/datafiles/startup.blend" blender-v5.1-release
+          git lfs checkout release/datafiles/startup.blend
 
       - name: Compute iOS libs cache key
         id: ios-libs-cache-key
