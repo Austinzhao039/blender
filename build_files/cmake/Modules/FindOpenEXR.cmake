@@ -202,6 +202,13 @@ if(OPENEXR_FOUND)
 
   set(IMATH_INCLUDE_DIRS
     ${IMATH_INCLUDE_DIR})
+
+  if(NOT TARGET OpenEXR::OpenEXR)
+    add_library(OpenEXR::OpenEXR INTERFACE IMPORTED)
+    set_target_properties(OpenEXR::OpenEXR PROPERTIES
+      INTERFACE_INCLUDE_DIRECTORIES "${OPENEXR_INCLUDE_DIRS}"
+      INTERFACE_LINK_LIBRARIES "${OPENEXR_LIBRARIES}")
+  endif()
 endif()
 
 mark_as_advanced(
