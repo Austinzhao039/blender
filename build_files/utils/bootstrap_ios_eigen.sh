@@ -13,24 +13,34 @@ target_dir="${1:-${repo_root}/lib/ios_arm64/eigen}"
 eigen_version="${EIGEN_VERSION:-8a1083e9bf41b91fdea6546681f806154efdc25a}"
 work_dir="${EIGEN_BOOTSTRAP_WORK_DIR:-${repo_root}/build_eigen_ios_bootstrap}"
 source_dir="${work_dir}/eigen-${eigen_version}"
-build_dir="${source_dir}/build_ios"
-install_dir="${work_dir}/out"
+config_dir="${target_dir}/share/eigen3/cmake"
 
-rm -rf "${source_dir}" "${install_dir}"
-mkdir -p "${work_dir}" "${target_dir}"
+rm -rf "${source_dir}"
+mkdir -p "${work_dir}" "${target_dir}/include/eigen3" "${config_dir}"
 
 curl -L "https://gitlab.com/libeigen/eigen/-/archive/${eigen_version}/eigen-${eigen_version}.tar.gz" | tar xz -C "${work_dir}"
 
-cmake -S "${source_dir}" -B "${build_dir}" \
-  -DCMAKE_SYSTEM_NAME=iOS \
-  -DCMAKE_OSX_ARCHITECTURES=arm64 \
-  -DCMAKE_INSTALL_PREFIX="${install_dir}" \
-  -DBUILD_TESTING=OFF \
-  -DEIGEN_BUILD_DOC=OFF
+rm -rf "${target_dir}/include/eigen3/Eigen" "${target_dir}/include/eigen3/unsupported"
+cp -R "${source_dir}/Eigen" "${target_dir}/include/eigen3/Eigen"
+if [[ -d "${source_dir}/unsupported" ]]; then
+  cp -R "${source_dir}/unsupported" "${target_dir}/include/eigen3/unsupported"
+fi
+if [[ -f "${source_dir}/signature_of_eigen3_matrix_library" ]]; then
+  cp "${source_dir}/signature_of_eigen3_matrix_library" "${target_dir}/include/eigen3/"
+fi
 
-cmake --install "${build_dir}"
+cat > "${config_dir}/Eigen3Config.cmake" <<'EOF'
+get_filename_component(PACKAGE_PREFIX_DIR "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+if(NOT TARGET Eigen3::Eigen)
+  add_library(Eigen3::Eigen INTERFACE IMPORTED)
+  set_target_properties(Eigen3::Eigen PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${PACKAGE_PREFIX_DIR}/include/eigen3")
+endif()
+set(Eigen3_FOUND TRUE)
+EOF
 
-rm -rf "${target_dir}/include" "${target_dir}/share"
-mkdir -p "${target_dir}"
-cp -R "${install_dir}/include" "${target_dir}/include"
-cp -R "${install_dir}/share" "${target_dir}/share"
+cat > "${config_dir}/Eigen3ConfigVersion.cmake" <<'EOF'
+set(PACKAGE_VERSION "5.0.1")
+set(PACKAGE_VERSION_COMPATIBLE TRUE)
+set(PACKAGE_VERSION_EXACT TRUE)
+EOF
