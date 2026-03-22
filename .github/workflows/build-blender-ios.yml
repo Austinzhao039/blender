@@ -37,7 +37,8 @@ jobs:
         run: printf 'gitlink=%s\n' "$(git rev-parse HEAD:lib/ios_arm64)" >> "$GITHUB_OUTPUT"
 
       - name: Restore iOS prebuilt libraries cache
-        uses: actions/cache@v4
+        id: ios-libs-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             lib/ios_arm64
@@ -46,6 +47,15 @@ jobs:
 
       - name: Fetch prebuilt iOS libraries
         run: python3 ./build_files/utils/make_update.py --use-ios-libraries
+
+      - name: Save iOS prebuilt libraries cache
+        if: steps.ios-libs-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            lib/ios_arm64
+            .git/modules/lib/ios_arm64
+          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.gitlink }}
 
       - name: Generate Xcode project
         run: cmake -G Xcode -S . -B build_ios
