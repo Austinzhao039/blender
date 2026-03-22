@@ -32,6 +32,9 @@ jobs:
       - name: Initialize Git LFS
         run: git lfs install
 
+      - name: Fetch required LFS source assets
+        run: git lfs pull --include="release/datafiles/startup.blend"
+
       - name: Compute iOS libs cache key
         id: ios-libs-cache-key
         run: printf 'sha=%s\n' "$(git rev-parse HEAD:lib/ios_arm64)" >> "$GITHUB_OUTPUT"
