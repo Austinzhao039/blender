@@ -206,6 +206,11 @@ if(NOT WITH_APPLE_CROSSPLATFORM)
 else()
   # When building for iOS we use the MacOS version of Python from the macos libs dir
   set(CROSSCOMPILE_HOST_LIBDIR "${CMAKE_SOURCE_DIR}/lib/macos_arm64")
+  if(NOT PYTHON_VERSION)
+    set(PYTHON_VERSION "3.11")
+    message(STATUS "Using Python ${PYTHON_VERSION} for iOS prebuilt libraries")
+  endif()
+
   if(PYTHON_VERSION)
     set(_crosscompile_host_python "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python${PYTHON_VERSION}")
   else()
