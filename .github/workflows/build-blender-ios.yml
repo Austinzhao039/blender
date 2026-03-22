@@ -29,26 +29,14 @@ jobs:
       - name: Install dependencies
         run: brew install git-lfs cmake
 
-      - name: Clone Blender ios branch with LFS
-        run: |
-          git lfs install
-          git clone --depth 1 --branch ios \
-            https://projects.blender.org/blender/blender.git blender
-          cd blender
-          git lfs pull
-
-      - name: Overlay fork customizations
-        run: |
-          cp -R scripts/addons_core/touchview blender/scripts/addons_core/
-          cp scripts/startup/touchview_ios_startup.py blender/scripts/startup/
+      - name: Initialize Git LFS
+        run: git lfs install
 
       - name: Fetch prebuilt iOS libraries
         run: python3 ./build_files/utils/make_update.py --use-ios-libraries
-        working-directory: blender
 
       - name: Generate Xcode project
-        run: cmake -G Xcode -S . -B ../build_ios
-        working-directory: blender
+        run: cmake -G Xcode -S . -B build_ios
 
       - name: List Xcode targets
         run: xcodebuild -project build_ios/Blender.xcodeproj -list
