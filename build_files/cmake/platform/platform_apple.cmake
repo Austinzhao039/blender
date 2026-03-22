@@ -79,7 +79,8 @@ if(WITH_APPLE_CROSSPLATFORM)
   # NOTE: ENV command used to isolate environment, as running inside Xcode otherhwise causes Cflags to be inherited.
   set(CROSSCOMPILE_TOOLDIR "${CMAKE_SOURCE_DIR}/../build_ios/build_darwin_tools/${CMAKE_BUILD_TYPE}")
   # Override the defines that are used for building Blender (make sure they come after CMAKE_ARGS)
-  set(CMAKE_TOOLS_ARGS "${CMAKE_ARGS} -DWITH_CROSSCOMPILED_TOOLS=ON -DAPPLE_TARGET_DEVICE=macos ${CROSSCOMPILE_C_FLAGS} ${CROSSCOMPILE_CXX_FLAGS}")
+  set(CMAKE_TOOLS_ARGS "${CMAKE_ARGS} -DWITH_CROSSCOMPILED_TOOLS=ON -DAPPLE_TARGET_DEVICE=macos -DBLENDER_HOST_TOOLS_ONLY=ON ${CROSSCOMPILE_C_FLAGS} ${CROSSCOMPILE_CXX_FLAGS}")
+  set(CMAKE_TOOLS_ARGS "${CMAKE_TOOLS_ARGS} -DWITH_ALEMBIC=OFF -DWITH_BULLET=OFF -DWITH_CODEC_FFMPEG=OFF -DWITH_CODEC_SNDFILE=OFF -DWITH_CYCLES=OFF -DWITH_DRACO=OFF -DWITH_FFTW3=OFF -DWITH_FREESTYLE=OFF -DWITH_GMP=OFF -DWITH_HARU=OFF -DWITH_IK_ITASC=OFF -DWITH_IK_SOLVER=OFF -DWITH_IMAGE_CINEON=OFF -DWITH_IMAGE_OPENEXR=OFF -DWITH_IMAGE_OPENJPEG=OFF -DWITH_IMAGE_WEBP=OFF -DWITH_INTERNATIONAL=OFF -DWITH_MANIFOLD=OFF -DWITH_MATERIALX=OFF -DWITH_MOD_FLUID=OFF -DWITH_MOD_OCEANSIM=OFF -DWITH_MOD_REMESH=OFF -DWITH_NANOVDB=OFF -DWITH_OPENAL=OFF -DWITH_OPENCOLORIO=OFF -DWITH_OPENIMAGEDENOISE=OFF -DWITH_OPENSUBDIV=OFF -DWITH_OPENVDB=OFF -DWITH_POTRACE=OFF -DWITH_PUGIXML=OFF -DWITH_PYTHON=OFF -DWITH_QUADRIFLOW=OFF -DWITH_TBB=OFF -DWITH_USD=OFF -DWITH_COMPILER_PRECOMPILED_HEADERS=OFF -DWITH_OPTIMIZED_BUILD_TOOLS=OFF")
   # IOS_FIXME - Add Cross-Compile defines to the C-Flags
   # This is a bit of a fudge to make sure that the cross-compiled tools know that we're building
   # in a cross-compile environment in order that all class and struct definitions match (specificially for RNA).
@@ -91,7 +92,7 @@ if(WITH_APPLE_CROSSPLATFORM)
   get_filename_component(CMAKE_BIN_DIRECTORY "${CMAKE_COMMAND}" DIRECTORY)
   add_custom_target(blender_cross_tools_compile
     COMMENT "\n---------------------------\n Building Cross Compile Tools\n"
-    COMMAND env -i PATH="${CMAKE_BIN_DIRECTORY}:$ENV{PATH}" BUILD_CMAKE_ARGS=${CMAKE_TOOLS_ARGS} BUILD_DIR=${CROSSCOMPILE_TOOLDIR} make tools
+    COMMAND env -i HOME="$ENV{HOME}" PATH="${CMAKE_BIN_DIRECTORY}:$ENV{PATH}" BUILD_CMAKE_ARGS=${CMAKE_TOOLS_ARGS} BUILD_DIR=${CROSSCOMPILE_TOOLDIR} make tools
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   )
 
@@ -182,7 +183,12 @@ if(WITH_APPLE_CROSSPLATFORM)
   endif()
 else()
   if(NOT EXISTS "${LIBDIR}/python/")
-    message(FATAL_ERROR "Mac OSX requires pre-compiled libs at: '${LIBDIR}'")
+    if(BLENDER_HOST_TOOLS_ONLY)
+      message(WARNING "Missing pre-compiled macOS libs at '${LIBDIR}', falling back to system packages for host tools")
+      set(LIBDIR "${CMAKE_BINARY_DIR}/host_tools_no_libdir")
+    else()
+      message(FATAL_ERROR "Mac OSX requires pre-compiled libs at: '${LIBDIR}'")
+    endif()
   endif()
 endif()
 if(FIRST_RUN)
