@@ -51,22 +51,29 @@ jobs:
           path: |
             lib/ios_arm64
             .git/modules/lib/ios_arm64
-          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-fmt-v1
+          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
       - name: Fetch prebuilt iOS libraries
         if: steps.ios-libs-cache.outputs.cache-hit != 'true'
         run: python3 ./build_files/utils/make_update.py --use-ios-libraries
 
-      - name: Bootstrap fmt prebuilt
+      - name: Bootstrap missing iOS prebuilts
         run: |
           if [ ! -f lib/ios_arm64/fmt/include/fmt/core.h ]; then
             bash ./build_files/utils/bootstrap_ios_fmt.sh
           fi
+          if [ ! -f lib/ios_arm64/eigen/share/eigen3/cmake/Eigen3Config.cmake ]; then
+            bash ./build_files/utils/bootstrap_ios_eigen.sh
+          fi
 
-      - name: Verify fmt prebuilt
+      - name: Verify bootstrapped iOS prebuilts
         run: |
           if [ ! -f lib/ios_arm64/fmt/include/fmt/core.h ]; then
             echo "ERROR: fmt not found in lib/ios_arm64 after bootstrap." >&2
+            exit 1
+          fi
+          if [ ! -f lib/ios_arm64/eigen/share/eigen3/cmake/Eigen3Config.cmake ]; then
+            echo "ERROR: Eigen3 config not found in lib/ios_arm64 after bootstrap." >&2
             exit 1
           fi
 
@@ -77,7 +84,7 @@ jobs:
           path: |
             lib/ios_arm64
             .git/modules/lib/ios_arm64
-          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-fmt-v1
+          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
       - name: Generate Xcode project
         run: cmake -G Xcode -S . -B build_ios
