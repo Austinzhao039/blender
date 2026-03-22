@@ -32,6 +32,18 @@ jobs:
       - name: Initialize Git LFS
         run: git lfs install
 
+      - name: Compute iOS libs cache key
+        id: ios-libs-cache-key
+        run: printf 'gitlink=%s\n' "$(git rev-parse HEAD:lib/ios_arm64)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore iOS prebuilt libraries cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            lib/ios_arm64
+            .git/modules/lib/ios_arm64
+          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.gitlink }}
+
       - name: Fetch prebuilt iOS libraries
         run: python3 ./build_files/utils/make_update.py --use-ios-libraries
 

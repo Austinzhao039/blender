@@ -38,7 +38,11 @@ endif()
 
 set(_PYTHON_VERSION_SUPPORTED 3.13)
 
-set(PYTHON_VERSION ${_PYTHON_VERSION_SUPPORTED} CACHE STRING "Python Version (major and minor only)")
+if(NOT DEFINED PYTHON_VERSION)
+  set(PYTHON_VERSION ${_PYTHON_VERSION_SUPPORTED} CACHE STRING "Python Version (major and minor only)")
+elseif(NOT DEFINED CACHE{PYTHON_VERSION})
+  set(PYTHON_VERSION ${PYTHON_VERSION} CACHE STRING "Python Version (major and minor only)")
+endif()
 mark_as_advanced(PYTHON_VERSION)
 
 
