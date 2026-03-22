@@ -323,12 +323,14 @@ if(WITH_FFTW3)
 endif()
 
 # FreeType compiled with Brotli compression for woff2.
-set(FREETYPE_ROOT_DIR ${LIBDIR}/freetype)
-find_package(Freetype REQUIRED)
-set(BROTLI_LIBRARIES
-  ${LIBDIR}/brotli/lib/libbrotlicommon-static.a
-  ${LIBDIR}/brotli/lib/libbrotlidec-static.a
-)
+if(NOT BLENDER_HOST_TOOLS_ONLY)
+  set(FREETYPE_ROOT_DIR ${LIBDIR}/freetype)
+  find_package(Freetype REQUIRED)
+  set(BROTLI_LIBRARIES
+    ${LIBDIR}/brotli/lib/libbrotlicommon-static.a
+    ${LIBDIR}/brotli/lib/libbrotlidec-static.a
+  )
+endif()
 
 if(WITH_HARFBUZZ)
   find_package(Harfbuzz)
@@ -339,9 +341,11 @@ if(WITH_FRIBIDI)
 endif()
 
 # Header dependency of required OpenImageIO.
-find_package(OpenEXR REQUIRED)
-add_bundled_libraries(openexr/lib)
-add_bundled_libraries(imath/lib)
+if(NOT BLENDER_HOST_TOOLS_ONLY)
+  find_package(OpenEXR REQUIRED)
+  add_bundled_libraries(openexr/lib)
+  add_bundled_libraries(imath/lib)
+endif()
 
 string(APPEND PLATFORM_CFLAGS " -pipe -funsigned-char -fno-strict-aliasing -ffp-contract=off")
 set(PLATFORM_LINKFLAGS "\
@@ -453,18 +457,20 @@ endif()
 list(APPEND PLATFORM_LINKLIBS c++)
 
 set(EPOXY_ROOT_DIR ${LIBDIR}/epoxy)
-if(NOT WITH_APPLE_CROSSPLATFORM)
+if(NOT WITH_APPLE_CROSSPLATFORM AND NOT BLENDER_HOST_TOOLS_ONLY)
   find_package(Epoxy REQUIRED)
 endif()
 
-set(PNG_ROOT ${LIBDIR}/png)
-find_package(PNG REQUIRED)
+if(NOT BLENDER_HOST_TOOLS_ONLY)
+  set(PNG_ROOT ${LIBDIR}/png)
+  find_package(PNG REQUIRED)
 
-set(JPEG_ROOT ${LIBDIR}/jpeg)
-find_package(JPEG REQUIRED)
+  set(JPEG_ROOT ${LIBDIR}/jpeg)
+  find_package(JPEG REQUIRED)
 
-set(TIFF_ROOT ${LIBDIR}/tiff)
-find_package(TIFF REQUIRED)
+  set(TIFF_ROOT ${LIBDIR}/tiff)
+  find_package(TIFF REQUIRED)
+endif()
 
 set(fmt_ROOT ${LIBDIR}/fmt)
 if(WITH_APPLE_CROSSPLATFORM)
@@ -485,8 +491,10 @@ if(WITH_PUGIXML)
   find_package(PugiXML REQUIRED)
 endif()
 
-find_package(OpenImageIO REQUIRED)
-add_bundled_libraries(openimageio/lib)
+if(NOT BLENDER_HOST_TOOLS_ONLY)
+  find_package(OpenImageIO REQUIRED)
+  add_bundled_libraries(openimageio/lib)
+endif()
 
 if(WITH_OPENCOLORIO)
   find_package(OpenColorIO 2.0.0 REQUIRED)

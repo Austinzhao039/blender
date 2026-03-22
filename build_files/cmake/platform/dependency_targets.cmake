@@ -147,11 +147,17 @@ target_link_libraries(bf_deps_png INTERFACE ${PNG_LIBRARIES})
 # -----------------------------------------------------------------------------
 # Configure OpenImageIO
 
-add_library(bf::dependencies::openimageio ALIAS OpenImageIO::OpenImageIO)
-if(TARGET OpenImageIO::oiiotool)
-  get_target_property(OPENIMAGEIO_TOOL OpenImageIO::oiiotool LOCATION)
-else()
+if(BLENDER_HOST_TOOLS_ONLY)
+  add_library(bf_deps_openimageio INTERFACE)
+  add_library(bf::dependencies::openimageio ALIAS bf_deps_openimageio)
   unset(OPENIMAGEIO_TOOL)
+else()
+  add_library(bf::dependencies::openimageio ALIAS OpenImageIO::OpenImageIO)
+  if(TARGET OpenImageIO::oiiotool)
+    get_target_property(OPENIMAGEIO_TOOL OpenImageIO::oiiotool LOCATION)
+  else()
+    unset(OPENIMAGEIO_TOOL)
+  endif()
 endif()
 
 # -----------------------------------------------------------------------------
