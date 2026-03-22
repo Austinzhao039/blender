@@ -43,10 +43,17 @@ jobs:
           path: |
             lib/ios_arm64
             .git/modules/lib/ios_arm64
-          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.gitlink }}
+          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.gitlink }}-bootstrap-v1
 
       - name: Fetch prebuilt iOS libraries
+        if: steps.ios-libs-cache.outputs.cache-hit != 'true'
         run: python3 ./build_files/utils/make_update.py --use-ios-libraries
+
+      - name: Bootstrap missing iOS deps
+        run: |
+          if [ ! -f lib/ios_arm64/fmt/include/fmt/core.h ]; then
+            bash ./build_files/utils/bootstrap_ios_deps.sh fmt
+          fi
 
       - name: Save iOS prebuilt libraries cache
         if: steps.ios-libs-cache.outputs.cache-hit != 'true'
@@ -55,7 +62,7 @@ jobs:
           path: |
             lib/ios_arm64
             .git/modules/lib/ios_arm64
-          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.gitlink }}
+          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.gitlink }}-bootstrap-v1
 
       - name: Generate Xcode project
         run: cmake -G Xcode -S . -B build_ios
