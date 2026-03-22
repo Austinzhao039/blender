@@ -2,15 +2,6 @@ name: Build Blender iOS IPA
 
 on:
   workflow_dispatch:
-    inputs:
-      ios_libs_repo:
-        description: Optional GitHub repo (owner/name) for iOS prebuilt libs
-        required: false
-        default: ''
-      ios_libs_ref:
-        description: Branch or tag for the iOS prebuilt libs repo
-        required: false
-        default: main
 
 jobs:
   build:
@@ -36,37 +27,14 @@ jobs:
           df -h
 
       - name: Install dependencies
-        run: brew install git-lfs cmake autoconf automake bison dos2unix flex libtool meson ninja pkg-config yasm
+        run: brew install git-lfs cmake
 
       - name: Initialize Git LFS
         run: git lfs install
 
       - name: Compute iOS libs cache key
         id: ios-libs-cache-key
-        env:
-          IOS_LIBS_REPO: ${{ inputs.ios_libs_repo }}
-          IOS_LIBS_REF: ${{ inputs.ios_libs_ref }}
-        run: |
-          if [ -n "$IOS_LIBS_REPO" ]; then
-            repo_url="https://github.com/${IOS_LIBS_REPO}.git"
-            repo_key="${IOS_LIBS_REPO//\//-}"
-            ref_sha="$(git ls-remote "$repo_url" "refs/heads/${IOS_LIBS_REF}" "refs/tags/${IOS_LIBS_REF}" | python3 -c 'import sys; lines=[line.strip() for line in sys.stdin if line.strip()]; print(lines[0].split()[0] if lines else "")')"
-            if [ -z "$ref_sha" ]; then
-              echo "Could not resolve iOS libs ref '${IOS_LIBS_REF}' in ${IOS_LIBS_REPO}" >&2
-              exit 1
-            fi
-            printf 'source=fork\n' >> "$GITHUB_OUTPUT"
-            printf 'repo=%s\n' "$IOS_LIBS_REPO" >> "$GITHUB_OUTPUT"
-            printf 'repo_key=%s\n' "$repo_key" >> "$GITHUB_OUTPUT"
-            printf 'ref=%s\n' "$IOS_LIBS_REF" >> "$GITHUB_OUTPUT"
-            printf 'sha=%s\n' "$ref_sha" >> "$GITHUB_OUTPUT"
-          else
-            printf 'source=submodule\n' >> "$GITHUB_OUTPUT"
-            printf 'repo=upstream-submodule\n' >> "$GITHUB_OUTPUT"
-            printf 'repo_key=upstream-submodule\n' >> "$GITHUB_OUTPUT"
-            printf 'ref=main\n' >> "$GITHUB_OUTPUT"
-            printf 'sha=%s\n' "$(git rev-parse HEAD:lib/ios_arm64)" >> "$GITHUB_OUTPUT"
-          fi
+        run: printf 'sha=%s\n' "$(git rev-parse HEAD:lib/ios_arm64)" >> "$GITHUB_OUTPUT"
 
       - name: Restore iOS prebuilt libraries cache
         id: ios-libs-cache
@@ -75,26 +43,22 @@ jobs:
           path: |
             lib/ios_arm64
             .git/modules/lib/ios_arm64
-          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.repo_key }}-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v2
+          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-fmt-v1
 
       - name: Fetch prebuilt iOS libraries
-        if: steps.ios-libs-cache.outputs.cache-hit != 'true' && steps.ios-libs-cache-key.outputs.source == 'submodule'
+        if: steps.ios-libs-cache.outputs.cache-hit != 'true'
         run: python3 ./build_files/utils/make_update.py --use-ios-libraries
 
-      - name: Clone iOS prebuilt libs fork
-        if: steps.ios-libs-cache.outputs.cache-hit != 'true' && steps.ios-libs-cache-key.outputs.source == 'fork'
-        env:
-          IOS_LIBS_REPO: ${{ steps.ios-libs-cache-key.outputs.repo }}
-          IOS_LIBS_REF: ${{ steps.ios-libs-cache-key.outputs.ref }}
+      - name: Bootstrap fmt prebuilt
         run: |
-          rm -rf lib/ios_arm64
-          git clone --depth=1 --branch "$IOS_LIBS_REF" "https://github.com/${IOS_LIBS_REPO}.git" lib/ios_arm64
-          git -C lib/ios_arm64 lfs pull
+          if [ ! -f lib/ios_arm64/fmt/include/fmt/core.h ]; then
+            bash ./build_files/utils/bootstrap_ios_fmt.sh
+          fi
 
       - name: Verify fmt prebuilt
         run: |
           if [ ! -f lib/ios_arm64/fmt/include/fmt/core.h ]; then
-            echo "ERROR: fmt not found in lib/ios_arm64. Build it once on macOS and commit it to your lib-ios_arm64 fork." >&2
+            echo "ERROR: fmt not found in lib/ios_arm64 after bootstrap." >&2
             exit 1
           fi
 
@@ -105,7 +69,7 @@ jobs:
           path: |
             lib/ios_arm64
             .git/modules/lib/ios_arm64
-          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.repo_key }}-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v2
+          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-fmt-v1
 
       - name: Generate Xcode project
         run: cmake -G Xcode -S . -B build_ios
