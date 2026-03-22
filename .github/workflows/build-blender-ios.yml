@@ -9,6 +9,12 @@ jobs:
     timeout-minutes: 180
 
     steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          lfs: false
+
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android
@@ -23,22 +29,19 @@ jobs:
       - name: Install dependencies
         run: brew install git-lfs cmake
 
-      - name: Clone Blender ios branch with LFS
+      - name: Fetch Blender LFS from upstream
         run: |
+          git remote add upstream https://projects.blender.org/blender/blender.git
           git lfs install
-          git clone --depth 1 --branch ios \
-            https://projects.blender.org/blender/blender.git blender
-          cd blender
-          git lfs fetch origin
-          git lfs pull
+          git fetch --depth 1 upstream ios blender-v5.1-release
+          git lfs fetch upstream ios blender-v5.1-release
+          git lfs checkout
 
       - name: Fetch prebuilt iOS libraries
-        run: |
-          cd blender
-          python3 ./build_files/utils/make_update.py --use-ios-libraries
+        run: python3 ./build_files/utils/make_update.py --use-ios-libraries
 
       - name: Generate Xcode project
-        run: cmake -G Xcode -S blender -B build_ios
+        run: cmake -G Xcode -S . -B build_ios
 
       - name: List Xcode targets
         run: xcodebuild -project build_ios/Blender.xcodeproj -list
@@ -71,6 +74,7 @@ jobs:
           echo "Found app at: $APP"
           ls -la "$APP" || (echo "App not found, searching..." && find build_ios -name "*.app" -type d)
           du -sh "$APP"
+          rm -rf "$APP/Assets/5.0/python/lib/python3.11/config-3.11-darwin"
           mkdir -p IPA/Payload
           cp -r "$APP" IPA/Payload/
           cd IPA && zip -r ../Blender.ipa Payload/

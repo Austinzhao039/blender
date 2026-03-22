@@ -27,6 +27,9 @@ Desktop.ini
 # commonly used paths in blender
 /blender.bin
 /BUILD_NOTES.txt
+/blender-ipad-unsigned/
+/squashfs-root/
+/touchview/
 
 # local patches
 /*.patch
