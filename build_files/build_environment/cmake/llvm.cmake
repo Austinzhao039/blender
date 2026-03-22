@@ -73,9 +73,21 @@ set(LLVM_EXTRA_ARGS
   ${LLVM_XML2_ARGS}
 )
 
+set(LLVM_PATCH
+  ${PATCH_CMD} -p 1 -d
+    ${BUILD_DIR}/ll/src/ll <
+    ${PATCH_DIR}/llvm.diff
+)
+
 if(WIN32)
   set(LLVM_GENERATOR "Ninja")
   list(APPEND LLVM_EXTRA_ARGS -DPython3_FIND_REGISTRY=NEVER)
+  set(LLVM_PATCH
+    ${LLVM_PATCH} &&
+    ${PATCH_CMD} -p 1 -d
+      ${BUILD_DIR}/ll/src/ll <
+      ${PATCH_DIR}/llvm_clang_cuda_msvc_header_fix.diff
+    )
 else()
   set(LLVM_GENERATOR "Unix Makefiles")
 endif()
@@ -90,7 +102,6 @@ if(WITH_APPLE_CROSSPLATFORM)
 else()
   set(LLVM_PATCH_DIFF ${PATCH_DIR}/llvm.diff)
 endif()
-
 # short project name due to long filename issues on windows
 ExternalProject_Add(ll
   URL file://${PACKAGE_DIR}/${LLVM_FILE}
