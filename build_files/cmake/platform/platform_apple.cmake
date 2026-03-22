@@ -206,21 +206,19 @@ if(NOT WITH_APPLE_CROSSPLATFORM)
 else()
   # When building for iOS we use the MacOS version of Python from the macos libs dir
   set(CROSSCOMPILE_HOST_LIBDIR "${CMAKE_SOURCE_DIR}/lib/macos_arm64")
-  if(NOT PYTHON_VERSION)
-	# IOS_FIXME: This is not great why is PYTHON_VERSION not defined here?
-	message("WARNING Manually defining Python Version to 3.11 for iOS build")
-	set(PYTHON_EXECUTABLE "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python3.11")
+  if(PYTHON_VERSION)
+    set(_crosscompile_host_python "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python${PYTHON_VERSION}")
   else()
-    set(PYTHON_EXECUTABLE "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python${PYTHON_VERSION}")
+    set(_crosscompile_host_python "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python3.11")
   endif()
-  if(NOT EXISTS ${PYTHON_EXECUTABLE})
-    message(
-      FATAL_ERROR
-      "Missing: <${PYTHON_EXECUTABLE}>\n"
-      "MacOS version of Python must exist to build iOS version\n"
-	  "Try building MacOS version first: 'make update' or 'make deps'\n"
-    )
+
+  if(EXISTS "${_crosscompile_host_python}")
+    set(PYTHON_EXECUTABLE "${_crosscompile_host_python}")
+  else()
+    find_program(PYTHON_EXECUTABLE "python3" REQUIRED)
+    message(WARNING "Missing bundled host Python at '${_crosscompile_host_python}', falling back to '${PYTHON_EXECUTABLE}'")
   endif()
+  unset(_crosscompile_host_python)
 
   message(STATUS "HOST PYTHON EXECUTABLE: ${PYTHON_EXECUTABLE}")
 endif()
