@@ -525,7 +525,7 @@ if(WITH_NANOVDB)
 endif()
 
 test_neon_support()
-if(SUPPORTS_NEON_BUILD)
+if(SUPPORTS_NEON_BUILD AND NOT BLENDER_HOST_TOOLS_ONLY)
   find_package(sse2neon REQUIRED)
 endif()
 
