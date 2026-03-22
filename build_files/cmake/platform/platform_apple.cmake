@@ -457,7 +457,12 @@ set(TIFF_ROOT ${LIBDIR}/tiff)
 find_package(TIFF REQUIRED)
 
 set(fmt_ROOT ${LIBDIR}/fmt)
-find_package(fmt REQUIRED)
+if(WITH_APPLE_CROSSPLATFORM)
+  set(fmt_DIR ${LIBDIR}/fmt/lib/cmake/fmt)
+  find_package(fmt REQUIRED CONFIG)
+else()
+  find_package(fmt REQUIRED)
+endif()
 
 if(WITH_IMAGE_WEBP)
   set(WEBP_ROOT_DIR ${LIBDIR}/webp)
