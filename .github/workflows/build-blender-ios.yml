@@ -27,7 +27,7 @@ jobs:
           df -h
 
       - name: Install dependencies
-        run: brew install git-lfs cmake fmt
+        run: brew install git-lfs cmake fmt openimageio zstd
 
       - name: Initialize Git LFS
         run: git lfs install
