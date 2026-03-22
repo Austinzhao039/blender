@@ -34,7 +34,8 @@ jobs:
           git remote add upstream https://projects.blender.org/blender/blender.git
           git lfs install
           git fetch --depth 1 upstream ios blender-v5.1-release
-          git lfs fetch upstream ios blender-v5.1-release
+          git lfs fetch upstream ios
+          git lfs fetch upstream blender-v5.1-release
           git lfs checkout
 
       - name: Fetch prebuilt iOS libraries
