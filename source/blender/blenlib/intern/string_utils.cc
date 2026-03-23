@@ -101,7 +101,7 @@ void BLI_string_replace(std::string &haystack, const StringRef needle, const Str
   }
 }
 
-std::string BLI_string_pad_number_sign(const blender::StringRef str)
+std::string BLI_string_pad_number_sign(const StringRef str)
 {
   if (str.startswith("-")) {
     return std::string(str);

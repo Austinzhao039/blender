@@ -55,7 +55,7 @@ void BLI_string_replace(std::string &haystack, StringRef needle, StringRef other
  * \param str: The numeric string to pad (unchanged if starts with '-')
  * \return The padded string with figure space prepended if positive
  */
-std::string BLI_string_pad_number_sign(blender::StringRef str);
+std::string BLI_string_pad_number_sign(StringRef str);
 
 /**
  * In-place replace every \a src to \a dst in \a str.
