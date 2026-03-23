@@ -79,7 +79,9 @@ endif()
 
 add_library(bf_deps_eigen INTERFACE)
 add_library(bf::dependencies::eigen ALIAS bf_deps_eigen)
-target_link_libraries(bf_deps_eigen INTERFACE Eigen3::Eigen)
+if(NOT BLENDER_HOST_TOOLS_ONLY)
+  target_link_libraries(bf_deps_eigen INTERFACE Eigen3::Eigen)
+endif()
 
 if(WITH_TBB)
   target_compile_definitions(bf_deps_eigen INTERFACE EIGEN_HAS_TBB)
