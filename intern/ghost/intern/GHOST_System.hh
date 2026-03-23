@@ -215,6 +215,11 @@ class GHOST_System : public GHOST_ISystem {
    */
   GHOST_TSuccess pushEvent(std::unique_ptr<const GHOST_IEvent> event);
 
+  GHOST_TSuccess pushEvent(const GHOST_IEvent *event)
+  {
+    return pushEvent(std::unique_ptr<const GHOST_IEvent>(event));
+  }
+
   /**
    * \return The timer manager.
    */
