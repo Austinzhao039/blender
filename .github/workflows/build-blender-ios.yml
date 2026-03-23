@@ -32,13 +32,37 @@ jobs:
       - name: Initialize Git LFS
         run: git lfs install
 
+      - name: Compute required LFS cache key
+        id: required-lfs-cache-key
+        run: printf 'sha=%s\n' "$(git rev-parse HEAD:release/datafiles/startup.blend)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore required LFS assets cache
+        id: required-lfs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .git/lfs/objects
+            release/datafiles/startup.blend
+          key: ${{ runner.os }}-required-lfs-${{ steps.required-lfs-cache-key.outputs.sha }}-v1
+
       - name: Fetch required LFS source assets
         run: |
-          git config lfs.remote.searchall true
-          git remote add lfs-fallback https://projects.blender.org/blender/blender.git 2>/dev/null || true
-          git remote set-url --push lfs-fallback no_push
-          git lfs fetch lfs-fallback
+          if [ "${{ steps.required-lfs-cache.outputs.cache-hit }}" != "true" ]; then
+            git config lfs.remote.searchall true
+            git remote add lfs-fallback https://projects.blender.org/blender/blender.git 2>/dev/null || true
+            git remote set-url --push lfs-fallback no_push
+            git lfs fetch lfs-fallback --include="release/datafiles/startup.blend"
+          fi
           git lfs pull --include="release/datafiles/startup.blend"
+
+      - name: Save required LFS assets cache
+        if: steps.required-lfs-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .git/lfs/objects
+            release/datafiles/startup.blend
+          key: ${{ runner.os }}-required-lfs-${{ steps.required-lfs-cache-key.outputs.sha }}-v1
 
       - name: Compute iOS libs cache key
         id: ios-libs-cache-key
