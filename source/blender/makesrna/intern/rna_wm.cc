@@ -663,18 +663,14 @@ const EnumPropertyItem rna_enum_wm_report_items[] = {
 
 #  include "MEM_guardedalloc.h"
 
-#  ifdef WITH_PYTHON
-#    include "BPY_extern.hh"
-#  endif
-
 namespace blender::ui {
 struct PieMenu;
 struct PopupMenu;
 struct Popover;
 
-Layout *pie_menu_layout(PieMenu *pie);
-Layout *popup_menu_layout(PopupMenu *pup);
-Layout *popover_layout(Popover *pup);
+ui::Layout *pie_menu_layout(PieMenu *pie);
+ui::Layout *popup_menu_layout(PopupMenu *pup);
+ui::Layout *popover_layout(Popover *pup);
 }  // namespace blender::ui
 
 namespace blender {
