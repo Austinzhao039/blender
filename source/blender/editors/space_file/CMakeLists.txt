@@ -18,9 +18,17 @@ if(WITH_APPLE_CROSSPLATFORM)
   set(FSMENU_SRC
     fsmenu_system.mm
   )
+elseif(APPLE)
+  set(FSMENU_SRC
+    fsmenu_system_macos.mm
+  )
+elseif(WIN32)
+  set(FSMENU_SRC
+    fsmenu_system_win32.cc
+  )
 else()
   set(FSMENU_SRC
-    fsmenu_system.cc
+    fsmenu_system_unix.cc
   )
 endif()
 
@@ -49,20 +57,6 @@ set(SRC
   filelist/filelist_intern.hh
   fsmenu.hh
 )
-
-if(WIN32)
-  list(APPEND SRC
-    fsmenu_system_win32.cc
-  )
-elseif(APPLE)
-  list(APPEND SRC
-    fsmenu_system_macos.mm
-  )
-else() # Generic UNIX
-  list(APPEND SRC
-    fsmenu_system_unix.cc
-  )
-endif()
 
 set(LIB
   PRIVATE bf::asset_system
