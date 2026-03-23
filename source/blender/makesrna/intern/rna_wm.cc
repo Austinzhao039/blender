@@ -663,17 +663,18 @@ const EnumPropertyItem rna_enum_wm_report_items[] = {
 
 #  include "MEM_guardedalloc.h"
 
-namespace blender::ui {
+namespace ui {
 struct PieMenu;
 struct PopupMenu;
 struct Popover;
 
-ui::Layout *pie_menu_layout(PieMenu *pie);
-ui::Layout *popup_menu_layout(PopupMenu *pup);
-ui::Layout *popover_layout(Popover *pup);
-}  // namespace blender::ui
+Layout *pie_menu_layout(PieMenu *pie);
+Layout *popup_menu_layout(PopupMenu *pup);
+Layout *popover_layout(Popover *pup);
+}  // namespace ui
 
-namespace blender {
+namespace {
+using namespace ::blender;
 
 static wmOperator *rna_OperatorProperties_find_operator(PointerRNA *ptr)
 {
@@ -2159,7 +2160,7 @@ static void rna_KeyMapItem_update(Main * /*bmain*/, Scene * /*scene*/, PointerRN
   WM_keyconfig_update_tag(nullptr, kmi);
 }
 
-}  // namespace blender
+}  // namespace
 
 #else /* RNA_RUNTIME */
 
