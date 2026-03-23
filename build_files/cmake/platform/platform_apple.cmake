@@ -639,9 +639,7 @@ endif()
 add_bundled_libraries(ceres/lib)
 
 set(ZSTD_ROOT_DIR ${LIBDIR}/zstd)
-if(NOT BLENDER_HOST_TOOLS_ONLY)
-  find_package(Zstd REQUIRED)
-endif()
+find_package(Zstd REQUIRED)
 
 if(EXISTS ${LIBDIR})
   without_system_libs_end()
