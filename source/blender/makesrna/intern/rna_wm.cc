@@ -661,8 +661,6 @@ const EnumPropertyItem rna_enum_wm_report_items[] = {
 
 #  include "BKE_global.hh"
 
-#  include "ED_screen.hh"
-
 #  include "MEM_guardedalloc.h"
 
 #  ifdef WITH_PYTHON
