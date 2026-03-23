@@ -205,6 +205,9 @@ static const EnumPropertyItem event_touch_type_items[] = {
     {TOUCH_FOUR_FINGER_TAP, "TOUCH_FOUR_FINGER_TAP", 0, "4 Fingers Tap", ""},
     {0, nullptr, 0, nullptr, nullptr},
 };
+
+}  // namespace blender
+
 #endif /* RNA_RUNTIME */
 
 namespace blender {
@@ -654,6 +657,10 @@ const EnumPropertyItem rna_enum_wm_report_items[] = {
 
 #  include "BLI_string_utils.hh"
 
+#  include "BKE_global.hh"
+
+#  include "UI_interface_c.hh"
+
 #  include "WM_api.hh"
 
 #  include "DNA_ID.h"
@@ -661,18 +668,7 @@ const EnumPropertyItem rna_enum_wm_report_items[] = {
 
 #  include "MEM_guardedalloc.h"
 
-namespace ui {
-struct PieMenu;
-struct PopupMenu;
-struct Popover;
-
-Layout *pie_menu_layout(PieMenu *pie);
-Layout *popup_menu_layout(PopupMenu *pup);
-Layout *popover_layout(Popover *pup);
-}  // namespace ui
-
-namespace {
-using namespace ::blender;
+namespace blender {
 
 static wmOperator *rna_OperatorProperties_find_operator(PointerRNA *ptr)
 {
@@ -2146,7 +2142,7 @@ static void rna_KeyMapItem_update(Main * /*bmain*/, Scene * /*scene*/, PointerRN
   WM_keyconfig_update_tag(nullptr, kmi);
 }
 
-}  // namespace
+}  // namespace blender
 
 #else /* RNA_RUNTIME */
 
