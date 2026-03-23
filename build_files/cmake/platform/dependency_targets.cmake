@@ -79,7 +79,7 @@ endif()
 
 add_library(bf_deps_eigen INTERFACE)
 add_library(bf::dependencies::eigen ALIAS bf_deps_eigen)
-if(NOT BLENDER_HOST_TOOLS_ONLY)
+if(TARGET Eigen3::Eigen)
   target_link_libraries(bf_deps_eigen INTERFACE Eigen3::Eigen)
 endif()
 

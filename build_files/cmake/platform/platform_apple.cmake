@@ -627,7 +627,9 @@ if(WITH_CYCLES AND WITH_CYCLES_PATH_GUIDING)
   endif()
 endif()
 
-if(NOT BLENDER_HOST_TOOLS_ONLY)
+if(BLENDER_HOST_TOOLS_ONLY)
+  find_package(Eigen3 REQUIRED)
+else()
   find_package(Eigen3 REQUIRED CONFIG)
 endif()
 
