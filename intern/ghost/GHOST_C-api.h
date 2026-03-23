@@ -9,7 +9,7 @@
 #pragma once
 
 #include "GHOST_Rect.hh"
-#include "GHOST_Types.h"
+#include "GHOST_Types.hh"
 
 #ifdef __cplusplus
 extern "C" {

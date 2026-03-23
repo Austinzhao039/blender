@@ -1528,7 +1528,7 @@ void *GHOST_WindowIOS::getOSWindow() const
   return (void *)uiview_;
 }
 
-GHOST_TSuccess GHOST_WindowIOS::swapBuffers()
+GHOST_TSuccess GHOST_WindowIOS::swapBufferRelease()
 {
   deferred_swap_buffers_count++;
   return GHOST_kSuccess;
@@ -1557,7 +1557,7 @@ void GHOST_WindowIOS::flushDeferredSwapBuffers()
                    deferred_swap_buffers_count);
 
     GHOST_ContextIOS *context = reinterpret_cast<GHOST_ContextIOS *>(getContext());
-    context->swapBuffers();
+    context->swapBufferRelease();
     deferred_swap_buffers_count = 0;
   }
 }

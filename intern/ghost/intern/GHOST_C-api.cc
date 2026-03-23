@@ -755,7 +755,7 @@ GHOST_TSuccess GHOST_SwapWindowBuffers(GHOST_WindowHandle windowhandle)
 {
   GHOST_IWindow *window = (GHOST_IWindow *)windowhandle;
 
-  return window->swapBuffers();
+  return window->swapBufferRelease();
 }
 
 GHOST_TSuccess GHOST_SetSwapInterval(GHOST_WindowHandle windowhandle, int interval)
