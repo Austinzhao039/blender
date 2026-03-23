@@ -659,8 +659,6 @@ const EnumPropertyItem rna_enum_wm_report_items[] = {
 #  include "DNA_ID.h"
 #  include "DNA_workspace_types.h"
 
-#  include "BKE_global.hh"
-
 #  include "MEM_guardedalloc.h"
 
 namespace ui {
@@ -952,22 +950,10 @@ static void rna_Window_scene_update(bContext *C, PointerRNA *ptr)
 
   /* Exception: must use context so notifier gets to the right window. */
   if (win->new_scene) {
-#  ifdef WITH_PYTHON
-    BPy_BEGIN_ALLOW_THREADS;
-#  endif
-
     WM_window_set_active_scene(bmain, C, win, win->new_scene);
-
-#  ifdef WITH_PYTHON
-    BPy_END_ALLOW_THREADS;
-#  endif
 
     wmWindowManager *wm = CTX_wm_manager(C);
     WM_event_add_notifier_ex(wm, win, NC_SCENE | ND_SCENEBROWSE, win->new_scene);
-
-    if (G.debug & G_DEBUG) {
-      printf("scene set %p\n", win->new_scene);
-    }
 
     win->new_scene = nullptr;
   }
