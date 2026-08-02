@@ -20,33 +20,43 @@ jobs:
         run: |
           git clone https://projects.blender.org/blender/blender.git -b ios --depth 1
           cd blender
-          # 立即拉取 LFS 文件（主仓库）
+          # 立即拉取主仓库的 LFS 文件
           git lfs pull
 
-      # 3. 更新子模块并拉取依赖库（不带已废弃的参数）
+      # 3. 强制将子模块 URL 指向官方源（避免 GitHub 镜像 404）
+      - name: Fix submodule URLs to official source
+        run: |
+          cd blender
+          # 将所有 github.com/blender 替换为 projects.blender.org/blender
+          sed -i 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
+          # 同步新的 URL
+          git submodule sync --recursive
+
+      # 4. 更新子模块并拉取依赖库（不带已废弃的参数）
       - name: Pull libraries and submodules
         run: |
           cd blender
-          # 初始化子模块（包括 lib/ios_arm64）
+          # 初始化子模块（此时会从官方源克隆）
           git submodule update --init --recursive
           # 运行 make_update.py（它会下载预编译库，脚本会自动检测平台）
           ./build_files/utils/make_update.py
           make update
-          # 强制拉取子模块中的所有 LFS 文件
+          # 强制拉取所有子模块中的 LFS 文件
           git submodule foreach git lfs pull
 
-      # 4. 检查 Python 库是否存在（调试用，可删除）
+      # 5. 检查 Python 库是否存在（调试用）
       - name: Check Python library
         run: |
+          ls -la blender/lib/ios_arm64/ || echo "ios_arm64 directory missing!"
           ls -la blender/lib/ios_arm64/python/lib/ || echo "Python lib missing!"
           ls -la blender/lib/ios_arm64/python/include/ || echo "Python include missing!"
 
-      # 5. 生成 Xcode 项目（会调用本地编译器）
+      # 6. 生成 Xcode 项目
       - name: Generate Xcode project
         run: |
           cmake -G "Xcode" -S blender -B build_ios
 
-      # 6. 禁用代码签名（修改 project.pbxproj）
+      # 7. 禁用代码签名
       - name: Disable code signing
         run: |
           cd build_ios
@@ -54,14 +64,14 @@ jobs:
           sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "";/g' Blender.xcodeproj/project.pbxproj
           sed -i '' 's/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = "";/g' Blender.xcodeproj/project.pbxproj
 
-      # 7. ⭐ 关键：手动执行 Cross-Tools 脚本（必须从本地 Xcode 获取并替换）
+      # 8. ⭐ 关键：手动执行 Cross-Tools 脚本（必须从本地 Xcode 获取并替换）
       - name: Run Cross-Tools script (REPLACE THIS!)
         run: |
           cd blender
           # 请将以下内容替换为从本地 Xcode 项目中的 blender_cross_tools_compile 目标复制的脚本
           echo "You must replace this with the actual Run Script content from Xcode."
 
-      # 8. 编译（强制禁用签名）
+      # 9. 编译（强制禁用签名）
       - name: Build with xcodebuild
         run: |
           cd build_ios
@@ -72,7 +82,7 @@ jobs:
                      build \
                      CODE_SIGNING_ALLOWED=NO
 
-      # 9. 打包 IPA
+      # 10. 打包 IPA
       - name: Package as IPA
         run: |
           cd build_ios
@@ -80,7 +90,7 @@ jobs:
           cp -r Build/Products/Release-iphoneos/Blender.app Payload/
           zip -r Blender-iOS-unsigned.ipa Payload/
 
-      # 10. 上传产物
+      # 11. 上传产物
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
