@@ -9,7 +9,7 @@ jobs:
     timeout-minutes: 330
 
     steps:
-      # 1. 安装依赖 (Git, CMake, Git LFS)
+      # 1. 安装依赖
       - name: Install Dependencies
         run: |
           brew install git cmake git-lfs
@@ -29,11 +29,16 @@ jobs:
           git lfs fetch origin
           git lfs pull
 
-      # 4. 拉取子模块和依赖库
+      # ⭐ 4. 拉取子模块和依赖库（修改部分）
       - name: Pull Libraries & Submodules
         run: |
           cd blender
+          # 初始化子模块
+          git submodule update --init --recursive
+          # 拉取 iOS 库（包括 Python）
           ./build_files/utils/make_update.py --use-ios-libraries
+          # 确保 Python 库也被拉取
+          ./build_files/utils/make_update.py --use-ios-python
           make update
 
       # 5. 配置缓存
@@ -47,12 +52,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-blender-ios-
 
-      # ⭐ 6. 新增：安装 iOS 18.0 SDK
+      # 6. 安装 iOS 18.0 SDK
       - name: Install iOS Simulator Runtime
         run: |
           sudo xcodebuild -downloadPlatform iOS
 
-      # ⭐ 7. 新增：列出可用的 SDK 以供核对
+      # 7. 列出可用的 SDK 以供核对
       - name: List available SDKs
         run: xcodebuild -showsdks
 
