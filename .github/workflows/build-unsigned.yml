@@ -131,22 +131,13 @@ jobs:
           rm -rf build_ios/CMakeCache.txt
           rm -rf build_ios/CMakeFiles
 
-      # ========== 修正：自动探测 Xcode 路径 ==========
+      # ========== 关键修正：直接指定带版本号的 Xcode 路径 ==========
       - name: Generate Xcode project
         run: |
-          # 自动查找 Xcode.app
-          XCODE_PATH=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | head -1)
-          if [ -z "$XCODE_PATH" ]; then
-            echo "ERROR: Xcode not found in /Applications/"
-            exit 1
-          fi
-          echo "Found Xcode: $XCODE_PATH"
-          
-          # 切换到找到的 Xcode
-          sudo xcode-select --switch "/Applications/$XCODE_PATH"
+          # 直接指定 macos-15 镜像中预装的 Xcode 16.4 路径
+          sudo xcode-select --switch /Applications/Xcode_16.4.app
           xcode-select -p
           
-          # 生成项目
           cmake -G Xcode -S . -B build_ios \
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
