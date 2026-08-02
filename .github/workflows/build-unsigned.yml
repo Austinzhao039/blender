@@ -81,6 +81,7 @@ jobs:
         if: steps.ios-libs-cache.outputs.cache-hit != 'true'
         run: |
           git submodule update --init --recursive
+          # 直接运行 make_update.py，不加参数（参数已过时）
           python3 ./build_files/utils/make_update.py
           git submodule foreach git lfs pull
           if [ ! -d lib/ios_arm64/python ]; then
@@ -126,7 +127,7 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
-      # ⭐ 修正：清除 CMake 缓存并指定 Xcode 路径
+      # ========== 修正点：清理缓存并正确设置 Xcode 路径 ==========
       - name: Clean CMake cache
         run: |
           rm -rf build_ios/CMakeCache.txt
@@ -134,16 +135,18 @@ jobs:
 
       - name: Generate Xcode project
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          # 正确切换 Xcode 路径（注意是 .app 目录本身）
+          sudo xcode-select --switch /Applications/Xcode_16.4.app
+          # 生成项目，不添加额外的 CMAKE_OSX_SYSROOT（会自动检测）
           cmake -G Xcode -S . -B build_ios \
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
-            -DWITH_DOCS=OFF \
-            -DCMAKE_OSX_SYSROOT=iphoneos
+            -DWITH_DOCS=OFF
 
-      - name: List Xcode targets
+      - name: List Xcode targets (debug)
         run: xcodebuild -project build_ios/Blender.xcodeproj -list
 
+      # ========== 直接构建 install 目标（它会处理交叉工具） ==========
       - name: Build Blender.app for iOS
         run: |
           xcodebuild \
@@ -178,6 +181,7 @@ jobs:
           fi
           echo "Found app at: $APP"
           du -sh "$APP"
+          # 移除不必要的 Python 配置目录
           rm -rf "$APP/Assets/5.0/python/lib/python3.13/config-3.13-darwin" 2>/dev/null || true
           mkdir -p IPA/Payload
           cp -r "$APP" IPA/Payload/
