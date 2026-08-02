@@ -126,17 +126,23 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
+      # ⭐ 修正：清除 CMake 缓存并指定 Xcode 路径
+      - name: Clean CMake cache
+        run: |
+          rm -rf build_ios/CMakeCache.txt
+          rm -rf build_ios/CMakeFiles
+
       - name: Generate Xcode project
         run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
           cmake -G Xcode -S . -B build_ios \
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
-            -DWITH_DOCS=OFF
+            -DWITH_DOCS=OFF \
+            -DCMAKE_OSX_SYSROOT=iphoneos
 
-      - name: List Xcode targets (debug)
+      - name: List Xcode targets
         run: xcodebuild -project build_ios/Blender.xcodeproj -list
-
-      # ⭐ 删除单独构建 cross-tools 的步骤，直接构建 install
 
       - name: Build Blender.app for iOS
         run: |
