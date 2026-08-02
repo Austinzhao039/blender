@@ -23,6 +23,7 @@ jobs:
           sudo rm -rf /opt/ghc
           sudo rm -rf /usr/local/.ghcup
           sudo rm -rf /Library/Developer/CoreSimulator/Profiles
+          sudo rm -rf /Applications/Xcode_*.app 2>/dev/null || true
           sudo xcrun simctl delete all 2>/dev/null || true
           df -h
 
@@ -76,35 +77,12 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
-      # ⭐ 关键修正：手动克隆 lib/ios_arm64（因为子模块已不在 .gitmodules 中）
       - name: Fetch prebuilt iOS libraries
         if: steps.ios-libs-cache.outputs.cache-hit != 'true'
         run: |
-          # 确保 lib 目录存在
-          mkdir -p lib
-          # 如果 lib/ios_arm64 不存在，直接从官方源克隆
-          if [ ! -d lib/ios_arm64 ]; then
-            echo "Cloning lib/ios_arm64 from official source..."
-            git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
-            cd lib/ios_arm64
-            git lfs pull
-            cd ../..
-          else
-            echo "lib/ios_arm64 already exists, updating..."
-            cd lib/ios_arm64
-            git fetch origin
-            git reset --hard origin/main
-            git lfs pull
-            cd ../..
-          fi
-
-          # 运行 make_update.py（不带参数），它会配置其他依赖
+          git submodule update --init --recursive
           python3 ./build_files/utils/make_update.py
-
-          # 确保所有子模块的 LFS 文件被拉取（macos_arm64 等）
           git submodule foreach git lfs pull
-
-          # 如果 Python 目录依然缺失，强制拉取
           if [ ! -d lib/ios_arm64/python ]; then
             echo "Python library still missing, attempting manual LFS fetch..."
             cd lib/ios_arm64
@@ -115,23 +93,20 @@ jobs:
 
       - name: Bootstrap missing iOS prebuilts
         run: |
-          # 检查 fmt
           if [ ! -f lib/ios_arm64/fmt/include/fmt/core.h ]; then
             if [ -f ./build_files/utils/bootstrap_ios_fmt.sh ]; then
               bash ./build_files/utils/bootstrap_ios_fmt.sh
             else
-              echo "WARNING: bootstrap_ios_fmt.sh not found"
+              echo "WARNING: fmt bootstrap script not found"
             fi
           fi
-          # 检查 Eigen
           if [ ! -f lib/ios_arm64/eigen/share/eigen3/cmake/Eigen3Config.cmake ]; then
             if [ -f ./build_files/utils/bootstrap_ios_eigen.sh ]; then
               bash ./build_files/utils/bootstrap_ios_eigen.sh
             else
-              echo "WARNING: bootstrap_ios_eigen.sh not found"
+              echo "WARNING: eigen bootstrap script not found"
             fi
           fi
-          # 验证 Python 是否存在
           if [ ! -d lib/ios_arm64/python ]; then
             echo "ERROR: Python library still missing after all attempts!" >&2
             exit 1
@@ -139,12 +114,8 @@ jobs:
 
       - name: Verify bootstrapped iOS prebuilts
         run: |
-          echo "=== lib/ios_arm64 contents ==="
           ls -la lib/ios_arm64/
-          echo "=== Python directory ==="
           ls -la lib/ios_arm64/python/ || echo "Python missing!"
-          echo "=== Python lib ==="
-          ls -la lib/ios_arm64/python/lib/ || echo "Python lib missing!"
 
       - name: Save iOS prebuilt libraries cache
         if: steps.ios-libs-cache.outputs.cache-hit != 'true'
@@ -162,19 +133,10 @@ jobs:
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF
 
-      - name: List Xcode targets
+      - name: List Xcode targets (debug)
         run: xcodebuild -project build_ios/Blender.xcodeproj -list
 
-      - name: Build cross-compilation tools
-        run: |
-          xcodebuild \
-            -project build_ios/Blender.xcodeproj \
-            -target blender_cross_tools_compile \
-            -configuration Release \
-            -parallelizeTargets \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+      # ⭐ 删除单独构建 cross-tools 的步骤，直接构建 install
 
       - name: Build Blender.app for iOS
         run: |
