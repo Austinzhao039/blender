@@ -39,12 +39,24 @@ jobs:
           git lfs fetch --all
           git lfs pull
 
-      - name: List ios_arm64 contents (debug)
+      # ========== 新增详细调试 ==========
+      - name: Debug ios_arm64 contents
         run: |
-          echo "=== Contents of lib/ios_arm64 ==="
+          echo "=== Top-level contents of lib/ios_arm64 ==="
           ls -la blender/lib/ios_arm64/
-          echo "=== Python directory ==="
-          ls -la blender/lib/ios_arm64/python/ || echo "Python directory NOT found!"
+          echo ""
+          echo "=== Check if python directory exists ==="
+          if [ -d "blender/lib/ios_arm64/python" ]; then
+            echo "✅ python directory exists, listing contents:"
+            ls -la blender/lib/ios_arm64/python/
+          else
+            echo "❌ python directory NOT found!"
+          fi
+          echo ""
+          echo "=== List LFS-tracked files in lib/ios_arm64 (first 30) ==="
+          cd blender/lib/ios_arm64
+          git lfs ls-files | head -30
+      # ==================================
 
       - name: Cache dependencies
         uses: actions/cache@v3
@@ -52,13 +64,11 @@ jobs:
           path: |
             blender/lib
             build_ios
-          key: ${{ runner.os }}-blender-ios-${{ hashFiles('blender/build_files/utils/make_update.py') }}-v3
+          key: ${{ runner.os }}-blender-ios-${{ hashFiles('blender/build_files/utils/make_update.py') }}-v4
           restore-keys: |
             ${{ runner.os }}-blender-ios-
 
-      # 移除了 Install iOS Simulator Runtime (因为已预装，且该命令在CI中会失败)
-
-      - name: List available SDKs (optional, ignore errors)
+      - name: List available SDKs (optional)
         run: xcodebuild -showsdks || true
 
       - name: Generate Xcode project and disable signing
