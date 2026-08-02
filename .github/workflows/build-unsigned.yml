@@ -5,8 +5,8 @@ on:
 
 jobs:
   build:
-    # 尝试使用 macos-14 避免环境兼容性问题
-    runs-on: macos-14
+    # 切换回 macos-15，它自带 Xcode 16.4
+    runs-on: macos-15
     timeout-minutes: 330
 
     steps:
@@ -36,12 +36,12 @@ jobs:
           cd blender
           # 初始化所有子模块（包括嵌套的）
           git submodule update --init --recursive
-          # 拉取 iOS 库（这个会自动处理 Python 依赖）
+          # 拉取 iOS 库（自动处理所有依赖，包括 Python）
           ./build_files/utils/make_update.py --use-ios-libraries
           # 执行 make update 完成后续更新
           make update
 
-      # 5. 显式拉取 lib/ios_arm64 中的所有 LFS 文件（包括 Python）
+      # 5. 显式拉取 lib/ios_arm64 中的所有 LFS 文件（关键步骤）
       - name: Force pull LFS in ios_arm64
         run: |
           cd blender/lib/ios_arm64
@@ -51,25 +51,26 @@ jobs:
       # 6. 调试：列出 lib/ios_arm64 目录结构，确认 Python 是否存在
       - name: List ios_arm64 contents
         run: |
+          echo "=== Contents of lib/ios_arm64 ==="
           ls -la blender/lib/ios_arm64/
-          echo "=== Python directory ==="
-          ls -la blender/lib/ios_arm64/python/ || echo "Python directory not found!"
+          echo "=== Python directory (if exists) ==="
+          ls -la blender/lib/ios_arm64/python/ || echo "Python directory NOT found!"
 
-      # 7. 配置缓存
+      # 7. 配置缓存（更新 key 以强制刷新缓存）
       - name: Cache dependencies
         uses: actions/cache@v3
         with:
           path: |
             blender/lib
             build_ios
-          key: ${{ runner.os }}-blender-ios-${{ hashFiles('blender/build_files/utils/make_update.py') }}
+          key: ${{ runner.os }}-blender-ios-${{ hashFiles('blender/build_files/utils/make_update.py') }}-v2
           restore-keys: |
             ${{ runner.os }}-blender-ios-
 
-      # 8. 安装 iOS SDK（针对 macos-14 可能也需要）
+      # 8. 安装 iOS SDK（确保 SDK 完整）
       - name: Install iOS Simulator Runtime
         run: |
-          sudo xcodebuild -downloadPlatform iOS || true
+          sudo xcodebuild -downloadPlatform iOS
 
       # 9. 列出可用 SDK
       - name: List available SDKs
