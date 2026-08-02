@@ -1,0 +1,86 @@
+name: Build Blender for iOS (Unsigned)
+
+# 手动触发（你也可以在下面添加 push 触发，但我建议先用手动触发调试）
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # 使用 macOS 15 运行器（较新且稳定）
+    runs-on: macos-15
+    timeout-minutes: 330   # 5.5 小时，避免超时
+
+    steps:
+      # 1. 检出代码（但不拉取 LFS，后面单独处理）
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ios
+          fetch-depth: 1
+          lfs: false   # 关键：不在此步拉取 LFS
+
+      # 2. 安装 Git LFS 并拉取 LFS 文件
+      - name: Install Git LFS and pull LFS files
+        run: |
+          brew install git-lfs
+          git lfs install
+          git lfs pull origin ios
+
+      # 3. 安装其他依赖（CMake 等）
+      - name: Install dependencies
+        run: |
+          brew install cmake
+
+      # 4. 拉取 Blender 的第三方依赖库（这是最耗时的步骤）
+      - name: Pull libraries and submodules
+        run: |
+          ./build_files/utils/make_update.py --use-ios-libraries
+          make update
+
+      # 5. 配置缓存（大幅加速后续构建）
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/blender-ios/blender/../lib
+            ~/blender-ios/build_ios
+          key: ${{ runner.os }}-blender-ios-${{ hashFiles('blender/build_files/utils/make_update.py') }}
+          restore-keys: |
+            ${{ runner.os }}-blender-ios-
+
+      # 6. 生成 Xcode 项目并禁用代码签名
+      - name: Generate Xcode project and disable signing
+        run: |
+          cd ..
+          cmake -G "Xcode" -S blender -B build_ios
+          # 强制禁用签名（直接修改项目文件）
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' build_ios/Blender.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "";/g' build_ios/Blender.xcodeproj/project.pbxproj
+          sed -i '' 's/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = "";/g' build_ios/Blender.xcodeproj/project.pbxproj
+
+      # 7. 使用 xcodebuild 编译（强制禁用签名）
+      - name: Build with xcodebuild
+        run: |
+          cd ../build_ios
+          xcodebuild -project Blender.xcodeproj \
+                     -scheme blender \
+                     -destination 'generic/platform=iOS' \
+                     -configuration Release \
+                     build \
+                     CODE_SIGNING_ALLOWED=NO
+
+      # 8. 打包成 .ipa
+      - name: Package as IPA
+        run: |
+          cd ../build_ios
+          mkdir -p Payload
+          cp -r Build/Products/Release-iphoneos/Blender.app Payload/
+          zip -r Blender-iOS-unsigned.ipa Payload/
+
+      # 9. 上传产物
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Blender-iOS-Unsigned
+          path: ../build_ios/Blender-iOS-unsigned.ipa
+          retention-days: 7
