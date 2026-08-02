@@ -1,74 +1,21 @@
-name: Build Blender for iOS (Unsigned)
+name: Build Blender for iOS
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 手动触发
 
 jobs:
   build:
-    runs-on: macos-15
-    timeout-minutes: 360
-
+    runs-on: macos-latest  # 必须使用 macOS 环境[reference:3]
     steps:
-      # 1. 安装依赖（不执行 git lfs update）
-      - name: Install Dependencies
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
         run: |
-          brew install git git-lfs cmake
+          brew install git-lfs cmake
           git lfs install
 
-      # 2. 克隆代码（只拉取 ios 分支）
-      - name: Clone Blender iOS Branch
+      # ⭐ 核心步骤：运行 make_update.py 拉取所有依赖
+      - name: Run make_update.py
         run: |
-          git clone https://projects.blender.org/blender/blender.git -b ios --depth 1
-          cd blender
-          # 拉取主仓库的 LFS 文件
-          git lfs pull
-
-      # 3. 拉取库和子模块（这会处理所有依赖）
-      - name: Pull Libraries & Submodules
-        run: |
-          cd blender
           ./build_files/utils/make_update.py --use-ios-libraries
-          make update
-          # 再次确保子模块的 LFS 被拉取
-          git submodule foreach git lfs pull
-
-      # 4. 生成 Xcode 项目文件
-      - name: Generate Xcode Project
-        run: |
-          cmake -G "Xcode" -S blender -B build_ios
-
-      # 5. ⭐ 关键步骤：手动执行 Cross-Tools 脚本
-      # 你必须从本地 Xcode 项目中复制该脚本内容，替换下面的 echo 命令
-      - name: Run Cross-Tools Script Manually
-        run: |
-          cd blender
-          # 请将 blender_cross_tools_compile 的 Run Script 内容粘贴到下面
-          # 示例：../build_ios/build_darwin_tools/bin/datatoc ...
-          echo "请替换此行"
-
-      # 6. 编译（强制禁用签名）
-      - name: Build with xcodebuild
-        run: |
-          cd build_ios
-          xcodebuild -project Blender.xcodeproj \
-                     -scheme blender \
-                     -destination 'generic/platform=iOS' \
-                     -configuration Release \
-                     build \
-                     CODE_SIGNING_ALLOWED=NO
-
-      # 7. 打包 .ipa
-      - name: Package as IPA
-        run: |
-          cd build_ios
-          mkdir -p Payload
-          cp -r Build/Products/Release-iphoneos/Blender.app Payload/
-          zip -r Blender-iOS-unsigned.ipa Payload/
-
-      # 8. 上传产物
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Blender-iOS-Unsigned
-          path: build_ios/Blender-iOS-unsigned.ipa
-          retention-days: 7
