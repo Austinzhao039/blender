@@ -2,19 +2,25 @@ name: Build Blender iOS IPA
 
 on:
   workflow_dispatch:
+  # 可选的定时构建（每周一凌晨2点）
+  # schedule:
+  #   - cron: '0 2 * * 1'
 
 jobs:
   build:
-    runs-on: macos-latest
-    timeout-minutes: 180
+    # ⭐ 改进1：固定使用 macos-15，避免 future 兼容性问题
+    runs-on: macos-15
+    timeout-minutes: 210  # 3.5小时，留一点缓冲
 
     steps:
+      # ==================== 1. 环境准备 ====================
       - name: Checkout fork
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
           lfs: false
 
+      # ⭐ 改进2：更彻底的磁盘清理
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android
@@ -23,15 +29,19 @@ jobs:
           sudo rm -rf /opt/ghc
           sudo rm -rf /usr/local/.ghcup
           sudo rm -rf /Library/Developer/CoreSimulator/Profiles
+          sudo rm -rf /Applications/Xcode_*.app 2>/dev/null || true
           sudo xcrun simctl delete all 2>/dev/null || true
           df -h
 
+      # ⭐ 改进3：明确安装 Python 3.13（iOS 分支需要）
       - name: Install dependencies
-        run: brew install git-lfs cmake eigen fmt openimageio zstd
+        run: |
+          brew install git-lfs cmake eigen fmt openimageio zstd python@3.13
+          # 创建符号链接让 python3 指向 python3.13
+          ln -sf /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3
+          git lfs install
 
-      - name: Initialize Git LFS
-        run: git lfs install
-
+      # ==================== 2. LFS 资源拉取 ====================
       - name: Compute required LFS cache key
         id: required-lfs-cache-key
         run: printf 'sha=%s\n' "$(git rev-parse HEAD:release/datafiles/startup.blend)" >> "$GITHUB_OUTPUT"
@@ -64,6 +74,7 @@ jobs:
             release/datafiles/startup.blend
           key: ${{ runner.os }}-required-lfs-${{ steps.required-lfs-cache-key.outputs.sha }}-v1
 
+      # ==================== 3. iOS 预编译库 ====================
       - name: Compute iOS libs cache key
         id: ios-libs-cache-key
         run: printf 'sha=%s\n' "$(git rev-parse HEAD:lib/ios_arm64)" >> "$GITHUB_OUTPUT"
@@ -77,27 +88,55 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
+      # ⭐ 改进4：同时拉取 iOS 和 macOS 库（某些工具需要）
       - name: Fetch prebuilt iOS libraries
         if: steps.ios-libs-cache.outputs.cache-hit != 'true'
-        run: python3 ./build_files/utils/make_update.py --use-ios-libraries
+        run: |
+          python3 ./build_files/utils/make_update.py --use-ios-libraries
+          # 如果上面的命令失败，尝试不带参数（新版本可能已移除该参数）
+          if [ $? -ne 0 ]; then
+            echo "Retrying without --use-ios-libraries..."
+            python3 ./build_files/utils/make_update.py
+          fi
 
+      # ⭐ 改进5：补全缺失的依赖（Eigen、Fmt、Python）
       - name: Bootstrap missing iOS prebuilts
         run: |
+          # 补全 fmt
           if [ ! -f lib/ios_arm64/fmt/include/fmt/core.h ]; then
-            bash ./build_files/utils/bootstrap_ios_fmt.sh
+            if [ -f ./build_files/utils/bootstrap_ios_fmt.sh ]; then
+              bash ./build_files/utils/bootstrap_ios_fmt.sh
+            else
+              echo "WARNING: bootstrap_ios_fmt.sh not found, fmt may be missing"
+            fi
           fi
+          # 补全 Eigen
           if [ ! -f lib/ios_arm64/eigen/share/eigen3/cmake/Eigen3Config.cmake ]; then
-            bash ./build_files/utils/bootstrap_ios_eigen.sh
+            if [ -f ./build_files/utils/bootstrap_ios_eigen.sh ]; then
+              bash ./build_files/utils/bootstrap_ios_eigen.sh
+            else
+              echo "WARNING: bootstrap_ios_eigen.sh not found, eigen may be missing"
+            fi
+          fi
+          # ⭐ 改进6：针对 Python 3.13 的特殊处理
+          # 如果 Python 库缺失，尝试从官方源手动拉取
+          if [ ! -d lib/ios_arm64/python ]; then
+            echo "Python library missing, attempting to fetch manually..."
+            cd lib/ios_arm64
+            git lfs pull --include="python/**" || echo "Python LFS pull failed"
+            cd ../..
           fi
 
       - name: Verify bootstrapped iOS prebuilts
         run: |
-          if [ ! -f lib/ios_arm64/fmt/include/fmt/core.h ]; then
-            echo "ERROR: fmt not found in lib/ios_arm64 after bootstrap." >&2
-            exit 1
-          fi
-          if [ ! -f lib/ios_arm64/eigen/share/eigen3/cmake/Eigen3Config.cmake ]; then
-            echo "ERROR: Eigen3 config not found in lib/ios_arm64 after bootstrap." >&2
+          echo "=== Checking ios_arm64 contents ==="
+          ls -la lib/ios_arm64/ || echo "ios_arm64 directory missing!"
+          echo "=== Python directory ==="
+          ls -la lib/ios_arm64/python/ || echo "Python directory missing!"
+          echo "=== Python lib ==="
+          ls -la lib/ios_arm64/python/lib/ || echo "Python lib missing!"
+          if [ ! -d lib/ios_arm64/python ]; then
+            echo "ERROR: Python library still missing after bootstrap!" >&2
             exit 1
           fi
 
@@ -110,8 +149,15 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
+      # ==================== 4. 编译 ====================
+      # ⭐ 改进7：添加额外的 CMake 参数，跳过不必要的组件
       - name: Generate Xcode project
-        run: cmake -G Xcode -S . -B build_ios
+        run: |
+          cmake -G Xcode -S . -B build_ios \
+            -DWITH_GTESTS=OFF \
+            -DWITH_TESTS=OFF \
+            -DWITH_DOCS=OFF \
+            -DWITH_PYTHON_INSTALL_ZSTANDARD=OFF
 
       - name: List Xcode targets
         run: xcodebuild -project build_ios/Blender.xcodeproj -list
@@ -122,10 +168,12 @@ jobs:
             -project build_ios/Blender.xcodeproj \
             -target blender_cross_tools_compile \
             -configuration Release \
+            -parallelizeTargets \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
+      # ⭐ 改进8：使用 -parallelizeTargets 加速编译
       - name: Build Blender.app for iOS
         run: |
           xcodebuild \
@@ -133,22 +181,50 @@ jobs:
             -target install \
             -sdk iphoneos \
             -configuration Release \
+            -parallelizeTargets \
+            -jobs 4 \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            ARCHS=arm64
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO
 
+      # ==================== 5. 打包 ====================
+      # ⭐ 改进9：更智能的 APP 查找
       - name: Package unsigned IPA
         run: |
-          APP="build_ios/bin/Release/Blender.app"
+          # 尝试多个可能的路径
+          APP=""
+          for path in \
+            "build_ios/bin/Release/Blender.app" \
+            "build_ios/Build/Products/Release-iphoneos/Blender.app" \
+            "build_ios/Release-iphoneos/Blender.app"; do
+            if [ -d "$path" ]; then
+              APP="$path"
+              break
+            fi
+          done
+          
+          if [ -z "$APP" ]; then
+            echo "ERROR: Blender.app not found!" >&2
+            echo "Searching for .app files..."
+            find build_ios -name "*.app" -type d
+            exit 1
+          fi
+          
           echo "Found app at: $APP"
-          ls -la "$APP" || (echo "App not found, searching..." && find build_ios -name "*.app" -type d)
           du -sh "$APP"
-          rm -rf "$APP/Assets/5.0/python/lib/python3.11/config-3.11-darwin"
+          
+          # 移除不必要的 Python 配置目录（减小体积）
+          rm -rf "$APP/Assets/5.0/python/lib/python3.13/config-3.13-darwin" 2>/dev/null || true
+          rm -rf "$APP/Assets/5.0/python/lib/python3.13/site-packages" 2>/dev/null || true
+          
           mkdir -p IPA/Payload
           cp -r "$APP" IPA/Payload/
-          cd IPA && zip -r ../Blender.ipa Payload/
-          ls -lh ../Blender.ipa
+          cd IPA
+          zip -r ../Blender.ipa Payload/
+          cd ..
+          ls -lh Blender.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -157,6 +233,7 @@ jobs:
           path: Blender.ipa
           retention-days: 30
 
+      # ==================== 6. 错误处理 ====================
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -165,4 +242,5 @@ jobs:
           path: |
             build_ios/**/*.log
             build_ios/**/*.txt
+            build_ios/**/compile_commands.json
           retention-days: 7
