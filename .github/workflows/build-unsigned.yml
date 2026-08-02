@@ -5,78 +5,62 @@ on:
 
 jobs:
   build:
-    # 切换回 macos-15，它自带 Xcode 16.4
     runs-on: macos-15
     timeout-minutes: 330
 
     steps:
-      # 1. 安装依赖
       - name: Install Dependencies
         run: |
           brew install git cmake git-lfs
           git lfs install
 
-      # 2. 从 Blender 官方源克隆代码
       - name: Clone Blender from official source
         run: |
           git clone https://projects.blender.org/blender/blender.git
           cd blender
           git checkout ios
 
-      # 3. 拉取 LFS 文件（主仓库）
       - name: Pull LFS files (main repo)
         run: |
           cd blender
           git lfs fetch origin
           git lfs pull
 
-      # 4. 拉取子模块和依赖库（只使用正确的参数）
       - name: Pull Libraries & Submodules
         run: |
           cd blender
-          # 初始化所有子模块（包括嵌套的）
           git submodule update --init --recursive
-          # 拉取 iOS 库（自动处理所有依赖，包括 Python）
           ./build_files/utils/make_update.py --use-ios-libraries
-          # 执行 make update 完成后续更新
           make update
 
-      # 5. 显式拉取 lib/ios_arm64 中的所有 LFS 文件（关键步骤）
       - name: Force pull LFS in ios_arm64
         run: |
           cd blender/lib/ios_arm64
           git lfs fetch --all
           git lfs pull
 
-      # 6. 调试：列出 lib/ios_arm64 目录结构，确认 Python 是否存在
-      - name: List ios_arm64 contents
+      - name: List ios_arm64 contents (debug)
         run: |
           echo "=== Contents of lib/ios_arm64 ==="
           ls -la blender/lib/ios_arm64/
-          echo "=== Python directory (if exists) ==="
+          echo "=== Python directory ==="
           ls -la blender/lib/ios_arm64/python/ || echo "Python directory NOT found!"
 
-      # 7. 配置缓存（更新 key 以强制刷新缓存）
       - name: Cache dependencies
         uses: actions/cache@v3
         with:
           path: |
             blender/lib
             build_ios
-          key: ${{ runner.os }}-blender-ios-${{ hashFiles('blender/build_files/utils/make_update.py') }}-v2
+          key: ${{ runner.os }}-blender-ios-${{ hashFiles('blender/build_files/utils/make_update.py') }}-v3
           restore-keys: |
             ${{ runner.os }}-blender-ios-
 
-      # 8. 安装 iOS SDK（确保 SDK 完整）
-      - name: Install iOS Simulator Runtime
-        run: |
-          sudo xcodebuild -downloadPlatform iOS
+      # 移除了 Install iOS Simulator Runtime (因为已预装，且该命令在CI中会失败)
 
-      # 9. 列出可用 SDK
-      - name: List available SDKs
-        run: xcodebuild -showsdks
+      - name: List available SDKs (optional, ignore errors)
+        run: xcodebuild -showsdks || true
 
-      # 10. 生成 Xcode 项目并禁用签名
       - name: Generate Xcode project and disable signing
         run: |
           cmake -G "Xcode" -S blender -B build_ios
@@ -84,7 +68,6 @@ jobs:
           sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "";/g' build_ios/Blender.xcodeproj/project.pbxproj
           sed -i '' 's/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = "";/g' build_ios/Blender.xcodeproj/project.pbxproj
 
-      # 11. 编译 (强制禁止签名)
       - name: Build with xcodebuild
         run: |
           cd build_ios
@@ -95,7 +78,6 @@ jobs:
                      build \
                      CODE_SIGNING_ALLOWED=NO
 
-      # 12. 打包成 .ipa
       - name: Package as IPA
         run: |
           cd build_ios
@@ -103,7 +85,6 @@ jobs:
           cp -r Build/Products/Release-iphoneos/Blender.app Payload/
           zip -r Blender-iOS-unsigned.ipa Payload/
 
-      # 13. 上传产物
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
