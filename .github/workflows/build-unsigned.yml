@@ -9,62 +9,80 @@ jobs:
     timeout-minutes: 210
 
     steps:
-      # 1. 安装依赖
       - name: Install dependencies
         run: |
           brew install git-lfs cmake eigen fmt openimageio zstd
           git lfs install
 
-      # 2. 直接从官方源克隆（而非 GitHub 镜像）
+      # 从官方源克隆（避免 GitHub 镜像的 LFS 404）
       - name: Clone Blender from official source
         run: |
           git clone https://projects.blender.org/blender/blender.git -b ios --depth 1
           cd blender
-          # 拉取主仓库的 LFS 文件（这些文件在官方源中是完整的）
           git lfs pull
 
-      # 3. 修正子模块 URL 并初始化所有子模块
-      - name: Initialize submodules from official source
+      # 修正子模块 URL（使用 macOS 兼容的 sed 语法）
+      - name: Fix submodule URLs to official source
         run: |
           cd blender
-          # 将子模块的 URL 从 github.com 重定向到 projects.blender.org
-          sed -i 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
+          # macOS 的 sed 必须用 -i '' 语法
+          sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
           git submodule sync --recursive
+
+      # 强制拉取所有子模块（包括 macOS 和 iOS 的库）
+      - name: Initialize and pull all submodules
+        run: |
+          cd blender
           git submodule update --init --recursive --force
-          # 拉取每个子模块的 LFS 文件
           git submodule foreach git lfs pull
 
-      # 4. 补全缺失的 iOS 库（fmt, eigen 等）
-      - name: Bootstrap missing libraries
+      # 检查 macOS 库是否存在
+      - name: Verify macOS libraries
         run: |
           cd blender
-          if [ ! -f lib/ios_arm64/fmt/include/fmt/core.h ]; then
-            if [ -f ./build_files/utils/bootstrap_ios_fmt.sh ]; then
-              bash ./build_files/utils/bootstrap_ios_fmt.sh
-            else
-              echo "WARNING: fmt bootstrap script not found"
-            fi
-          fi
-          if [ ! -f lib/ios_arm64/eigen/share/eigen3/cmake/Eigen3Config.cmake ]; then
-            if [ -f ./build_files/utils/bootstrap_ios_eigen.sh ]; then
-              bash ./build_files/utils/bootstrap_ios_eigen.sh
-            else
-              echo "WARNING: eigen bootstrap script not found"
-            fi
+          if [ -d "lib/macos_arm64" ]; then
+            echo "✅ macOS libraries found"
+            ls -la lib/macos_arm64/ | head -20
+          else
+            echo "❌ macOS libraries missing!"
+            # 尝试单独拉取 macOS 库子模块
+            git submodule update --init lib/macos_arm64
+            cd lib/macos_arm64
+            git lfs pull
+            cd ../..
           fi
 
-      # 5. 验证库文件是否存在
-      - name: Verify libraries
+      # 检查 iOS 库是否存在
+      - name: Verify iOS libraries
         run: |
           cd blender
-          echo "=== macOS libraries ==="
-          ls -la lib/macos_arm64/ || echo "macOS libs missing!"
-          echo "=== iOS libraries ==="
-          ls -la lib/ios_arm64/ || echo "iOS libs missing!"
-          echo "=== Python directory ==="
-          ls -la lib/ios_arm64/python/ || echo "Python missing!"
+          if [ -d "lib/ios_arm64" ]; then
+            echo "✅ iOS libraries found"
+            ls -la lib/ios_arm64/ | head -20
+          else
+            echo "❌ iOS libraries missing!"
+            git submodule update --init lib/ios_arm64
+            cd lib/ios_arm64
+            git lfs pull
+            cd ../..
+          fi
 
-      # 6. 自动选择最高版本 Xcode
+      # 特别检查 Python 目录
+      - name: Verify Python library
+        run: |
+          cd blender
+          if [ -d "lib/ios_arm64/python" ]; then
+            echo "✅ Python found"
+            ls -la lib/ios_arm64/python/
+          else
+            echo "❌ Python missing! Attempting manual fetch..."
+            cd lib/ios_arm64
+            git lfs fetch --all
+            git lfs checkout
+            cd ../..
+          fi
+
+      # 自动选择最高版本 Xcode
       - name: Setup Xcode
         run: |
           XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
@@ -76,7 +94,7 @@ jobs:
           sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
-      # 7. 生成 Xcode 项目
+      # 生成 Xcode 项目
       - name: Generate Xcode project
         run: |
           cd blender
@@ -86,7 +104,7 @@ jobs:
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF
 
-      # 8. 编译 Blender.app
+      # 编译 Blender.app
       - name: Build Blender.app for iOS
         run: |
           cd blender/build_ios
@@ -103,7 +121,7 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO
 
-      # 9. 打包成未签名 IPA
+      # 打包成未签名 IPA
       - name: Package unsigned IPA
         run: |
           cd blender/build_ios
@@ -115,7 +133,6 @@ jobs:
           fi
           echo "Found app at: $APP"
           du -sh "$APP"
-          # 移除不必要的 Python 配置
           rm -rf "$APP/Assets/5.0/python/lib/python3.13/config-3.13-darwin" 2>/dev/null || true
           mkdir -p IPA/Payload
           cp -r "$APP" IPA/Payload/
@@ -124,7 +141,7 @@ jobs:
           cd ..
           ls -lh Blender.ipa
 
-      # 10. 上传 IPA
+      # 上传 IPA
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
@@ -132,7 +149,7 @@ jobs:
           path: blender/build_ios/Blender.ipa
           retention-days: 30
 
-      # 11. 失败时上传日志
+      # 失败时上传日志
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
