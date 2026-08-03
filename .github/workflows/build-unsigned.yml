@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 210
 
     steps:
@@ -26,18 +26,16 @@ jobs:
           sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
           git submodule sync --recursive
 
-      # ========== 第 1 阶段：让 make_update.py 拉取基础库 ==========
       - name: Run make_update.py
         run: |
           cd blender
           python3 ./build_files/utils/make_update.py
 
-      # ========== 第 2 阶段：补充缺失的 Python 3.13 ==========
       - name: Manual Python 3.13 pull
         run: |
           cd blender
-          if [ ! -d "lib/ios_arm64/python" ] || [ ! -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
-            echo "Python 3.13 not found, pulling manually..."
+          if [ ! -d "lib/ios_arm64/python" ]; then
+            echo "Python not found, pulling manually..."
             cd lib/ios_arm64
             git lfs fetch --all https://projects.blender.org/blender/lib-ios_arm64.git
             git lfs checkout
@@ -54,7 +52,6 @@ jobs:
             exit 1
           fi
 
-      # ========== 第 3 阶段：标准编译流程 ==========
       - name: Setup Xcode
         run: |
           XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
