@@ -15,7 +15,12 @@ jobs:
           fetch-depth: 1
           lfs: false
 
-      # ========== 删除了 Free disk space 步骤 ==========
+      # ========== 精简的磁盘清理：只删除安卓相关 ==========
+      - name: Free disk space (Android only)
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf ~/Library/Android
+          df -h
 
       - name: Install dependencies
         run: |
@@ -67,11 +72,13 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
-      - name: Fetch prebuilt iOS libraries
+      # ========== 拉取 macOS 和 iOS 双平台库 ==========
+      - name: Fetch prebuilt libraries (macOS + iOS)
         if: steps.ios-libs-cache.outputs.cache-hit != 'true'
         run: |
           git submodule update --init --recursive
-          python3 ./build_files/utils/make_update.py
+          python3 ./build_files/utils/make_update.py --use-macos-libraries
+          python3 ./build_files/utils/make_update.py --use-ios-libraries
           git submodule foreach git lfs pull
           if [ ! -d lib/ios_arm64/python ]; then
             echo "Python library still missing, attempting manual LFS fetch..."
@@ -102,9 +109,13 @@ jobs:
             exit 1
           fi
 
-      - name: Verify bootstrapped iOS prebuilts
+      - name: Verify bootstrapped libraries
         run: |
-          ls -la lib/ios_arm64/
+          echo "=== macOS libraries ==="
+          ls -la lib/macos_arm64/ || echo "macOS libraries missing!"
+          echo "=== iOS libraries ==="
+          ls -la lib/ios_arm64/ || echo "iOS libraries missing!"
+          echo "=== Python directory ==="
           ls -la lib/ios_arm64/python/ || echo "Python missing!"
 
       - name: Save iOS prebuilt libraries cache
@@ -113,16 +124,13 @@ jobs:
         with:
           path: |
             lib/ios_arm64
+            lib/macos_arm64
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
-      # ========== 核心：自动探测最高版本的 Xcode ==========
+      # ========== 自动探测最高版本 Xcode ==========
       - name: Setup Xcode environment
         run: |
-          # 列出 /Applications 目录，用于调试
-          echo "Contents of /Applications:"
-          ls /Applications/
-          # 查找所有 Xcode 开头的 .app，按版本排序，取最新的
           XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
           if [ -z "$XCODE_APP" ]; then
             echo "No Xcode found in /Applications!"
