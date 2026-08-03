@@ -131,13 +131,9 @@ jobs:
           rm -rf build_ios/CMakeCache.txt
           rm -rf build_ios/CMakeFiles
 
-      # ========== 关键修正：直接指定带版本号的 Xcode 路径 ==========
+      # ========== 核心修正：不再手动切换 Xcode，让系统自动使用默认 Xcode ==========
       - name: Generate Xcode project
         run: |
-          # 直接指定 macos-15 镜像中预装的 Xcode 16.4 路径
-          sudo xcode-select --switch /Applications/Xcode_16.4.app
-          xcode-select -p
-          
           cmake -G Xcode -S . -B build_ios \
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
