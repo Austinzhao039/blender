@@ -126,11 +126,20 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
-      # ========== 核心修正：使用正确的 Xcode 路径 ==========
+      # ========== 核心修正：自动探测最高版本 Xcode ==========
       - name: Setup Xcode environment
         run: |
-          # macos-15 镜像中正确的路径是 Xcode_16.app
-          sudo xcode-select -s "/Applications/Xcode_16.app"
+          # 自动查找 /Applications 目录下所有 Xcode 开头的 .app, 并按版本号排序, 取最新的一个
+          XCODE_APP=$(ls /Applications/ | grep -E '^Xcode_[0-9]+\.[0-9]+\.app$' | sort -V | tail -1)
+          
+          # 如果没找到带版本号的, 则回退到默认的 Xcode.app (通常是一个软链接)
+          if [ -z "$XCODE_APP" ]; then
+            echo "No versioned Xcode found, using default Xcode.app"
+            XCODE_APP="Xcode.app"
+          fi
+          
+          echo "Using Xcode: $XCODE_APP"
+          sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
       - name: Clean build directory
