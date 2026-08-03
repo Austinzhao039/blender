@@ -126,17 +126,11 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
-      # ========== 核心修正：使用改进的探测脚本 ==========
+      # ========== 核心修正：直接使用当前镜像中真实存在的 Xcode 26.3 ==========
       - name: Setup Xcode environment
         run: |
-          # 使用更宽松的匹配模式，查找所有以 Xcode_ 开头的 .app
-          XCODE_APP=$(ls /Applications/ | grep -E '^Xcode_.*\.app$' | sort -V | tail -1)
-          if [ -z "$XCODE_APP" ]; then
-            echo "No versioned Xcode found!"
-            exit 1
-          fi
-          echo "Using Xcode: $XCODE_APP"
-          sudo xcode-select -s "/Applications/$XCODE_APP"
+          # macos-15 镜像 (2026-02-24) 中 Xcode 26.3 是真实存在的路径[reference:5]
+          sudo xcode-select -s "/Applications/Xcode_26.3.app"
           xcodebuild -version
 
       - name: Clean build directory
