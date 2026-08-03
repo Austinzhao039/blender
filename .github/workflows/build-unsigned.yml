@@ -20,34 +20,41 @@ jobs:
           cd blender
           git lfs pull
 
-      # ========== 核心修复：强制拉取 iOS 子模块的 LFS ==========
-      - name: Force pull iOS libraries
+      - name: Fix submodule URLs
         run: |
           cd blender
-          # 强制初始化子模块
-          git submodule update --init --force lib/ios_arm64
-          cd lib/ios_arm64
-          # 直接从官方源拉取 LFS 文件
-          git lfs fetch --all https://projects.blender.org/blender/lib-ios_arm64.git
-          git lfs checkout
-          cd ../..
-          # 验证 Python 是否存在
-          if [ ! -d "lib/ios_arm64/python" ]; then
-            echo "❌ Python still missing!"
+          sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
+          git submodule sync --recursive
+
+      # ========== 第 1 阶段：让 make_update.py 拉取基础库 ==========
+      - name: Run make_update.py
+        run: |
+          cd blender
+          python3 ./build_files/utils/make_update.py
+
+      # ========== 第 2 阶段：补充缺失的 Python 3.13 ==========
+      - name: Manual Python 3.13 pull
+        run: |
+          cd blender
+          if [ ! -d "lib/ios_arm64/python" ] || [ ! -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
+            echo "Python 3.13 not found, pulling manually..."
+            cd lib/ios_arm64
+            git lfs fetch --all https://projects.blender.org/blender/lib-ios_arm64.git
+            git lfs checkout
+            cd ../..
+          fi
+
+      - name: Verify Python library
+        run: |
+          cd blender
+          if [ -d "lib/ios_arm64/python" ] && [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
+            echo "✅ Python 3.13 found!"
+          else
+            echo "❌ Python 3.13 missing!"
             exit 1
           fi
-          echo "✅ Python found!"
 
-      # 同样处理 macOS 库（CMake 需要）
-      - name: Force pull macOS libraries
-        run: |
-          cd blender
-          git submodule update --init --force lib/macos_arm64
-          cd lib/macos_arm64
-          git lfs fetch --all https://projects.blender.org/blender/lib-macos_arm64.git
-          git lfs checkout
-          cd ../..
-
+      # ========== 第 3 阶段：标准编译流程 ==========
       - name: Setup Xcode
         run: |
           XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
@@ -55,7 +62,7 @@ jobs:
             echo "No Xcode found!"
             exit 1
           fi
-          echo "Selected Xcode: $XCODE_APP"
+          echo "Using Xcode: $XCODE_APP"
           sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
