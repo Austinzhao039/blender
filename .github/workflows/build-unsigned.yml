@@ -126,14 +126,14 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
-      - name: Clean CMake cache
-        run: |
-          rm -rf build_ios/CMakeCache.txt
-          rm -rf build_ios/CMakeFiles
+      # ========== 核心修正：彻底删除构建目录，强制使用 DEVELOPER_DIR ==========
+      - name: Clean build directory
+        run: rm -rf build_ios
 
-      # ========== 核心修正：不再手动切换 Xcode，让系统自动使用默认 Xcode ==========
       - name: Generate Xcode project
         run: |
+          # 通过环境变量指定 Xcode 路径（而不是 xcode-select）
+          export DEVELOPER_DIR="/Applications/Xcode_16.4.app/Contents/Developer"
           cmake -G Xcode -S . -B build_ios \
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
