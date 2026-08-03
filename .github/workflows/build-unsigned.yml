@@ -15,71 +15,40 @@ jobs:
           fetch-depth: 1
           lfs: false
 
-      # ========== 精简的磁盘清理：只删除安卓相关 ==========
+      # ========== 1. 清理安卓缓存，释放空间 ==========
       - name: Free disk space (Android only)
         run: |
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf ~/Library/Android
           df -h
 
+      # ========== 2. 安装依赖 ==========
       - name: Install dependencies
         run: |
           brew install git-lfs cmake eigen fmt openimageio zstd
           git lfs install
 
-      - name: Compute required LFS cache key
-        id: required-lfs-cache-key
-        run: printf 'sha=%s\n' "$(git rev-parse HEAD:release/datafiles/startup.blend)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore required LFS assets cache
-        id: required-lfs-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            .git/lfs/objects
-            release/datafiles/startup.blend
-          key: ${{ runner.os }}-required-lfs-${{ steps.required-lfs-cache-key.outputs.sha }}-v1
-
-      - name: Fetch required LFS source assets
+      # ========== 3. 核心：手动初始化并拉取所有子模块 ==========
+      # 这一步直接处理子模块，不依赖可能出问题的 make_update.py
+      - name: Fetch prebuilt libraries (manual submodule)
         run: |
-          if [ "${{ steps.required-lfs-cache.outputs.cache-hit }}" != "true" ]; then
-            git config lfs.remote.searchall true
-            git remote add lfs-fallback https://projects.blender.org/blender/blender.git 2>/dev/null || true
-            git remote set-url --push lfs-fallback no_push
-            git lfs fetch lfs-fallback --include="release/datafiles/startup.blend"
-          fi
-          git lfs pull --include="release/datafiles/startup.blend"
-
-      - name: Save required LFS assets cache
-        if: steps.required-lfs-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            .git/lfs/objects
-            release/datafiles/startup.blend
-          key: ${{ runner.os }}-required-lfs-${{ steps.required-lfs-cache-key.outputs.sha }}-v1
-
-      - name: Compute iOS libs cache key
-        id: ios-libs-cache-key
-        run: printf 'sha=%s\n' "$(git rev-parse HEAD:lib/ios_arm64)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore iOS prebuilt libraries cache
-        id: ios-libs-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            lib/ios_arm64
-            .git/modules/lib/ios_arm64
-          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
-
-      # ========== 拉取 macOS 和 iOS 双平台库 ==========
-      - name: Fetch prebuilt libraries (macOS + iOS)
-        if: steps.ios-libs-cache.outputs.cache-hit != 'true'
-        run: |
-          git submodule update --init --recursive
-          python3 ./build_files/utils/make_update.py --use-macos-libraries
-          python3 ./build_files/utils/make_update.py --use-ios-libraries
-          git submodule foreach git lfs pull
+          # 强制初始化所有子模块（包括 macOS 和 iOS 的依赖库）
+          git submodule update --init --recursive --force
+          
+          # 手动进入每个库目录，强制拉取 LFS 文件
+          for submodule in lib/macos_arm64 lib/ios_arm64; do
+            if [ -d "$submodule" ]; then
+              echo "Processing $submodule..."
+              cd "$submodule"
+              git lfs fetch --all
+              git lfs pull
+              cd ../..
+            else
+              echo "WARNING: $submodule not found!"
+            fi
+          done
+          
+          # 额外检查 iOS Python 库是否拉取成功
           if [ ! -d lib/ios_arm64/python ]; then
             echo "Python library still missing, attempting manual LFS fetch..."
             cd lib/ios_arm64
@@ -88,6 +57,7 @@ jobs:
             cd ../..
           fi
 
+      # ========== 4. 补全缺失的 iOS 库 (fmt, eigen) ==========
       - name: Bootstrap missing iOS prebuilts
         run: |
           if [ ! -f lib/ios_arm64/fmt/include/fmt/core.h ]; then
@@ -109,6 +79,7 @@ jobs:
             exit 1
           fi
 
+      # ========== 5. 验证库文件是否齐全 ==========
       - name: Verify bootstrapped libraries
         run: |
           echo "=== macOS libraries ==="
@@ -118,17 +89,18 @@ jobs:
           echo "=== Python directory ==="
           ls -la lib/ios_arm64/python/ || echo "Python missing!"
 
-      - name: Save iOS prebuilt libraries cache
-        if: steps.ios-libs-cache.outputs.cache-hit != 'true'
+      # ========== 6. 缓存庞大的依赖库，加速后续构建 ==========
+      - name: Cache prebuilt libraries
         uses: actions/cache/save@v4
         with:
           path: |
             lib/ios_arm64
             lib/macos_arm64
             .git/modules/lib/ios_arm64
-          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
+            .git/modules/lib/macos_arm64
+          key: ${{ runner.os }}-libs-${{ hashFiles('lib/ios_arm64') }}-v1
 
-      # ========== 自动探测最高版本 Xcode ==========
+      # ========== 7. 自动选择并切换到最高版本 Xcode ==========
       - name: Setup Xcode environment
         run: |
           XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
@@ -140,19 +112,16 @@ jobs:
           sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
-      - name: Clean build directory
-        run: rm -rf build_ios
-
+      # ========== 8. 生成 Xcode 项目 ==========
       - name: Generate Xcode project
         run: |
+          rm -rf build_ios
           cmake -G Xcode -S . -B build_ios \
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF
 
-      - name: List Xcode targets
-        run: xcodebuild -project build_ios/Blender.xcodeproj -list
-
+      # ========== 9. 编译 Blender.app ==========
       - name: Build Blender.app for iOS
         run: |
           xcodebuild \
@@ -168,6 +137,7 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO
 
+      # ========== 10. 打包成未签名的 IPA ==========
       - name: Package unsigned IPA
         run: |
           APP=""
@@ -195,6 +165,7 @@ jobs:
           cd ..
           ls -lh Blender.ipa
 
+      # ========== 11. 上传最终产物 ==========
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
@@ -202,6 +173,7 @@ jobs:
           path: Blender.ipa
           retention-days: 30
 
+      # ========== 12. 失败时上传日志 ==========
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
