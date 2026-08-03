@@ -34,49 +34,34 @@ jobs:
           cd blender
           git submodule update --init --recursive --force
 
-      # ========== 核心修正：强制拉取 lib/ios_arm64 的 LFS ==========
-      - name: Force pull iOS libraries
+      # ========== 关键修复：运行 make_update.py 补全依赖 ==========
+      - name: Run make_update.py to fetch all libraries
         run: |
           cd blender
-          # 确保目录存在
-          if [ ! -d "lib/ios_arm64" ]; then
-            echo "⚠️ lib/ios_arm64 not found, initializing..."
-            git submodule update --init lib/ios_arm64
-          fi
-          cd lib/ios_arm64
-          # 直接从官方源拉取所有 LFS 对象
-          git lfs fetch --all https://projects.blender.org/blender/lib-ios_arm64.git
-          git lfs checkout
-          cd ../..
-          echo "✅ iOS libraries pulled successfully"
-          ls -la lib/ios_arm64/ | head -20
+          # 不带任何参数运行，让它自动检测平台并拉取所有需要的库
+          python3 ./build_files/utils/make_update.py
 
-      # 同样处理 macOS 库（CMake 需要）
-      - name: Force pull macOS libraries
+      # 再次拉取 LFS（确保所有大文件都被拉取）
+      - name: Pull LFS again for safety
         run: |
           cd blender
-          if [ ! -d "lib/macos_arm64" ]; then
-            git submodule update --init lib/macos_arm64
-          fi
-          cd lib/macos_arm64
-          git lfs fetch --all https://projects.blender.org/blender/lib-macos_arm64.git
-          git lfs checkout
-          cd ../..
-          echo "✅ macOS libraries pulled successfully"
-          ls -la lib/macos_arm64/ | head -20
+          git lfs pull
+          git submodule foreach git lfs pull
 
-      # 特别检查 Python 目录
-      - name: Verify Python library
+      # 验证关键目录是否存在
+      - name: Verify libraries
         run: |
           cd blender
+          echo "=== macOS libraries ==="
+          ls -la lib/macos_arm64/ || echo "macOS libs missing!"
+          echo "=== iOS libraries ==="
+          ls -la lib/ios_arm64/ || echo "iOS libs missing!"
+          echo "=== Python directory ==="
           if [ -d "lib/ios_arm64/python" ]; then
-            echo "✅ Python found:"
+            echo "✅ Python found!"
             ls -la lib/ios_arm64/python/
           else
-            echo "❌ Python missing! Checking LFS files..."
-            cd lib/ios_arm64
-            git lfs ls-files | grep python
-            cd ../..
+            echo "❌ Python still missing!"
             exit 1
           fi
 
