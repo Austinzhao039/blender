@@ -126,12 +126,11 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
-      # ========== 核心修正：直接使用当前镜像中真实存在的 Xcode 26.3 ==========
+      # ========== 核心：自动选择正确的 Xcode 版本 ==========
       - name: Setup Xcode environment
-        run: |
-          # macos-15 镜像 (2026-02-24) 中 Xcode 26.3 是真实存在的路径[reference:5]
-          sudo xcode-select -s "/Applications/Xcode_26.3.app"
-          xcodebuild -version
+        uses: step-security/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
 
       - name: Clean build directory
         run: rm -rf build_ios
