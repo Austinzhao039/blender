@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake
+          brew install git-lfs cmake wget
           git lfs install
 
       - name: Clone Blender from official source
@@ -20,27 +20,53 @@ jobs:
           cd blender
           git lfs pull
 
-      # 直接克隆预编译库，绕过 make_update.py 和子模块问题
-      - name: Clone precompiled libraries
+      - name: Clone precompiled libraries (macOS + iOS)
         run: |
           cd blender
-          # iOS 库（解决 python 缺失问题）
-          rm -rf lib/ios_arm64
-          git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
-          cd lib/ios_arm64 && git lfs pull && cd ../..
-          # macOS 库（CMake 配置需要）
+          # macOS 库
           rm -rf lib/macos_arm64
           git clone https://projects.blender.org/blender/lib-macos_arm64.git lib/macos_arm64
           cd lib/macos_arm64 && git lfs pull && cd ../..
+          # iOS 库（不含 Python）
+          rm -rf lib/ios_arm64
+          git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
+          cd lib/ios_arm64 && git lfs pull && cd ../..
 
-      - name: Verify libraries
+      # ========== 核心修复：手动下载 Python 3.13 库 ==========
+      - name: Download Python 3.13 for iOS
         run: |
-          cd blender
-          if [ ! -d "lib/ios_arm64/python" ]; then
-            echo "❌ iOS Python still missing!"
+          cd blender/lib/ios_arm64
+          
+          # 从 Blender 官方服务器下载 Python 3.13 预编译包
+          PYTHON_URL="https://download.blender.org/ftp/source/lib/ios_arm64/python-3.13.0-ios-arm64.tar.xz"
+          
+          echo "Downloading Python 3.13 from $PYTHON_URL..."
+          wget --no-check-certificate -O python.tar.xz "$PYTHON_URL" || \
+            curl -L -o python.tar.xz "$PYTHON_URL"
+          
+          if [ -f python.tar.xz ]; then
+            echo "Extracting Python..."
+            tar -xf python.tar.xz
+            rm python.tar.xz
+            echo "✅ Python 3.13 installed successfully!"
+          else
+            echo "❌ Failed to download Python!"
             exit 1
           fi
-          echo "✅ Libraries ready"
+          
+          # 验证
+          ls -la python/
+
+      - name: Verify Python library
+        run: |
+          cd blender
+          if [ -d "lib/ios_arm64/python" ] && [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
+            echo "✅ Python 3.13 library found!"
+            ls -la lib/ios_arm64/python/lib/
+          else
+            echo "❌ Python 3.13 library still missing!"
+            exit 1
+          fi
 
       - name: Generate Xcode project
         run: |
