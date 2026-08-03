@@ -15,17 +15,7 @@ jobs:
           fetch-depth: 1
           lfs: false
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf ~/Library/Android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/.ghcup
-          sudo rm -rf /Library/Developer/CoreSimulator/Profiles
-          sudo rm -rf /Applications/Xcode_*.app 2>/dev/null || true
-          sudo xcrun simctl delete all 2>/dev/null || true
-          df -h
+      # ========== 删除了 Free disk space 步骤 ==========
 
       - name: Install dependencies
         run: |
@@ -126,10 +116,20 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
-      # ========== 核心修正：自动选择最高版本 Xcode ==========
+      # ========== 核心：自动探测最高版本的 Xcode ==========
       - name: Setup Xcode environment
         run: |
-          sudo xcode-select --reset
+          # 列出 /Applications 目录，用于调试
+          echo "Contents of /Applications:"
+          ls /Applications/
+          # 查找所有 Xcode 开头的 .app，按版本排序，取最新的
+          XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
+          if [ -z "$XCODE_APP" ]; then
+            echo "No Xcode found in /Applications!"
+            exit 1
+          fi
+          echo "Selected Xcode: $XCODE_APP"
+          sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
       - name: Clean build directory
