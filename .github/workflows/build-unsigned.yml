@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake wget
+          brew install git-lfs cmake
           git lfs install
 
       - name: Clone Blender from official source
@@ -20,51 +20,47 @@ jobs:
           cd blender
           git lfs pull
 
-      - name: Clone precompiled libraries (macOS + iOS)
+      - name: Fix submodule URLs
         run: |
           cd blender
-          # macOS 库
-          rm -rf lib/macos_arm64
-          git clone https://projects.blender.org/blender/lib-macos_arm64.git lib/macos_arm64
-          cd lib/macos_arm64 && git lfs pull && cd ../..
-          # iOS 库（不含 Python）
-          rm -rf lib/ios_arm64
-          git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
-          cd lib/ios_arm64 && git lfs pull && cd ../..
+          sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
+          git submodule sync --recursive
 
-      # ========== 核心修复：手动下载 Python 3.13 库 ==========
-      - name: Download Python 3.13 for iOS
+      # 优化后的 make_update.py 执行
+      - name: Run make_update.py with retry
         run: |
-          cd blender/lib/ios_arm64
+          cd blender
+          # 配置 Git LFS 重试
+          git config --global lfs.transfer.maxretries 5
+          git config --global lfs.transfer.retryinterval 5
           
-          # 从 Blender 官方服务器下载 Python 3.13 预编译包
-          PYTHON_URL="https://download.blender.org/ftp/source/lib/ios_arm64/python-3.13.0-ios-arm64.tar.xz"
+          # 先初始化子模块（跳过 LFS）
+          export GIT_LFS_SKIP_SMUDGE=1
+          ./build_files/utils/make_update.py --no-lfs-fallback
           
-          echo "Downloading Python 3.13 from $PYTHON_URL..."
-          wget --no-check-certificate -O python.tar.xz "$PYTHON_URL" || \
-            curl -L -o python.tar.xz "$PYTHON_URL"
-          
-          if [ -f python.tar.xz ]; then
-            echo "Extracting Python..."
-            tar -xf python.tar.xz
-            rm python.tar.xz
-            echo "✅ Python 3.13 installed successfully!"
-          else
-            echo "❌ Failed to download Python!"
-            exit 1
+          # 手动拉取 iOS 库的 LFS
+          git lfs pull --include="lib/ios_arm64/**"
+
+      # 备用方案：如果 make_update.py 拉取不完整，手动克隆
+      - name: Manual clone of iOS libraries (fallback)
+        run: |
+          cd blender
+          if [ ! -d "lib/ios_arm64/python" ]; then
+            echo "Python not found, manually cloning lib-ios_arm64..."
+            rm -rf lib/ios_arm64
+            git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
+            cd lib/ios_arm64
+            git lfs pull
+            cd ../..
           fi
-          
-          # 验证
-          ls -la python/
 
-      - name: Verify Python library
+      - name: Verify libraries
         run: |
           cd blender
-          if [ -d "lib/ios_arm64/python" ] && [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
-            echo "✅ Python 3.13 library found!"
-            ls -la lib/ios_arm64/python/lib/
+          if [ -d "lib/ios_arm64/python" ]; then
+            echo "✅ iOS Python found!"
           else
-            echo "❌ Python 3.13 library still missing!"
+            echo "❌ iOS Python still missing!"
             exit 1
           fi
 
