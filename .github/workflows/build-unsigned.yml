@@ -15,6 +15,7 @@ jobs:
           fetch-depth: 1
           lfs: false
 
+      # 清理磁盘空间
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android
@@ -27,11 +28,13 @@ jobs:
           sudo xcrun simctl delete all 2>/dev/null || true
           df -h
 
+      # 安装依赖
       - name: Install dependencies
         run: |
           brew install git-lfs cmake eigen fmt openimageio zstd
           git lfs install
 
+      # --- 缓存 LFS 资源 (与之前保持一致) ---
       - name: Compute required LFS cache key
         id: required-lfs-cache-key
         run: printf 'sha=%s\n' "$(git rev-parse HEAD:release/datafiles/startup.blend)" >> "$GITHUB_OUTPUT"
@@ -64,6 +67,7 @@ jobs:
             release/datafiles/startup.blend
           key: ${{ runner.os }}-required-lfs-${{ steps.required-lfs-cache-key.outputs.sha }}-v1
 
+      # --- 拉取 iOS 预编译库 (与之前保持一致) ---
       - name: Compute iOS libs cache key
         id: ios-libs-cache-key
         run: printf 'sha=%s\n' "$(git rev-parse HEAD:lib/ios_arm64)" >> "$GITHUB_OUTPUT"
@@ -126,22 +130,46 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
-      # ========== 核心修正：彻底删除构建目录，强制使用 DEVELOPER_DIR ==========
+      # ========== 🎯 核心修正：正确设置 Xcode 环境 ==========
+      - name: Setup Xcode environment
+        run: |
+          # 1. 重置 Xcode 选择，清除错误配置
+          sudo xcode-select --reset
+          
+          # 2. 自动探测系统中最高版本的 Xcode
+          XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
+          if [ -z "$XCODE_APP" ]; then
+            echo "No Xcode found!"
+            exit 1
+          fi
+          echo "Using Xcode: $XCODE_APP"
+          
+          # 3. 切换到探测到的 Xcode
+          sudo xcode-select --switch "/Applications/$XCODE_APP"
+          xcode-select -p
+          xcodebuild -version
+          
+          # 4. 将路径写入环境变量，供后续步骤使用
+          echo "DEVELOPER_DIR=/Applications/$XCODE_APP/Contents/Developer" >> $GITHUB_ENV
+
+      # 清理旧的构建目录
       - name: Clean build directory
         run: rm -rf build_ios
 
+      # 生成 Xcode 项目
       - name: Generate Xcode project
         run: |
-          # 通过环境变量指定 Xcode 路径（而不是 xcode-select）
-          export DEVELOPER_DIR="/Applications/Xcode_16.4.app/Contents/Developer"
+          # DEVELOPER_DIR 已通过环境变量设置，CMake 将使用正确的 Xcode
           cmake -G Xcode -S . -B build_ios \
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF
 
+      # 查看可用的 Xcode 目标
       - name: List Xcode targets
         run: xcodebuild -project build_ios/Blender.xcodeproj -list
 
+      # 编译 Blender.app
       - name: Build Blender.app for iOS
         run: |
           xcodebuild \
@@ -157,6 +185,7 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO
 
+      # 打包成 IPA
       - name: Package unsigned IPA
         run: |
           APP=""
@@ -184,6 +213,7 @@ jobs:
           cd ..
           ls -lh Blender.ipa
 
+      # 上传产物
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
@@ -191,6 +221,7 @@ jobs:
           path: Blender.ipa
           retention-days: 30
 
+      # 失败时上传日志
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
