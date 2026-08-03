@@ -14,59 +14,60 @@ jobs:
           brew install git-lfs cmake eigen fmt openimageio zstd
           git lfs install
 
-      # 1. 从官方源克隆（避免 GitHub 镜像的 LFS 404）
       - name: Clone Blender from official source
         run: |
           git clone https://projects.blender.org/blender/blender.git -b ios --depth 1
           cd blender
           git lfs pull
 
-      # 2. 修正子模块 URL 并同步
       - name: Fix submodule URLs
         run: |
           cd blender
           sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
           git submodule sync --recursive
 
-      # 3. 【关键修复】拉取子模块但跳过 LFS，然后手动从官方源拉取
-      - name: Pull submodules and LFS from official source
+      - name: Initialize submodules without LFS
         run: |
           cd blender
-          # 3a. 初始化子模块，但跳过 LFS 文件的下载
           GIT_LFS_SKIP_SMUDGE=1 git submodule update --init --recursive --force
-          
-          # 3b. 手动进入每个子模块，从官方源拉取 LFS 文件
-          for submodule in lib/macos_arm64 lib/ios_arm64; do
-            if [ -d "$submodule" ]; then
-              echo "Processing $submodule..."
-              cd "$submodule"
-              # 从官方源拉取所有 LFS 对象[reference:4]
-              git lfs fetch --all https://projects.blender.org/blender/$(basename $submodule).git
-              git lfs pull
-              cd ../..
-            else
-              echo "WARNING: $submodule not found!"
-            fi
-          done
 
-      # 4. 【备用方案】如果上面的方法仍然失败，尝试直接克隆 iOS 库
-      - name: Fallback: Direct clone of iOS libraries
-        if: failure()
+      - name: Force pull iOS libraries LFS from official source
         run: |
           cd blender
-          rm -rf lib/ios_arm64
-          git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
-          cd lib/ios_arm64
-          git lfs pull
+          if [ -d "lib/ios_arm64" ]; then
+            cd lib/ios_arm64
+            git lfs fetch --all https://projects.blender.org/blender/lib-ios_arm64.git
+            git lfs pull
+            cd ../..
+          else
+            echo "lib/ios_arm64 not found, cloning directly..."
+            rm -rf lib/ios_arm64
+            git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
+            cd lib/ios_arm64
+            git lfs pull
+            cd ../..
+          fi
 
-      # 5. 验证关键库是否存在
+      - name: Force pull macOS libraries LFS from official source
+        run: |
+          cd blender
+          if [ -d "lib/macos_arm64" ]; then
+            cd lib/macos_arm64
+            git lfs fetch --all https://projects.blender.org/blender/lib-macos_arm64.git
+            git lfs pull
+            cd ../..
+          else
+            echo "lib/macos_arm64 not found, cloning directly..."
+            rm -rf lib/macos_arm64
+            git clone https://projects.blender.org/blender/lib-macos_arm64.git lib/macos_arm64
+            cd lib/macos_arm64
+            git lfs pull
+            cd ../..
+          fi
+
       - name: Verify libraries
         run: |
           cd blender
-          echo "=== macOS libraries ==="
-          ls -la lib/macos_arm64/ | head -20
-          echo "=== iOS libraries ==="
-          ls -la lib/ios_arm64/ | head -20
           if [ -d "lib/ios_arm64/python" ]; then
             echo "✅ iOS Python found!"
           else
@@ -74,7 +75,6 @@ jobs:
             exit 1
           fi
 
-      # 6. 自动选择最高版本 Xcode
       - name: Setup Xcode
         run: |
           XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
@@ -86,7 +86,6 @@ jobs:
           sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
-      # 7. 生成 Xcode 项目
       - name: Generate Xcode project
         run: |
           cd blender
@@ -96,7 +95,6 @@ jobs:
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF
 
-      # 8. 编译
       - name: Build Blender.app for iOS
         run: |
           cd blender/build_ios
@@ -113,7 +111,6 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO
 
-      # 9. 打包
       - name: Package unsigned IPA
         run: |
           cd blender/build_ios
