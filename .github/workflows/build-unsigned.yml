@@ -126,11 +126,12 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
-      # ========== 核心修正：使用 setup-xcode Action 自动配置 Xcode 环境 ==========
-      - name: Set up Xcode
-        uses: step-security/setup-xcode@v1
-        with:
-          xcode-version: '16.4'
+      # ========== 核心修正：直接使用 xcode-select -s 指定 Xcode 路径 ==========
+      - name: Setup Xcode environment
+        run: |
+          # macos-15 镜像中 Xcode_16.4.app 是真实存在的路径
+          sudo xcode-select -s "/Applications/Xcode_16.4.app"
+          xcodebuild -version
 
       - name: Clean build directory
         run: rm -rf build_ios
