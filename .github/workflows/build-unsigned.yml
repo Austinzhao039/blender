@@ -14,72 +14,70 @@ jobs:
           brew install git-lfs cmake eigen fmt openimageio zstd
           git lfs install
 
-      # 从官方源克隆（避免 GitHub 镜像的 LFS 404）
+      # 从官方源克隆
       - name: Clone Blender from official source
         run: |
           git clone https://projects.blender.org/blender/blender.git -b ios --depth 1
           cd blender
           git lfs pull
 
-      # 修正子模块 URL（使用 macOS 兼容的 sed 语法）
-      - name: Fix submodule URLs to official source
+      # 修正子模块 URL
+      - name: Fix submodule URLs
         run: |
           cd blender
-          # macOS 的 sed 必须用 -i '' 语法
           sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
           git submodule sync --recursive
 
-      # 强制拉取所有子模块（包括 macOS 和 iOS 的库）
-      - name: Initialize and pull all submodules
+      # 拉取所有子模块
+      - name: Initialize submodules
         run: |
           cd blender
           git submodule update --init --recursive --force
-          git submodule foreach git lfs pull
 
-      # 检查 macOS 库是否存在
-      - name: Verify macOS libraries
+      # ========== 核心修正：强制拉取 lib/ios_arm64 的 LFS ==========
+      - name: Force pull iOS libraries
         run: |
           cd blender
-          if [ -d "lib/macos_arm64" ]; then
-            echo "✅ macOS libraries found"
-            ls -la lib/macos_arm64/ | head -20
-          else
-            echo "❌ macOS libraries missing!"
-            # 尝试单独拉取 macOS 库子模块
-            git submodule update --init lib/macos_arm64
-            cd lib/macos_arm64
-            git lfs pull
-            cd ../..
-          fi
-
-      # 检查 iOS 库是否存在
-      - name: Verify iOS libraries
-        run: |
-          cd blender
-          if [ -d "lib/ios_arm64" ]; then
-            echo "✅ iOS libraries found"
-            ls -la lib/ios_arm64/ | head -20
-          else
-            echo "❌ iOS libraries missing!"
+          # 确保目录存在
+          if [ ! -d "lib/ios_arm64" ]; then
+            echo "⚠️ lib/ios_arm64 not found, initializing..."
             git submodule update --init lib/ios_arm64
-            cd lib/ios_arm64
-            git lfs pull
-            cd ../..
           fi
+          cd lib/ios_arm64
+          # 直接从官方源拉取所有 LFS 对象
+          git lfs fetch --all https://projects.blender.org/blender/lib-ios_arm64.git
+          git lfs checkout
+          cd ../..
+          echo "✅ iOS libraries pulled successfully"
+          ls -la lib/ios_arm64/ | head -20
+
+      # 同样处理 macOS 库（CMake 需要）
+      - name: Force pull macOS libraries
+        run: |
+          cd blender
+          if [ ! -d "lib/macos_arm64" ]; then
+            git submodule update --init lib/macos_arm64
+          fi
+          cd lib/macos_arm64
+          git lfs fetch --all https://projects.blender.org/blender/lib-macos_arm64.git
+          git lfs checkout
+          cd ../..
+          echo "✅ macOS libraries pulled successfully"
+          ls -la lib/macos_arm64/ | head -20
 
       # 特别检查 Python 目录
       - name: Verify Python library
         run: |
           cd blender
           if [ -d "lib/ios_arm64/python" ]; then
-            echo "✅ Python found"
+            echo "✅ Python found:"
             ls -la lib/ios_arm64/python/
           else
-            echo "❌ Python missing! Attempting manual fetch..."
+            echo "❌ Python missing! Checking LFS files..."
             cd lib/ios_arm64
-            git lfs fetch --all
-            git lfs checkout
+            git lfs ls-files | grep python
             cd ../..
+            exit 1
           fi
 
       # 自动选择最高版本 Xcode
@@ -104,7 +102,7 @@ jobs:
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF
 
-      # 编译 Blender.app
+      # 编译
       - name: Build Blender.app for iOS
         run: |
           cd blender/build_ios
@@ -121,7 +119,7 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO
 
-      # 打包成未签名 IPA
+      # 打包
       - name: Package unsigned IPA
         run: |
           cd blender/build_ios
@@ -141,7 +139,6 @@ jobs:
           cd ..
           ls -lh Blender.ipa
 
-      # 上传 IPA
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
@@ -149,7 +146,6 @@ jobs:
           path: blender/build_ios/Blender.ipa
           retention-days: 30
 
-      # 失败时上传日志
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
