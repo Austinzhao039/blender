@@ -9,57 +9,35 @@ jobs:
     timeout-minutes: 210
 
     steps:
-      - name: Checkout fork
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          lfs: false
-
-      # ========== 1. 清理安卓缓存，释放空间 ==========
-      - name: Free disk space (Android only)
-        run: |
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf ~/Library/Android
-          df -h
-
-      # ========== 2. 安装依赖 ==========
+      # 1. 安装依赖
       - name: Install dependencies
         run: |
           brew install git-lfs cmake eigen fmt openimageio zstd
           git lfs install
 
-      # ========== 3. 核心：手动初始化并拉取所有子模块 ==========
-      # 这一步直接处理子模块，不依赖可能出问题的 make_update.py
-      - name: Fetch prebuilt libraries (manual submodule)
+      # 2. 直接从官方源克隆（而非 GitHub 镜像）
+      - name: Clone Blender from official source
         run: |
-          # 强制初始化所有子模块（包括 macOS 和 iOS 的依赖库）
-          git submodule update --init --recursive --force
-          
-          # 手动进入每个库目录，强制拉取 LFS 文件
-          for submodule in lib/macos_arm64 lib/ios_arm64; do
-            if [ -d "$submodule" ]; then
-              echo "Processing $submodule..."
-              cd "$submodule"
-              git lfs fetch --all
-              git lfs pull
-              cd ../..
-            else
-              echo "WARNING: $submodule not found!"
-            fi
-          done
-          
-          # 额外检查 iOS Python 库是否拉取成功
-          if [ ! -d lib/ios_arm64/python ]; then
-            echo "Python library still missing, attempting manual LFS fetch..."
-            cd lib/ios_arm64
-            git lfs fetch --all
-            git lfs checkout
-            cd ../..
-          fi
+          git clone https://projects.blender.org/blender/blender.git -b ios --depth 1
+          cd blender
+          # 拉取主仓库的 LFS 文件（这些文件在官方源中是完整的）
+          git lfs pull
 
-      # ========== 4. 补全缺失的 iOS 库 (fmt, eigen) ==========
-      - name: Bootstrap missing iOS prebuilts
+      # 3. 修正子模块 URL 并初始化所有子模块
+      - name: Initialize submodules from official source
         run: |
+          cd blender
+          # 将子模块的 URL 从 github.com 重定向到 projects.blender.org
+          sed -i 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
+          git submodule sync --recursive
+          git submodule update --init --recursive --force
+          # 拉取每个子模块的 LFS 文件
+          git submodule foreach git lfs pull
+
+      # 4. 补全缺失的 iOS 库（fmt, eigen 等）
+      - name: Bootstrap missing libraries
+        run: |
+          cd blender
           if [ ! -f lib/ios_arm64/fmt/include/fmt/core.h ]; then
             if [ -f ./build_files/utils/bootstrap_ios_fmt.sh ]; then
               bash ./build_files/utils/bootstrap_ios_fmt.sh
@@ -74,58 +52,46 @@ jobs:
               echo "WARNING: eigen bootstrap script not found"
             fi
           fi
-          if [ ! -d lib/ios_arm64/python ]; then
-            echo "ERROR: Python library still missing after all attempts!" >&2
-            exit 1
-          fi
 
-      # ========== 5. 验证库文件是否齐全 ==========
-      - name: Verify bootstrapped libraries
+      # 5. 验证库文件是否存在
+      - name: Verify libraries
         run: |
+          cd blender
           echo "=== macOS libraries ==="
-          ls -la lib/macos_arm64/ || echo "macOS libraries missing!"
+          ls -la lib/macos_arm64/ || echo "macOS libs missing!"
           echo "=== iOS libraries ==="
-          ls -la lib/ios_arm64/ || echo "iOS libraries missing!"
+          ls -la lib/ios_arm64/ || echo "iOS libs missing!"
           echo "=== Python directory ==="
           ls -la lib/ios_arm64/python/ || echo "Python missing!"
 
-      # ========== 6. 缓存庞大的依赖库，加速后续构建 ==========
-      - name: Cache prebuilt libraries
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            lib/ios_arm64
-            lib/macos_arm64
-            .git/modules/lib/ios_arm64
-            .git/modules/lib/macos_arm64
-          key: ${{ runner.os }}-libs-${{ hashFiles('lib/ios_arm64') }}-v1
-
-      # ========== 7. 自动选择并切换到最高版本 Xcode ==========
-      - name: Setup Xcode environment
+      # 6. 自动选择最高版本 Xcode
+      - name: Setup Xcode
         run: |
           XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
           if [ -z "$XCODE_APP" ]; then
-            echo "No Xcode found in /Applications!"
+            echo "No Xcode found!"
             exit 1
           fi
           echo "Selected Xcode: $XCODE_APP"
           sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
-      # ========== 8. 生成 Xcode 项目 ==========
+      # 7. 生成 Xcode 项目
       - name: Generate Xcode project
         run: |
+          cd blender
           rm -rf build_ios
           cmake -G Xcode -S . -B build_ios \
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF
 
-      # ========== 9. 编译 Blender.app ==========
+      # 8. 编译 Blender.app
       - name: Build Blender.app for iOS
         run: |
+          cd blender/build_ios
           xcodebuild \
-            -project build_ios/Blender.xcodeproj \
+            -project Blender.xcodeproj \
             -target install \
             -sdk iphoneos \
             -configuration Release \
@@ -137,26 +103,19 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO
 
-      # ========== 10. 打包成未签名的 IPA ==========
+      # 9. 打包成未签名 IPA
       - name: Package unsigned IPA
         run: |
-          APP=""
-          for path in \
-            "build_ios/bin/Release/Blender.app" \
-            "build_ios/Build/Products/Release-iphoneos/Blender.app" \
-            "build_ios/Release-iphoneos/Blender.app"; do
-            if [ -d "$path" ]; then
-              APP="$path"
-              break
-            fi
-          done
+          cd blender/build_ios
+          APP=$(find . -name "Blender.app" -type d | head -1)
           if [ -z "$APP" ]; then
             echo "ERROR: Blender.app not found!"
-            find build_ios -name "*.app" -type d
+            find . -name "*.app" -type d
             exit 1
           fi
           echo "Found app at: $APP"
           du -sh "$APP"
+          # 移除不必要的 Python 配置
           rm -rf "$APP/Assets/5.0/python/lib/python3.13/config-3.13-darwin" 2>/dev/null || true
           mkdir -p IPA/Payload
           cp -r "$APP" IPA/Payload/
@@ -165,21 +124,21 @@ jobs:
           cd ..
           ls -lh Blender.ipa
 
-      # ========== 11. 上传最终产物 ==========
+      # 10. 上传 IPA
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: blender-ipad-unsigned
-          path: Blender.ipa
+          path: blender/build_ios/Blender.ipa
           retention-days: 30
 
-      # ========== 12. 失败时上传日志 ==========
+      # 11. 失败时上传日志
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
           path: |
-            build_ios/**/*.log
-            build_ios/**/*.txt
+            blender/build_ios/**/*.log
+            blender/build_ios/**/*.txt
           retention-days: 7
