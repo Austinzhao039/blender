@@ -1,19 +1,216 @@
-- name: Setup Xcode environment
-  run: |
-    # 查找第一个以 Xcode_ 开头的 .app 文件夹，这通常是带版本号的稳定版本
-    XCODE_APP=$(ls /Applications/ | grep -E '^Xcode_[0-9]+\.[0-9]+\.app$' | head -1)
-    
-    # 如果没找到带版本号的 Xcode，则回退到 Xcode.app
-    if [ -z "$XCODE_APP" ]; then
-      echo "No versioned Xcode found, using default Xcode.app"
-      XCODE_APP="Xcode.app"
-    fi
-    
-    echo "Using Xcode: $XCODE_APP"
-    
-    # 不再使用 xcode-select，而是直接设置 DEVELOPER_DIR 环境变量
-    echo "DEVELOPER_DIR=/Applications/$XCODE_APP/Contents/Developer" >> $GITHUB_ENV
-    
-    # 可选：打印 Xcode 版本信息以便调试
-    export DEVELOPER_DIR="/Applications/$XCODE_APP/Contents/Developer"
-    xcodebuild -version
+name: Build Blender iOS IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 210
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          lfs: false
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf ~/Library/Android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles
+          sudo rm -rf /Applications/Xcode_*.app 2>/dev/null || true
+          sudo xcrun simctl delete all 2>/dev/null || true
+          df -h
+
+      - name: Install dependencies
+        run: |
+          brew install git-lfs cmake eigen fmt openimageio zstd
+          git lfs install
+
+      - name: Compute required LFS cache key
+        id: required-lfs-cache-key
+        run: printf 'sha=%s\n' "$(git rev-parse HEAD:release/datafiles/startup.blend)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore required LFS assets cache
+        id: required-lfs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .git/lfs/objects
+            release/datafiles/startup.blend
+          key: ${{ runner.os }}-required-lfs-${{ steps.required-lfs-cache-key.outputs.sha }}-v1
+
+      - name: Fetch required LFS source assets
+        run: |
+          if [ "${{ steps.required-lfs-cache.outputs.cache-hit }}" != "true" ]; then
+            git config lfs.remote.searchall true
+            git remote add lfs-fallback https://projects.blender.org/blender/blender.git 2>/dev/null || true
+            git remote set-url --push lfs-fallback no_push
+            git lfs fetch lfs-fallback --include="release/datafiles/startup.blend"
+          fi
+          git lfs pull --include="release/datafiles/startup.blend"
+
+      - name: Save required LFS assets cache
+        if: steps.required-lfs-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .git/lfs/objects
+            release/datafiles/startup.blend
+          key: ${{ runner.os }}-required-lfs-${{ steps.required-lfs-cache-key.outputs.sha }}-v1
+
+      - name: Compute iOS libs cache key
+        id: ios-libs-cache-key
+        run: printf 'sha=%s\n' "$(git rev-parse HEAD:lib/ios_arm64)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore iOS prebuilt libraries cache
+        id: ios-libs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            lib/ios_arm64
+            .git/modules/lib/ios_arm64
+          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
+
+      - name: Fetch prebuilt iOS libraries
+        if: steps.ios-libs-cache.outputs.cache-hit != 'true'
+        run: |
+          git submodule update --init --recursive
+          python3 ./build_files/utils/make_update.py
+          git submodule foreach git lfs pull
+          if [ ! -d lib/ios_arm64/python ]; then
+            echo "Python library still missing, attempting manual LFS fetch..."
+            cd lib/ios_arm64
+            git lfs fetch --all
+            git lfs checkout
+            cd ../..
+          fi
+
+      - name: Bootstrap missing iOS prebuilts
+        run: |
+          if [ ! -f lib/ios_arm64/fmt/include/fmt/core.h ]; then
+            if [ -f ./build_files/utils/bootstrap_ios_fmt.sh ]; then
+              bash ./build_files/utils/bootstrap_ios_fmt.sh
+            else
+              echo "WARNING: fmt bootstrap script not found"
+            fi
+          fi
+          if [ ! -f lib/ios_arm64/eigen/share/eigen3/cmake/Eigen3Config.cmake ]; then
+            if [ -f ./build_files/utils/bootstrap_ios_eigen.sh ]; then
+              bash ./build_files/utils/bootstrap_ios_eigen.sh
+            else
+              echo "WARNING: eigen bootstrap script not found"
+            fi
+          fi
+          if [ ! -d lib/ios_arm64/python ]; then
+            echo "ERROR: Python library still missing after all attempts!" >&2
+            exit 1
+          fi
+
+      - name: Verify bootstrapped iOS prebuilts
+        run: |
+          ls -la lib/ios_arm64/
+          ls -la lib/ios_arm64/python/ || echo "Python missing!"
+
+      - name: Save iOS prebuilt libraries cache
+        if: steps.ios-libs-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            lib/ios_arm64
+            .git/modules/lib/ios_arm64
+          key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
+
+      # ========== 核心修正：使用 DEVELOPER_DIR 环境变量，不再使用 xcode-select ==========
+      - name: Setup Xcode environment
+        run: |
+          # 优先查找带版本号的 Xcode（如 Xcode_16.4.app）
+          XCODE_APP=$(ls /Applications/ | grep -E '^Xcode_[0-9]+\.[0-9]+\.app$' | head -1)
+          if [ -z "$XCODE_APP" ]; then
+            echo "No versioned Xcode found, using default Xcode.app"
+            XCODE_APP="Xcode.app"
+          fi
+          echo "Using Xcode: $XCODE_APP"
+          # 直接设置 DEVELOPER_DIR 环境变量，写入 $GITHUB_ENV 供后续步骤使用
+          echo "DEVELOPER_DIR=/Applications/$XCODE_APP/Contents/Developer" >> $GITHUB_ENV
+          # 打印版本信息以验证
+          export DEVELOPER_DIR="/Applications/$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+
+      - name: Clean build directory
+        run: rm -rf build_ios
+
+      - name: Generate Xcode project
+        run: |
+          # 此时 DEVELOPER_DIR 已通过环境变量设置，CMake 将使用正确的 Xcode
+          cmake -G Xcode -S . -B build_ios \
+            -DWITH_GTESTS=OFF \
+            -DWITH_TESTS=OFF \
+            -DWITH_DOCS=OFF
+
+      - name: List Xcode targets
+        run: xcodebuild -project build_ios/Blender.xcodeproj -list
+
+      - name: Build Blender.app for iOS
+        run: |
+          xcodebuild \
+            -project build_ios/Blender.xcodeproj \
+            -target install \
+            -sdk iphoneos \
+            -configuration Release \
+            -parallelizeTargets \
+            -jobs 4 \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO
+
+      - name: Package unsigned IPA
+        run: |
+          APP=""
+          for path in \
+            "build_ios/bin/Release/Blender.app" \
+            "build_ios/Build/Products/Release-iphoneos/Blender.app" \
+            "build_ios/Release-iphoneos/Blender.app"; do
+            if [ -d "$path" ]; then
+              APP="$path"
+              break
+            fi
+          done
+          if [ -z "$APP" ]; then
+            echo "ERROR: Blender.app not found!"
+            find build_ios -name "*.app" -type d
+            exit 1
+          fi
+          echo "Found app at: $APP"
+          du -sh "$APP"
+          rm -rf "$APP/Assets/5.0/python/lib/python3.13/config-3.13-darwin" 2>/dev/null || true
+          mkdir -p IPA/Payload
+          cp -r "$APP" IPA/Payload/
+          cd IPA
+          zip -r ../Blender.ipa Payload/
+          cd ..
+          ls -lh Blender.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender-ipad-unsigned
+          path: Blender.ipa
+          retention-days: 30
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build_ios/**/*.log
+            build_ios/**/*.txt
+          retention-days: 7
