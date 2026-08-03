@@ -126,11 +126,11 @@ jobs:
             .git/modules/lib/ios_arm64
           key: ${{ runner.os }}-ios-arm64-libs-${{ steps.ios-libs-cache-key.outputs.sha }}-bootstrap-v3
 
-      # ========== 核心修正：直接使用 xcode-select -s 指定 Xcode 路径 ==========
+      # ========== 核心修正：使用正确的 Xcode 路径 ==========
       - name: Setup Xcode environment
         run: |
-          # macos-15 镜像中 Xcode_16.4.app 是真实存在的路径
-          sudo xcode-select -s "/Applications/Xcode_16.4.app"
+          # macos-15 镜像中正确的路径是 Xcode_16.app
+          sudo xcode-select -s "/Applications/Xcode_16.app"
           xcodebuild -version
 
       - name: Clean build directory
