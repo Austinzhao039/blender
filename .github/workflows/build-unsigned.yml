@@ -11,8 +11,14 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake
+          brew install git-lfs cmake python@3.13
           git lfs install
+
+      # 确保使用 Python 3.13
+      - name: Setup Python 3.13
+        run: |
+          echo "PATH=/opt/homebrew/opt/python@3.13/bin:$PATH" >> $GITHUB_ENV
+          /opt/homebrew/opt/python@3.13/bin/python3 --version
 
       - name: Clone Blender from official source
         run: |
@@ -29,7 +35,7 @@ jobs:
       - name: Run make_update.py
         run: |
           cd blender
-          python3 ./build_files/utils/make_update.py
+          /opt/homebrew/opt/python@3.13/bin/python3 ./build_files/utils/make_update.py
 
       # ============================================================
       # 核心修复：如果 Python 缺失，自己编译一个
@@ -60,14 +66,17 @@ jobs:
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-arch arm64 -isysroot $SDKROOT -miphoneos-version-min=14.0"
           
-          # 配置并编译（修复：添加 --with-build-python）
+          # 使用 Python 3.13 作为 build python
+          BUILD_PYTHON="/opt/homebrew/opt/python@3.13/bin/python3"
+          
+          # 配置并编译
           ./configure \
             --host=arm64-apple-ios \
             --build=$(./config.guess) \
             --prefix=/tmp/python-ios \
             --disable-framework \
             --disable-shared \
-            --with-build-python=$(which python3) \
+            --with-build-python=$BUILD_PYTHON \
             ac_cv_file__dev_ptmx=no \
             ac_cv_file__dev_ptc=no
           
