@@ -11,14 +11,22 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake python@3.13
+          brew install git-lfs cmake pyenv
           git lfs install
 
-      # 确保使用 Python 3.13
-      - name: Setup Python 3.13
+      # ============================================================
+      # 使用 pyenv 安装 Python 3.13（用于交叉编译辅助）
+      # ============================================================
+      - name: Setup Python 3.13 via pyenv
         run: |
-          echo "PATH=/opt/homebrew/opt/python@3.13/bin:$PATH" >> $GITHUB_ENV
-          /opt/homebrew/opt/python@3.13/bin/python3 --version
+          # 安装 Python 3.13.0
+          pyenv install 3.13.0
+          pyenv global 3.13.0
+          # 设置环境变量
+          echo "PYENV_ROOT=$HOME/.pyenv" >> $GITHUB_ENV
+          echo "$HOME/.pyenv/shims:$HOME/.pyenv/bin" >> $GITHUB_PATH
+          # 验证
+          python3 --version
 
       - name: Clone Blender from official source
         run: |
@@ -35,7 +43,7 @@ jobs:
       - name: Run make_update.py
         run: |
           cd blender
-          /opt/homebrew/opt/python@3.13/bin/python3 ./build_files/utils/make_update.py
+          python3 ./build_files/utils/make_update.py
 
       # ============================================================
       # 核心修复：如果 Python 缺失，自己编译一个
@@ -66,8 +74,8 @@ jobs:
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-arch arm64 -isysroot $SDKROOT -miphoneos-version-min=14.0"
           
-          # 使用 Python 3.13 作为 build python
-          BUILD_PYTHON="/opt/homebrew/opt/python@3.13/bin/python3"
+          # 使用 pyenv 安装的 Python 3.13 作为 build python
+          BUILD_PYTHON="$HOME/.pyenv/shims/python3"
           
           # 配置并编译
           ./configure \
