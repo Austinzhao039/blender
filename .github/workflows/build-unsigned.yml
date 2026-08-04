@@ -29,75 +29,72 @@ jobs:
           sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
           git submodule sync --recursive
 
-      - name: Run make_update.py (base libs)
+      # ============================================================
+      # 2. 拉取基础库（不包括 Python）
+      # ============================================================
+      - name: Run make_update.py
         run: |
           cd blender
           python3 ./build_files/utils/make_update.py
 
       # ============================================================
-      # 2. 下载并提取 Python 3.13（自动适配目录结构）
+      # 3. 下载预编译的 Python 3.13 (来自 BeeWare)
       # ============================================================
-      - name: Download and extract Python 3.13 for iOS
+      - name: Download prebuilt Python 3.13 for iOS
         run: |
           cd blender
-          
+          mkdir -p lib/ios_arm64/python/lib
+          mkdir -p lib/ios_arm64/python/include
+
           # 下载预编译包
           echo "Downloading Python 3.13 prebuilt package from BeeWare..."
           curl -L -o python-ios.tar.gz \
             https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-iOS-support.b14.tar.gz
-          
-          # 查看压缩包内容（调试）
-          echo "Contents of the tarball (top level):"
-          tar -tzf python-ios.tar.gz | head -20
-          
-          # 创建一个临时目录用于解压
+
+          # 解压到临时目录
           mkdir -p python_temp
           tar -xzf python-ios.tar.gz -C python_temp/
+
+          # 从 XCFramework 中提取真机架构的静态库和头文件
+          XCFRAMEWORK_PATH="python_temp/Python.xcframework/ios-arm64"
           
-          # 查找实际的 libpython3.13.a 文件
-          echo "Searching for libpython3.13.a..."
-          find python_temp -name "libpython3.13.a" -type f
-          
-          # 查找实际的 python 头文件
-          echo "Searching for Python.h..."
-          find python_temp -name "Python.h" -type f
-          
-          # 根据找到的结构复制文件
-          # 首先尝试最常见的结构：解压后直接有 include/ 和 lib/ 目录
-          if [ -d "python_temp/include" ] && [ -d "python_temp/lib" ]; then
-            echo "✅ Found include/ and lib/ at top level"
-            cp -r python_temp/include/* lib/ios_arm64/python/include/ 2>/dev/null || true
-            cp -r python_temp/lib/* lib/ios_arm64/python/lib/ 2>/dev/null || true
-          fi
-          
-          # 如果上面没找到，尝试查找实际的库文件位置
-          if [ ! -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
-            echo "Trying alternative structure..."
-            # 查找实际的 libpython3.13.a 文件位置
-            LIB_PATH=$(find python_temp -name "libpython3.13.a" -type f | head -1)
-            if [ -n "$LIB_PATH" ]; then
-              echo "Found libpython3.13.a at: $LIB_PATH"
-              # 获取所在目录的父目录
-              LIB_DIR=$(dirname "$LIB_PATH")
-              # 将包含库的目录内容复制到目标
-              mkdir -p lib/ios_arm64/python/lib/
-              cp "$LIB_PATH" lib/ios_arm64/python/lib/
+          if [ -d "$XCFRAMEWORK_PATH" ]; then
+            echo "✅ Found ios-arm64 slice"
+            
+            # 复制静态库 (libpython3.13.a)
+            if [ -f "$XCFRAMEWORK_PATH/lib-arm64/libpython3.13.a" ]; then
+              cp "$XCFRAMEWORK_PATH/lib-arm64/libpython3.13.a" lib/ios_arm64/python/lib/
+              echo "✅ Copied libpython3.13.a from lib-arm64/"
+            elif [ -f "$XCFRAMEWORK_PATH/lib/libpython3.13.a" ]; then
+              cp "$XCFRAMEWORK_PATH/lib/libpython3.13.a" lib/ios_arm64/python/lib/
+              echo "✅ Copied libpython3.13.a from lib/"
+            else
+              echo "❌ libpython3.13.a not found in XCFramework!"
+              find python_temp -name "libpython3.13.a" -type f
+              exit 1
             fi
             
-            # 查找 Python.h 文件位置
-            HEADER_PATH=$(find python_temp -name "Python.h" -type f | head -1)
-            if [ -n "$HEADER_PATH" ]; then
-              echo "Found Python.h at: $HEADER_PATH"
-              # 获取 include 目录的父目录
-              HEADER_DIR=$(dirname "$HEADER_PATH")
-              mkdir -p lib/ios_arm64/python/include/
-              cp -r "$HEADER_DIR"/* lib/ios_arm64/python/include/ 2>/dev/null || true
+            # 复制头文件
+            if [ -d "$XCFRAMEWORK_PATH/include/python3.13" ]; then
+              cp -r "$XCFRAMEWORK_PATH/include/python3.13/"* lib/ios_arm64/python/include/
+              echo "✅ Copied headers from include/python3.13/"
+            elif [ -d "$XCFRAMEWORK_PATH/include" ]; then
+              cp -r "$XCFRAMEWORK_PATH/include/"* lib/ios_arm64/python/include/
+              echo "✅ Copied headers from include/"
+            else
+              echo "❌ Headers not found in XCFramework!"
+              find python_temp -name "Python.h" -type f
+              exit 1
             fi
+          else
+            echo "❌ ios-arm64 slice not found!"
+            ls -la python_temp/Python.xcframework/
+            exit 1
           fi
-          
+
           # 清理临时文件
           rm -rf python_temp python-ios.tar.gz
-          
+
           # 最终验证
           echo "Final verification:"
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
@@ -105,32 +102,34 @@ jobs:
             ls -la lib/ios_arm64/python/lib/libpython3.13.a
           else
             echo "❌ Python 3.13 library not found!"
-            echo "Directory structure after extraction:"
-            find lib/ios_arm64/python/ -type f | head -20
             exit 1
           fi
 
       # ============================================================
-      # 3. 验证所有关键库
+      # 4. 验证所有库
       # ============================================================
       - name: Verify libraries
         run: |
           cd blender
-          echo "=== Checking macOS libraries ==="
-          ls -la lib/macos_arm64/ | head -10 || echo "macOS libs missing!"
           echo "=== Checking iOS libraries ==="
-          ls -la lib/ios_arm64/ | head -10 || echo "iOS libs missing!"
-          echo "=== Checking Python ==="
+          ls -la lib/ios_arm64/ | head -20
+          echo "=== Checking Python library ==="
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
             echo "✅ Python 3.13 found!"
-            file lib/ios_arm64/python/lib/libpython3.13.a
           else
-            echo "❌ Python 3.13 still missing!"
+            echo "❌ Python 3.13 missing!"
+            exit 1
+          fi
+          echo "=== Checking Python headers ==="
+          if [ -d "lib/ios_arm64/python/include" ] && [ -f "lib/ios_arm64/python/include/Python.h" ]; then
+            echo "✅ Python headers found!"
+          else
+            echo "❌ Python headers missing!"
             exit 1
           fi
 
       # ============================================================
-      # 4. 设置 Xcode 并编译
+      # 5. 设置 Xcode 环境
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -143,6 +142,9 @@ jobs:
           sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
+      # ============================================================
+      # 6. 生成 Xcode 项目
+      # ============================================================
       - name: Generate Xcode project
         run: |
           cd blender
@@ -152,6 +154,9 @@ jobs:
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF
 
+      # ============================================================
+      # 7. 编译 Blender.app
+      # ============================================================
       - name: Build Blender.app for iOS
         run: |
           cd blender/build_ios
@@ -169,7 +174,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 5. 打包并上传 IPA
+      # 8. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         run: |
@@ -187,6 +192,9 @@ jobs:
           cd IPA && zip -r ../Blender.ipa Payload/ && cd ..
           ls -lh Blender.ipa
 
+      # ============================================================
+      # 9. 上传 IPA
+      # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
@@ -194,6 +202,9 @@ jobs:
           path: blender/build_ios/Blender.ipa
           retention-days: 30
 
+      # ============================================================
+      # 10. 失败时上传日志
+      # ============================================================
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
