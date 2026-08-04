@@ -11,23 +11,12 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake pyenv
+          brew install git-lfs cmake
           git lfs install
 
       # ============================================================
-      # 使用 pyenv 安装 Python 3.13（用于交叉编译辅助）
+      # 1. 克隆 Blender 源码
       # ============================================================
-      - name: Setup Python 3.13 via pyenv
-        run: |
-          # 安装 Python 3.13.0
-          pyenv install 3.13.0
-          pyenv global 3.13.0
-          # 设置环境变量
-          echo "PYENV_ROOT=$HOME/.pyenv" >> $GITHUB_ENV
-          echo "$HOME/.pyenv/shims:$HOME/.pyenv/bin" >> $GITHUB_PATH
-          # 验证
-          python3 --version
-
       - name: Clone Blender from official source
         run: |
           git clone https://projects.blender.org/blender/blender.git -b ios --depth 1
@@ -40,77 +29,57 @@ jobs:
           sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
           git submodule sync --recursive
 
-      - name: Run make_update.py
+      - name: Run make_update.py (base libs)
         run: |
           cd blender
           python3 ./build_files/utils/make_update.py
 
       # ============================================================
-      # 核心修复：如果 Python 缺失，自己编译一个
+      # 2. 下载预编译 Python 3.13（替代编译）
       # ============================================================
-      - name: Build Python 3.13 for iOS (if missing)
+      - name: Download prebuilt Python 3.13 for iOS
         run: |
           cd blender
+          mkdir -p lib/ios_arm64/python
+          
+          echo "Downloading Python 3.13 prebuilt package from BeeWare..."
+          # 使用 3.13-b14 版本（最新稳定版）
+          curl -L -o python-ios.tar.gz \
+            https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-iOS-support.b14.tar.gz
+          
+          echo "Extracting Python package..."
+          tar -xzf python-ios.tar.gz -C lib/ios_arm64/python/
+          rm python-ios.tar.gz
+          
+          echo "Verifying Python library..."
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
-            echo "✅ Python already present, skipping build"
-            exit 0
+            echo "✅ Python 3.13 library successfully installed!"
+            ls -la lib/ios_arm64/python/lib/libpython3.13.a
+          else
+            echo "❌ Python 3.13 library not found after extraction!"
+            exit 1
           fi
-          
-          echo "⚠️ Python 3.13 not found, building from source..."
-          
-          # 创建 Python 目录结构
-          mkdir -p lib/ios_arm64/python/lib
-          mkdir -p lib/ios_arm64/python/include
-          
-          # 下载 Python 源码
-          cd /tmp
-          curl -O https://www.python.org/ftp/python/3.13.0/Python-3.13.0.tar.xz
-          tar -xf Python-3.13.0.tar.xz
-          cd Python-3.13.0
-          
-          # 交叉编译 Python 为 iOS 静态库
-          export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
-          export CFLAGS="-arch arm64 -isysroot $SDKROOT -miphoneos-version-min=14.0"
-          export CXXFLAGS="$CFLAGS"
-          export LDFLAGS="-arch arm64 -isysroot $SDKROOT -miphoneos-version-min=14.0"
-          
-          # 使用 pyenv 安装的 Python 3.13 作为 build python
-          BUILD_PYTHON="$HOME/.pyenv/shims/python3"
-          
-          # 配置并编译
-          ./configure \
-            --host=arm64-apple-ios \
-            --build=$(./config.guess) \
-            --prefix=/tmp/python-ios \
-            --disable-framework \
-            --disable-shared \
-            --with-build-python=$BUILD_PYTHON \
-            ac_cv_file__dev_ptmx=no \
-            ac_cv_file__dev_ptc=no
-          
-          make -j4
-          make install
-          
-          # 将编译好的库和头文件复制到 Blender 的 lib 目录
-          cd $GITHUB_WORKSPACE/blender
-          cp -r /tmp/python-ios/lib/* lib/ios_arm64/python/lib/
-          cp -r /tmp/python-ios/include/* lib/ios_arm64/python/include/
-          
-          echo "✅ Python 3.13 compiled and installed!"
 
-      - name: Verify Python library
+      # ============================================================
+      # 3. 验证所有关键库
+      # ============================================================
+      - name: Verify libraries
         run: |
           cd blender
+          echo "=== Checking macOS libraries ==="
+          ls -la lib/macos_arm64/ | head -10 || echo "macOS libs missing!"
+          echo "=== Checking iOS libraries ==="
+          ls -la lib/ios_arm64/ | head -10 || echo "iOS libs missing!"
+          echo "=== Checking Python ==="
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
             echo "✅ Python 3.13 found!"
-            ls -la lib/ios_arm64/python/lib/libpython3.13.a
           else
             echo "❌ Python 3.13 still missing!"
             exit 1
           fi
 
       # ============================================================
-      # 后续标准编译步骤
+      # 4. 设置 Xcode 并编译
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -148,6 +117,9 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO
 
+      # ============================================================
+      # 5. 打包并上传 IPA
+      # ============================================================
       - name: Package unsigned IPA
         run: |
           cd blender/build_ios
