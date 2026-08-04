@@ -56,39 +56,40 @@ jobs:
           tar -xzf python-ios.tar.gz -C python_temp/
 
           # 从 XCFramework 中提取真机架构的静态库和头文件
-          XCFRAMEWORK_PATH="python_temp/Python.xcframework/ios-arm64"
+          # BeeWare 的结构: Python.xcframework/ios-arm64/Python.framework/
+          FRAMEWORK_PATH="python_temp/Python.xcframework/ios-arm64/Python.framework"
           
-          if [ -d "$XCFRAMEWORK_PATH" ]; then
-            echo "✅ Found ios-arm64 slice"
+          if [ -d "$FRAMEWORK_PATH" ]; then
+            echo "✅ Found Python.framework"
             
             # 复制静态库 (libpython3.13.a)
-            if [ -f "$XCFRAMEWORK_PATH/lib-arm64/libpython3.13.a" ]; then
-              cp "$XCFRAMEWORK_PATH/lib-arm64/libpython3.13.a" lib/ios_arm64/python/lib/
-              echo "✅ Copied libpython3.13.a from lib-arm64/"
-            elif [ -f "$XCFRAMEWORK_PATH/lib/libpython3.13.a" ]; then
-              cp "$XCFRAMEWORK_PATH/lib/libpython3.13.a" lib/ios_arm64/python/lib/
+            if [ -f "$FRAMEWORK_PATH/Versions/Current/lib/libpython3.13.a" ]; then
+              cp "$FRAMEWORK_PATH/Versions/Current/lib/libpython3.13.a" lib/ios_arm64/python/lib/
+              echo "✅ Copied libpython3.13.a from Versions/Current/lib/"
+            elif [ -f "$FRAMEWORK_PATH/lib/libpython3.13.a" ]; then
+              cp "$FRAMEWORK_PATH/lib/libpython3.13.a" lib/ios_arm64/python/lib/
               echo "✅ Copied libpython3.13.a from lib/"
             else
-              echo "❌ libpython3.13.a not found in XCFramework!"
+              echo "❌ libpython3.13.a not found in Python.framework!"
               find python_temp -name "libpython3.13.a" -type f
               exit 1
             fi
             
             # 复制头文件
-            if [ -d "$XCFRAMEWORK_PATH/include/python3.13" ]; then
-              cp -r "$XCFRAMEWORK_PATH/include/python3.13/"* lib/ios_arm64/python/include/
-              echo "✅ Copied headers from include/python3.13/"
-            elif [ -d "$XCFRAMEWORK_PATH/include" ]; then
-              cp -r "$XCFRAMEWORK_PATH/include/"* lib/ios_arm64/python/include/
-              echo "✅ Copied headers from include/"
+            if [ -d "$FRAMEWORK_PATH/Versions/Current/include/python3.13" ]; then
+              cp -r "$FRAMEWORK_PATH/Versions/Current/include/python3.13/"* lib/ios_arm64/python/include/
+              echo "✅ Copied headers from Versions/Current/include/python3.13/"
+            elif [ -d "$FRAMEWORK_PATH/Headers" ]; then
+              cp -r "$FRAMEWORK_PATH/Headers/"* lib/ios_arm64/python/include/
+              echo "✅ Copied headers from Headers/"
             else
-              echo "❌ Headers not found in XCFramework!"
+              echo "❌ Headers not found in Python.framework!"
               find python_temp -name "Python.h" -type f
               exit 1
             fi
           else
-            echo "❌ ios-arm64 slice not found!"
-            ls -la python_temp/Python.xcframework/
+            echo "❌ Python.framework not found!"
+            ls -la python_temp/Python.xcframework/ios-arm64/
             exit 1
           fi
 
