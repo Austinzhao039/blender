@@ -55,22 +55,19 @@ jobs:
           cd Python-3.13.0
           
           # 交叉编译 Python 为 iOS 静态库
-          # 针对 iOS arm64 配置
           export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
           export CFLAGS="-arch arm64 -isysroot $SDKROOT -miphoneos-version-min=14.0"
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-arch arm64 -isysroot $SDKROOT -miphoneos-version-min=14.0"
           
-          # 配置并编译
+          # 配置并编译（修复：添加 --with-build-python）
           ./configure \
             --host=arm64-apple-ios \
             --build=$(./config.guess) \
             --prefix=/tmp/python-ios \
             --disable-framework \
             --disable-shared \
-            --enable-static \
-            --disable-install-doc \
-            --enable-optimizations \
+            --with-build-python=$(which python3) \
             ac_cv_file__dev_ptmx=no \
             ac_cv_file__dev_ptc=no
           
