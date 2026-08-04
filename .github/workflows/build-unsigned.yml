@@ -26,73 +26,70 @@ jobs:
           sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
           git submodule sync --recursive
 
-      # ============================================================
-      # 第 1 阶段：运行 make_update.py（标准方法）
-      # ============================================================
-      - name: Method 1 - Run make_update.py
+      - name: Run make_update.py
         run: |
           cd blender
           python3 ./build_files/utils/make_update.py
 
       # ============================================================
-      # 第 2 阶段：如果 Python 仍缺失，尝试四种方法
+      # 核心修复：如果 Python 缺失，自己编译一个
       # ============================================================
-      - name: Method 2-4 - Try alternative ways to get Python
+      - name: Build Python 3.13 for iOS (if missing)
         run: |
           cd blender
-          
-          # 检查 Python 是否已经存在
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
-            echo "✅ Python 3.13 already present, skipping..."
+            echo "✅ Python already present, skipping build"
             exit 0
           fi
           
-          echo "⚠️ Python 3.13 not found, trying alternative methods..."
+          echo "⚠️ Python 3.13 not found, building from source..."
           
-          # ----- 方法 2：用 --use-ios-python 参数重试 -----
-          echo "📦 Method 2: make_update.py --use-ios-python"
-          python3 ./build_files/utils/make_update.py --use-ios-python 2>/dev/null || true
+          # 创建 Python 目录结构
+          mkdir -p lib/ios_arm64/python/lib
+          mkdir -p lib/ios_arm64/python/include
           
-          if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
-            echo "✅ Method 2 succeeded!"
-            exit 0
-          fi
+          # 下载 Python 源码
+          cd /tmp
+          curl -O https://www.python.org/ftp/python/3.13.0/Python-3.13.0.tar.xz
+          tar -xf Python-3.13.0.tar.xz
+          cd Python-3.13.0
           
-          # ----- 方法 3：手动拉取 LFS（只拉 Python） -----
-          echo "📦 Method 3: git lfs pull --include=\"python/**\""
-          cd lib/ios_arm64
-          git lfs pull --include="python/**" 2>/dev/null || true
-          cd ../..
+          # 交叉编译 Python 为 iOS 静态库
+          # 针对 iOS arm64 配置
+          export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
+          export CFLAGS="-arch arm64 -isysroot $SDKROOT -miphoneos-version-min=14.0"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-arch arm64 -isysroot $SDKROOT -miphoneos-version-min=14.0"
           
-          if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
-            echo "✅ Method 3 succeeded!"
-            exit 0
-          fi
+          # 配置并编译
+          ./configure \
+            --host=arm64-apple-ios \
+            --build=$(./config.guess) \
+            --prefix=/tmp/python-ios \
+            --disable-framework \
+            --disable-shared \
+            --enable-static \
+            --disable-install-doc \
+            --enable-optimizations \
+            ac_cv_file__dev_ptmx=no \
+            ac_cv_file__dev_ptc=no
           
-          # ----- 方法 4：强制从官方源拉取所有 LFS -----
-          echo "📦 Method 4: git lfs fetch --all + checkout"
-          cd lib/ios_arm64
-          git lfs fetch --all https://projects.blender.org/blender/lib-ios_arm64.git 2>/dev/null || true
-          git lfs checkout 2>/dev/null || true
-          cd ../..
+          make -j4
+          make install
           
-          if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
-            echo "✅ Method 4 succeeded!"
-            exit 0
-          fi
+          # 将编译好的库和头文件复制到 Blender 的 lib 目录
+          cd $GITHUB_WORKSPACE/blender
+          cp -r /tmp/python-ios/lib/* lib/ios_arm64/python/lib/
+          cp -r /tmp/python-ios/include/* lib/ios_arm64/python/include/
           
-          # ----- 所有方法都失败 -----
-          echo "❌ All methods failed to get Python 3.13!"
-          exit 1
+          echo "✅ Python 3.13 compiled and installed!"
 
-      # ============================================================
-      # 最终验证
-      # ============================================================
       - name: Verify Python library
         run: |
           cd blender
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
             echo "✅ Python 3.13 found!"
+            ls -la lib/ios_arm64/python/lib/libpython3.13.a
           else
             echo "❌ Python 3.13 still missing!"
             exit 1
