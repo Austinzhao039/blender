@@ -35,28 +35,78 @@ jobs:
           python3 ./build_files/utils/make_update.py
 
       # ============================================================
-      # 2. 下载预编译 Python 3.13（替代编译）
+      # 2. 下载并提取 Python 3.13（自动适配目录结构）
       # ============================================================
-      - name: Download prebuilt Python 3.13 for iOS
+      - name: Download and extract Python 3.13 for iOS
         run: |
           cd blender
-          mkdir -p lib/ios_arm64/python
           
+          # 下载预编译包
           echo "Downloading Python 3.13 prebuilt package from BeeWare..."
-          # 使用 3.13-b14 版本（最新稳定版）
           curl -L -o python-ios.tar.gz \
             https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-iOS-support.b14.tar.gz
           
-          echo "Extracting Python package..."
-          tar -xzf python-ios.tar.gz -C lib/ios_arm64/python/
-          rm python-ios.tar.gz
+          # 查看压缩包内容（调试）
+          echo "Contents of the tarball (top level):"
+          tar -tzf python-ios.tar.gz | head -20
           
-          echo "Verifying Python library..."
+          # 创建一个临时目录用于解压
+          mkdir -p python_temp
+          tar -xzf python-ios.tar.gz -C python_temp/
+          
+          # 查找实际的 libpython3.13.a 文件
+          echo "Searching for libpython3.13.a..."
+          find python_temp -name "libpython3.13.a" -type f
+          
+          # 查找实际的 python 头文件
+          echo "Searching for Python.h..."
+          find python_temp -name "Python.h" -type f
+          
+          # 根据找到的结构复制文件
+          # 首先尝试最常见的结构：解压后直接有 include/ 和 lib/ 目录
+          if [ -d "python_temp/include" ] && [ -d "python_temp/lib" ]; then
+            echo "✅ Found include/ and lib/ at top level"
+            cp -r python_temp/include/* lib/ios_arm64/python/include/ 2>/dev/null || true
+            cp -r python_temp/lib/* lib/ios_arm64/python/lib/ 2>/dev/null || true
+          fi
+          
+          # 如果上面没找到，尝试查找实际的库文件位置
+          if [ ! -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
+            echo "Trying alternative structure..."
+            # 查找实际的 libpython3.13.a 文件位置
+            LIB_PATH=$(find python_temp -name "libpython3.13.a" -type f | head -1)
+            if [ -n "$LIB_PATH" ]; then
+              echo "Found libpython3.13.a at: $LIB_PATH"
+              # 获取所在目录的父目录
+              LIB_DIR=$(dirname "$LIB_PATH")
+              # 将包含库的目录内容复制到目标
+              mkdir -p lib/ios_arm64/python/lib/
+              cp "$LIB_PATH" lib/ios_arm64/python/lib/
+            fi
+            
+            # 查找 Python.h 文件位置
+            HEADER_PATH=$(find python_temp -name "Python.h" -type f | head -1)
+            if [ -n "$HEADER_PATH" ]; then
+              echo "Found Python.h at: $HEADER_PATH"
+              # 获取 include 目录的父目录
+              HEADER_DIR=$(dirname "$HEADER_PATH")
+              mkdir -p lib/ios_arm64/python/include/
+              cp -r "$HEADER_DIR"/* lib/ios_arm64/python/include/ 2>/dev/null || true
+            fi
+          fi
+          
+          # 清理临时文件
+          rm -rf python_temp python-ios.tar.gz
+          
+          # 最终验证
+          echo "Final verification:"
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
             echo "✅ Python 3.13 library successfully installed!"
             ls -la lib/ios_arm64/python/lib/libpython3.13.a
           else
-            echo "❌ Python 3.13 library not found after extraction!"
+            echo "❌ Python 3.13 library not found!"
+            echo "Directory structure after extraction:"
+            find lib/ios_arm64/python/ -type f | head -20
             exit 1
           fi
 
@@ -73,6 +123,7 @@ jobs:
           echo "=== Checking Python ==="
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
             echo "✅ Python 3.13 found!"
+            file lib/ios_arm64/python/lib/libpython3.13.a
           else
             echo "❌ Python 3.13 still missing!"
             exit 1
