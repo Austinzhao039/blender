@@ -41,6 +41,14 @@ jobs:
           git lfs pull
           cd ../..
           echo "✅ iOS libraries cloned successfully"
+          echo "=== Full contents of lib/ios_arm64 ==="
+          ls -la lib/ios_arm64/
+          echo "=== Checking openexr directory ==="
+          ls -la lib/ios_arm64/openexr/ || echo "openexr not found!"
+          echo "=== Checking openexr/include ==="
+          ls -la lib/ios_arm64/openexr/include/ || echo "include not found!"
+          echo "=== Checking for OpenEXRConfig.h ==="
+          find lib/ios_arm64/openexr -name "OpenEXRConfig.h" -type f 2>/dev/null || echo "OpenEXRConfig.h not found!"
 
       # ============================================================
       # 3. 克隆 macOS 预编译库
@@ -108,26 +116,7 @@ jobs:
           fi
 
       # ============================================================
-      # 5. 动态定位 OpenEXR 路径
-      # ============================================================
-      - name: Locate OpenEXRConfig.h
-        id: openexr
-        run: |
-          cd blender
-          # 查找 OpenEXRConfig.h 所在目录
-          OPENEXR_INC=$(find lib/ios_arm64/openexr -name "OpenEXRConfig.h" -type f | head -1)
-          if [ -z "$OPENEXR_INC" ]; then
-            echo "❌ OpenEXRConfig.h not found!"
-            exit 1
-          fi
-          OPENEXR_DIR=$(dirname "$OPENEXR_INC")
-          echo "Found OpenEXRConfig.h in: $OPENEXR_DIR"
-          # 设置环境变量供后续步骤使用
-          echo "OPENEXR_INCLUDE_DIR=$OPENEXR_DIR" >> $GITHUB_ENV
-          echo "OPENEXR_ROOT=$PWD/lib/ios_arm64/openexr" >> $GITHUB_ENV
-
-      # ============================================================
-      # 6. 设置 Xcode 环境
+      # 5. 设置 Xcode 环境
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -141,12 +130,13 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 7. 生成 Xcode 项目（使用动态检测到的 OpenEXR 路径）
+      # 6. 生成 Xcode 项目（显式指定所有关键库路径）
       # ============================================================
       - name: Generate Xcode project
         run: |
           cd blender
           rm -rf build_ios
+          echo "=== CMake Configuration Start ==="
           cmake -G Xcode -S . -B build_ios \
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
@@ -154,11 +144,21 @@ jobs:
             -DPYTHON_LIBRARY="$PWD/lib/ios_arm64/python/lib/libpython3.13.dylib" \
             -DPYTHON_INCLUDE_DIR="$PWD/lib/ios_arm64/python/include" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
-            -DOPENEXR_INCLUDE_DIR="$OPENEXR_INCLUDE_DIR" \
-            -DOPENEXR_LIBRARY="$PWD/lib/ios_arm64/openexr/lib/libOpenEXR.a"
+            -DOPENEXR_INCLUDE_DIR="$PWD/lib/ios_arm64/openexr/include" \
+            -DOPENEXR_LIBRARY="$PWD/lib/ios_arm64/openexr/lib/libOpenEXR.a" \
+            -DALEMBIC_INCLUDE_DIR="$PWD/lib/ios_arm64/alembic/include" \
+            -DALEMBIC_LIBRARY="$PWD/lib/ios_arm64/alembic/lib/libAlembic.a" \
+            -DOPENSUBDIV_INCLUDE_DIR="$PWD/lib/ios_arm64/opensubdiv/include" \
+            -DOPENSUBDIV_LIBRARY="$PWD/lib/ios_arm64/opensubdiv/lib/libosdCPU.a" \
+            -DSNDFILE_INCLUDE_DIR="$PWD/lib/ios_arm64/sndfile/include" \
+            -DSNDFILE_LIBRARY="$PWD/lib/ios_arm64/sndfile/lib/libsndfile.a" \
+            -DFFTW3_INCLUDE_DIR="$PWD/lib/ios_arm64/fftw3/include" \
+            -DFFTW3_LIBRARY="$PWD/lib/ios_arm64/fftw3/lib/libfftw3f.a" \
+            -DMATERIALX_ROOT_DIR="$PWD/lib/ios_arm64/materialx"
+          echo "=== CMake Configuration End ==="
 
       # ============================================================
-      # 8. 编译 Blender.app
+      # 7. 编译 Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         run: |
@@ -177,7 +177,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 9. 打包成未签名 IPA
+      # 8. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         run: |
@@ -196,7 +196,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 10. 上传 IPA
+      # 9. 上传 IPA
       # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -206,7 +206,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 11. 失败时上传日志
+      # 10. 失败时上传完整日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
@@ -216,4 +216,7 @@ jobs:
           path: |
             blender/build_ios/**/*.log
             blender/build_ios/**/*.txt
+            blender/build_ios/CMakeCache.txt
+            blender/build_ios/CMakeFiles/CMakeError.log
+            blender/build_ios/CMakeFiles/CMakeOutput.log
           retention-days: 7
