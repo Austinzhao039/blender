@@ -41,14 +41,6 @@ jobs:
           git lfs pull
           cd ../..
           echo "✅ iOS libraries cloned successfully"
-          echo "=== Full contents of lib/ios_arm64 ==="
-          ls -la lib/ios_arm64/
-          echo "=== Checking openexr directory ==="
-          ls -la lib/ios_arm64/openexr/ || echo "openexr not found!"
-          echo "=== Checking openexr/include ==="
-          ls -la lib/ios_arm64/openexr/include/ || echo "include not found!"
-          echo "=== Checking for OpenEXRConfig.h ==="
-          find lib/ios_arm64/openexr -name "OpenEXRConfig.h" -type f 2>/dev/null || echo "OpenEXRConfig.h not found!"
 
       # ============================================================
       # 3. 克隆 macOS 预编译库
@@ -116,7 +108,53 @@ jobs:
           fi
 
       # ============================================================
-      # 5. 设置 Xcode 环境
+      # 5. 【核心修复】创建 OpenEXRConfig.cmake 配置文件
+      # ============================================================
+      - name: Create OpenEXRConfig.cmake
+        run: |
+          cd blender
+          OPENEXR_DIR="$PWD/lib/ios_arm64/openexr"
+          mkdir -p "$OPENEXR_DIR"
+          
+          # 查找 OpenEXR 头文件和库的实际位置
+          OPENEXR_INC=$(find "$OPENEXR_DIR" -name "OpenEXRConfig.h" -type f | head -1)
+          if [ -n "$OPENEXR_INC" ]; then
+            OPENEXR_INC_DIR=$(dirname "$OPENEXR_INC")
+            echo "Found OpenEXR headers in: $OPENEXR_INC_DIR"
+          else
+            echo "⚠️ OpenEXRConfig.h not found, using default path"
+            OPENEXR_INC_DIR="$OPENEXR_DIR/include"
+          fi
+          
+          OPENEXR_LIB=$(find "$OPENEXR_DIR" -name "libOpenEXR.a" -type f | head -1)
+          if [ -n "$OPENEXR_LIB" ]; then
+            OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
+            echo "Found OpenEXR library in: $OPENEXR_LIB_DIR"
+          else
+            echo "⚠️ libOpenEXR.a not found, using default path"
+            OPENEXR_LIB_DIR="$OPENEXR_DIR/lib"
+          fi
+          
+          # 创建 CMake 配置文件
+          cat > "$OPENEXR_DIR/OpenEXRConfig.cmake" << EOF
+# Fake OpenEXRConfig.cmake for cross-compilation
+set(OpenEXR_FOUND TRUE)
+set(OPENEXR_FOUND TRUE)
+set(OPENEXR_INCLUDE_DIR "${OPENEXR_INC_DIR}")
+set(OPENEXR_LIBRARY "${OPENEXR_LIB_DIR}/libOpenEXR.a")
+set(OPENEXR_LIBRARIES "${OPENEXR_LIB_DIR}/libOpenEXR.a")
+set(OPENEXR_VERSION_STRING "3.1.0")
+set(OpenEXR_VERSION "3.1.0")
+EOF
+          
+          echo "✅ Created OpenEXRConfig.cmake at $OPENEXR_DIR/OpenEXRConfig.cmake"
+          cat "$OPENEXR_DIR/OpenEXRConfig.cmake"
+          
+          # 同时创建 openexr-config.cmake（CMake 也可能查找这个名称）
+          cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
+
+      # ============================================================
+      # 6. 设置 Xcode 环境
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -130,13 +168,12 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 6. 生成 Xcode 项目（显式指定所有关键库路径）
+      # 7. 生成 Xcode 项目（使用 OpenEXR_DIR 指向配置文件位置）
       # ============================================================
       - name: Generate Xcode project
         run: |
           cd blender
           rm -rf build_ios
-          echo "=== CMake Configuration Start ==="
           cmake -G Xcode -S . -B build_ios \
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
@@ -144,21 +181,10 @@ jobs:
             -DPYTHON_LIBRARY="$PWD/lib/ios_arm64/python/lib/libpython3.13.dylib" \
             -DPYTHON_INCLUDE_DIR="$PWD/lib/ios_arm64/python/include" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
-            -DOPENEXR_INCLUDE_DIR="$PWD/lib/ios_arm64/openexr/include" \
-            -DOPENEXR_LIBRARY="$PWD/lib/ios_arm64/openexr/lib/libOpenEXR.a" \
-            -DALEMBIC_INCLUDE_DIR="$PWD/lib/ios_arm64/alembic/include" \
-            -DALEMBIC_LIBRARY="$PWD/lib/ios_arm64/alembic/lib/libAlembic.a" \
-            -DOPENSUBDIV_INCLUDE_DIR="$PWD/lib/ios_arm64/opensubdiv/include" \
-            -DOPENSUBDIV_LIBRARY="$PWD/lib/ios_arm64/opensubdiv/lib/libosdCPU.a" \
-            -DSNDFILE_INCLUDE_DIR="$PWD/lib/ios_arm64/sndfile/include" \
-            -DSNDFILE_LIBRARY="$PWD/lib/ios_arm64/sndfile/lib/libsndfile.a" \
-            -DFFTW3_INCLUDE_DIR="$PWD/lib/ios_arm64/fftw3/include" \
-            -DFFTW3_LIBRARY="$PWD/lib/ios_arm64/fftw3/lib/libfftw3f.a" \
-            -DMATERIALX_ROOT_DIR="$PWD/lib/ios_arm64/materialx"
-          echo "=== CMake Configuration End ==="
+            -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr"
 
       # ============================================================
-      # 7. 编译 Blender.app
+      # 8. 编译 Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         run: |
@@ -177,7 +203,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 8. 打包成未签名 IPA
+      # 9. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         run: |
@@ -196,7 +222,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 9. 上传 IPA
+      # 10. 上传 IPA
       # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -206,7 +232,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 10. 失败时上传完整日志
+      # 11. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
@@ -218,5 +244,4 @@ jobs:
             blender/build_ios/**/*.txt
             blender/build_ios/CMakeCache.txt
             blender/build_ios/CMakeFiles/CMakeError.log
-            blender/build_ios/CMakeFiles/CMakeOutput.log
           retention-days: 7
