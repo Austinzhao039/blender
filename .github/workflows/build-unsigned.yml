@@ -30,17 +30,40 @@ jobs:
           git submodule sync --recursive
 
       # ============================================================
-      # 2. 拉取基础库（不包括 Python）
+      # 2. 直接克隆完整的 iOS 预编译库（包含 Alembic、OpenSubdiv 等）
       # ============================================================
-      - name: Run make_update.py
+      - name: Clone iOS precompiled libraries (complete)
         run: |
           cd blender
-          python3 ./build_files/utils/make_update.py
+          # 删除可能不完整的目录
+          rm -rf lib/ios_arm64
+          # 直接从官方源克隆完整仓库
+          git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
+          cd lib/ios_arm64
+          # 拉取所有 LFS 文件
+          git lfs pull
+          cd ../..
+          echo "✅ iOS libraries cloned successfully"
+          echo "Contents of lib/ios_arm64:"
+          ls -la lib/ios_arm64/ | head -20
 
       # ============================================================
-      # 3. 下载预编译的 Python 3.13 动态库 + 头文件
+      # 3. 同样克隆 macOS 预编译库（CMake 需要）
       # ============================================================
-      - name: Download prebuilt Python 3.13 (dynamic library) for iOS
+      - name: Clone macOS precompiled libraries
+        run: |
+          cd blender
+          rm -rf lib/macos_arm64
+          git clone https://projects.blender.org/blender/lib-macos_arm64.git lib/macos_arm64
+          cd lib/macos_arm64
+          git lfs pull
+          cd ../..
+          echo "✅ macOS libraries cloned successfully"
+
+      # ============================================================
+      # 4. 下载 BeeWare 的 Python 3.13 动态库（因为 lib-ios_arm64 可能不含 Python）
+      # ============================================================
+      - name: Download Python 3.13 dynamic library from BeeWare
         run: |
           cd blender
           mkdir -p lib/ios_arm64/python/lib
@@ -56,86 +79,63 @@ jobs:
           XCFRAMEWORK_BASE="python_temp/Python.xcframework/ios-arm64"
           
           if [ -d "$XCFRAMEWORK_BASE" ]; then
-            echo "✅ Found ios-arm64 XCFramework slice"
-            
             # 复制动态库
             if [ -f "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" ]; then
               cp "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" lib/ios_arm64/python/lib/
               echo "✅ Copied libpython3.13.dylib"
             else
               echo "❌ libpython3.13.dylib not found!"
-              find python_temp -name "libpython3.13.dylib" -type f
               exit 1
             fi
             
-            # ========== 根据实际目录结构复制头文件 ==========
-            # 头文件在 include/python3.13/ 目录下
+            # 复制头文件（从 include/python3.13/）
             if [ -d "$XCFRAMEWORK_BASE/include/python3.13" ]; then
-              echo "✅ Found headers in include/python3.13/"
               cp -r "$XCFRAMEWORK_BASE/include/python3.13/"* lib/ios_arm64/python/include/
-              echo "✅ Copied headers from include/python3.13/"
+              echo "✅ Copied headers"
             else
-              echo "❌ Headers not found in include/python3.13!"
-              find python_temp -name "Python.h" -type f
+              echo "❌ Headers not found!"
               exit 1
             fi
-            
           else
-            echo "❌ ios-arm64 XCFramework slice not found!"
-            ls -la python_temp/Python.xcframework/
+            echo "❌ XCFramework not found!"
             exit 1
           fi
 
           rm -rf python_temp python-ios.tar.gz
 
-          # 验证
           echo "Final verification:"
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
             echo "✅ Python 3.13 dynamic library installed!"
-            ls -la lib/ios_arm64/python/lib/libpython3.13.dylib
           else
             echo "❌ Python 3.13 dynamic library not found!"
             exit 1
           fi
-          
           if [ -f "lib/ios_arm64/python/include/Python.h" ]; then
             echo "✅ Python headers installed!"
-            ls -la lib/ios_arm64/python/include/ | head -10
           else
             echo "❌ Python headers not found!"
-            echo "Contents of include:"
-            ls -la lib/ios_arm64/python/include/ || echo "include directory is empty or does not exist"
             exit 1
           fi
 
       # ============================================================
-      # 4. 验证所有库
+      # 5. 验证关键库是否齐全
       # ============================================================
-      - name: Verify libraries
+      - name: Verify iOS libraries
         run: |
           cd blender
           echo "=== Checking iOS libraries ==="
-          ls -la lib/ios_arm64/ | head -20
-          echo "=== Checking Python dynamic library ==="
-          if [ -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
-            echo "✅ Python 3.13 dynamic library found!"
-          else
-            echo "❌ Python 3.13 dynamic library missing!"
-            exit 1
-          fi
-          echo "=== Checking Python headers ==="
-          if [ -d "lib/ios_arm64/python/include" ] && [ -f "lib/ios_arm64/python/include/Python.h" ]; then
-            echo "✅ Python headers found!"
-            ls -la lib/ios_arm64/python/include/ | head -10
-          else
-            echo "❌ Python headers missing!"
-            echo "Contents of include directory:"
-            ls -la lib/ios_arm64/python/include/ || echo "include directory is empty or does not exist"
-            exit 1
-          fi
+          for lib in alembic opensubdiv openexr fftw3 materialx sndfile; do
+            if [ -d "lib/ios_arm64/$lib" ]; then
+              echo "✅ $lib found"
+            else
+              echo "❌ $lib missing!"
+              exit 1
+            fi
+          done
+          echo "✅ All required iOS libraries are present."
 
       # ============================================================
-      # 5. 设置 Xcode 环境
+      # 6. 设置 Xcode 环境
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -149,7 +149,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 6. 生成 Xcode 项目（显式指定 Python 库路径）
+      # 7. 生成 Xcode 项目（显式指定 Python 库路径）
       # ============================================================
       - name: Generate Xcode project
         run: |
@@ -163,7 +163,7 @@ jobs:
             -DPYTHON_INCLUDE_DIR="$PWD/lib/ios_arm64/python/include"
 
       # ============================================================
-      # 7. 编译 Blender.app
+      # 8. 编译 Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         run: |
@@ -182,7 +182,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 8. 打包成未签名 IPA
+      # 9. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         run: |
@@ -201,7 +201,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 9. 上传 IPA
+      # 10. 上传 IPA
       # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -211,7 +211,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 10. 失败时上传日志
+      # 11. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
