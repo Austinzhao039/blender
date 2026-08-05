@@ -46,56 +46,46 @@ jobs:
           mkdir -p lib/ios_arm64/python/lib
           mkdir -p lib/ios_arm64/python/include
 
-          # 下载预编译包（使用最新的 b14 版本）
           echo "Downloading Python 3.13 prebuilt package from BeeWare..."
           curl -L -o python-ios.tar.gz \
             https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-iOS-support.b14.tar.gz
 
-          # 解压到临时目录
           mkdir -p python_temp
           tar -xzf python-ios.tar.gz -C python_temp/
 
-          # 从 XCFramework 中提取真机架构的动态库和头文件
-          FRAMEWORK_PATH="python_temp/Python.xcframework/ios-arm64/Python.framework"
+          # 从 XCFramework 的根目录复制动态库和头文件
+          XCFRAMEWORK_BASE="python_temp/Python.xcframework/ios-arm64"
           
-          if [ -d "$FRAMEWORK_PATH" ]; then
-            echo "✅ Found Python.framework"
+          if [ -d "$XCFRAMEWORK_BASE" ]; then
+            echo "✅ Found ios-arm64 XCFramework slice"
             
-            # 【关键修改】复制动态库 (libpython3.13.dylib)
-            if [ -f "$FRAMEWORK_PATH/Versions/Current/lib/libpython3.13.dylib" ]; then
-              cp "$FRAMEWORK_PATH/Versions/Current/lib/libpython3.13.dylib" lib/ios_arm64/python/lib/
-              echo "✅ Copied libpython3.13.dylib from Versions/Current/lib/"
-            elif [ -f "$FRAMEWORK_PATH/lib/libpython3.13.dylib" ]; then
-              cp "$FRAMEWORK_PATH/lib/libpython3.13.dylib" lib/ios_arm64/python/lib/
-              echo "✅ Copied libpython3.13.dylib from lib/"
+            # 复制动态库
+            if [ -f "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" ]; then
+              cp "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" lib/ios_arm64/python/lib/
+              echo "✅ Copied libpython3.13.dylib from XCFramework lib/"
             else
-              echo "❌ libpython3.13.dylib not found in Python.framework!"
+              echo "❌ libpython3.13.dylib not found in XCFramework!"
               find python_temp -name "libpython3.13.dylib" -type f
               exit 1
             fi
             
-            # 复制头文件（与之前相同）
-            if [ -d "$FRAMEWORK_PATH/Versions/Current/include/python3.13" ]; then
-              cp -r "$FRAMEWORK_PATH/Versions/Current/include/python3.13/"* lib/ios_arm64/python/include/
-              echo "✅ Copied headers from Versions/Current/include/python3.13/"
-            elif [ -d "$FRAMEWORK_PATH/Headers" ]; then
-              cp -r "$FRAMEWORK_PATH/Headers/"* lib/ios_arm64/python/include/
-              echo "✅ Copied headers from Headers/"
+            # 复制头文件
+            if [ -d "$XCFRAMEWORK_BASE/include" ]; then
+              cp -r "$XCFRAMEWORK_BASE/include/"* lib/ios_arm64/python/include/
+              echo "✅ Copied headers from XCFramework include/"
             else
-              echo "❌ Headers not found in Python.framework!"
+              echo "❌ Headers not found in XCFramework!"
               find python_temp -name "Python.h" -type f
               exit 1
             fi
           else
-            echo "❌ Python.framework not found!"
-            ls -la python_temp/Python.xcframework/ios-arm64/
+            echo "❌ ios-arm64 XCFramework slice not found!"
+            ls -la python_temp/Python.xcframework/
             exit 1
           fi
 
-          # 清理临时文件
           rm -rf python_temp python-ios.tar.gz
 
-          # 最终验证（检查 .dylib 文件）
           echo "Final verification:"
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
             echo "✅ Python 3.13 dynamic library successfully installed!"
@@ -106,7 +96,7 @@ jobs:
           fi
 
       # ============================================================
-      # 4. 验证所有库（注意检查 .dylib）
+      # 4. 验证所有库
       # ============================================================
       - name: Verify libraries
         run: |
@@ -143,9 +133,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 6. 生成 Xcode 项目
-      # 注意：由于我们使用动态库，可能需要修改 CMake 配置，
-      # 但此处我们保持原样，如果链接失败可能需要额外调整。
+      # 6. 生成 Xcode 项目（显式指定 Python 库路径）
       # ============================================================
       - name: Generate Xcode project
         run: |
@@ -154,7 +142,9 @@ jobs:
           cmake -G Xcode -S . -B build_ios \
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
-            -DWITH_DOCS=OFF
+            -DWITH_DOCS=OFF \
+            -DPYTHON_LIBRARY="$PWD/lib/ios_arm64/python/lib/libpython3.13.dylib" \
+            -DPYTHON_INCLUDE_DIR="$PWD/lib/ios_arm64/python/include"
 
       # ============================================================
       # 7. 编译 Blender.app
