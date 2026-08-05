@@ -38,7 +38,7 @@ jobs:
           python3 ./build_files/utils/make_update.py
 
       # ============================================================
-      # 3. 下载预编译的 Python 3.13 动态库 (来自 BeeWare)
+      # 3. 下载预编译的 Python 3.13 动态库 + 头文件
       # ============================================================
       - name: Download prebuilt Python 3.13 (dynamic library) for iOS
         run: |
@@ -53,7 +53,6 @@ jobs:
           mkdir -p python_temp
           tar -xzf python-ios.tar.gz -C python_temp/
 
-          # 从 XCFramework 的根目录复制动态库和头文件
           XCFRAMEWORK_BASE="python_temp/Python.xcframework/ios-arm64"
           
           if [ -d "$XCFRAMEWORK_BASE" ]; then
@@ -62,22 +61,25 @@ jobs:
             # 复制动态库
             if [ -f "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" ]; then
               cp "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" lib/ios_arm64/python/lib/
-              echo "✅ Copied libpython3.13.dylib from XCFramework lib/"
+              echo "✅ Copied libpython3.13.dylib"
             else
-              echo "❌ libpython3.13.dylib not found in XCFramework!"
+              echo "❌ libpython3.13.dylib not found!"
               find python_temp -name "libpython3.13.dylib" -type f
               exit 1
             fi
             
-            # 复制头文件
-            if [ -d "$XCFRAMEWORK_BASE/include" ]; then
-              cp -r "$XCFRAMEWORK_BASE/include/"* lib/ios_arm64/python/include/
-              echo "✅ Copied headers from XCFramework include/"
+            # ========== 根据实际目录结构复制头文件 ==========
+            # 头文件在 include/python3.13/ 目录下
+            if [ -d "$XCFRAMEWORK_BASE/include/python3.13" ]; then
+              echo "✅ Found headers in include/python3.13/"
+              cp -r "$XCFRAMEWORK_BASE/include/python3.13/"* lib/ios_arm64/python/include/
+              echo "✅ Copied headers from include/python3.13/"
             else
-              echo "❌ Headers not found in XCFramework!"
+              echo "❌ Headers not found in include/python3.13!"
               find python_temp -name "Python.h" -type f
               exit 1
             fi
+            
           else
             echo "❌ ios-arm64 XCFramework slice not found!"
             ls -la python_temp/Python.xcframework/
@@ -86,12 +88,23 @@ jobs:
 
           rm -rf python_temp python-ios.tar.gz
 
+          # 验证
           echo "Final verification:"
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
-            echo "✅ Python 3.13 dynamic library successfully installed!"
+            echo "✅ Python 3.13 dynamic library installed!"
             ls -la lib/ios_arm64/python/lib/libpython3.13.dylib
           else
             echo "❌ Python 3.13 dynamic library not found!"
+            exit 1
+          fi
+          
+          if [ -f "lib/ios_arm64/python/include/Python.h" ]; then
+            echo "✅ Python headers installed!"
+            ls -la lib/ios_arm64/python/include/ | head -10
+          else
+            echo "❌ Python headers not found!"
+            echo "Contents of include:"
+            ls -la lib/ios_arm64/python/include/ || echo "include directory is empty or does not exist"
             exit 1
           fi
 
@@ -113,8 +126,11 @@ jobs:
           echo "=== Checking Python headers ==="
           if [ -d "lib/ios_arm64/python/include" ] && [ -f "lib/ios_arm64/python/include/Python.h" ]; then
             echo "✅ Python headers found!"
+            ls -la lib/ios_arm64/python/include/ | head -10
           else
             echo "❌ Python headers missing!"
+            echo "Contents of include directory:"
+            ls -la lib/ios_arm64/python/include/ || echo "include directory is empty or does not exist"
             exit 1
           fi
 
