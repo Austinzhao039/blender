@@ -30,25 +30,20 @@ jobs:
           git submodule sync --recursive
 
       # ============================================================
-      # 2. 直接克隆完整的 iOS 预编译库（包含 Alembic、OpenSubdiv 等）
+      # 2. 直接克隆完整的 iOS 预编译库
       # ============================================================
       - name: Clone iOS precompiled libraries (complete)
         run: |
           cd blender
-          # 删除可能不完整的目录
           rm -rf lib/ios_arm64
-          # 直接从官方源克隆完整仓库
           git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
           cd lib/ios_arm64
-          # 拉取所有 LFS 文件
           git lfs pull
           cd ../..
           echo "✅ iOS libraries cloned successfully"
-          echo "Contents of lib/ios_arm64:"
-          ls -la lib/ios_arm64/ | head -20
 
       # ============================================================
-      # 3. 同样克隆 macOS 预编译库（CMake 需要）
+      # 3. 克隆 macOS 预编译库
       # ============================================================
       - name: Clone macOS precompiled libraries
         run: |
@@ -58,10 +53,9 @@ jobs:
           cd lib/macos_arm64
           git lfs pull
           cd ../..
-          echo "✅ macOS libraries cloned successfully"
 
       # ============================================================
-      # 4. 下载 BeeWare 的 Python 3.13 动态库（因为 lib-ios_arm64 可能不含 Python）
+      # 4. 下载 Python 3.13 动态库
       # ============================================================
       - name: Download Python 3.13 dynamic library from BeeWare
         run: |
@@ -69,7 +63,6 @@ jobs:
           mkdir -p lib/ios_arm64/python/lib
           mkdir -p lib/ios_arm64/python/include
 
-          echo "Downloading Python 3.13 prebuilt package from BeeWare..."
           curl -L -o python-ios.tar.gz \
             https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-iOS-support.b14.tar.gz
 
@@ -79,7 +72,6 @@ jobs:
           XCFRAMEWORK_BASE="python_temp/Python.xcframework/ios-arm64"
           
           if [ -d "$XCFRAMEWORK_BASE" ]; then
-            # 复制动态库
             if [ -f "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" ]; then
               cp "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" lib/ios_arm64/python/lib/
               echo "✅ Copied libpython3.13.dylib"
@@ -88,7 +80,6 @@ jobs:
               exit 1
             fi
             
-            # 复制头文件（从 include/python3.13/）
             if [ -d "$XCFRAMEWORK_BASE/include/python3.13" ]; then
               cp -r "$XCFRAMEWORK_BASE/include/python3.13/"* lib/ios_arm64/python/include/
               echo "✅ Copied headers"
@@ -103,7 +94,6 @@ jobs:
 
           rm -rf python_temp python-ios.tar.gz
 
-          echo "Final verification:"
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
             echo "✅ Python 3.13 dynamic library installed!"
           else
@@ -118,21 +108,23 @@ jobs:
           fi
 
       # ============================================================
-      # 5. 验证关键库是否齐全
+      # 5. 动态定位 OpenEXR 路径
       # ============================================================
-      - name: Verify iOS libraries
+      - name: Locate OpenEXRConfig.h
+        id: openexr
         run: |
           cd blender
-          echo "=== Checking iOS libraries ==="
-          for lib in alembic opensubdiv openexr fftw3 materialx sndfile; do
-            if [ -d "lib/ios_arm64/$lib" ]; then
-              echo "✅ $lib found"
-            else
-              echo "❌ $lib missing!"
-              exit 1
-            fi
-          done
-          echo "✅ All required iOS libraries are present."
+          # 查找 OpenEXRConfig.h 所在目录
+          OPENEXR_INC=$(find lib/ios_arm64/openexr -name "OpenEXRConfig.h" -type f | head -1)
+          if [ -z "$OPENEXR_INC" ]; then
+            echo "❌ OpenEXRConfig.h not found!"
+            exit 1
+          fi
+          OPENEXR_DIR=$(dirname "$OPENEXR_INC")
+          echo "Found OpenEXRConfig.h in: $OPENEXR_DIR"
+          # 设置环境变量供后续步骤使用
+          echo "OPENEXR_INCLUDE_DIR=$OPENEXR_DIR" >> $GITHUB_ENV
+          echo "OPENEXR_ROOT=$PWD/lib/ios_arm64/openexr" >> $GITHUB_ENV
 
       # ============================================================
       # 6. 设置 Xcode 环境
@@ -149,7 +141,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 7. 生成 Xcode 项目（显式指定 Python 库路径）
+      # 7. 生成 Xcode 项目（使用动态检测到的 OpenEXR 路径）
       # ============================================================
       - name: Generate Xcode project
         run: |
@@ -160,7 +152,10 @@ jobs:
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF \
             -DPYTHON_LIBRARY="$PWD/lib/ios_arm64/python/lib/libpython3.13.dylib" \
-            -DPYTHON_INCLUDE_DIR="$PWD/lib/ios_arm64/python/include"
+            -DPYTHON_INCLUDE_DIR="$PWD/lib/ios_arm64/python/include" \
+            -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
+            -DOPENEXR_INCLUDE_DIR="$OPENEXR_INCLUDE_DIR" \
+            -DOPENEXR_LIBRARY="$PWD/lib/ios_arm64/openexr/lib/libOpenEXR.a"
 
       # ============================================================
       # 8. 编译 Blender.app
