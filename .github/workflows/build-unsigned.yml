@@ -38,15 +38,15 @@ jobs:
           python3 ./build_files/utils/make_update.py
 
       # ============================================================
-      # 3. 下载预编译的 Python 3.13 (来自 BeeWare)
+      # 3. 下载预编译的 Python 3.13 动态库 (来自 BeeWare)
       # ============================================================
-      - name: Download prebuilt Python 3.13 for iOS
+      - name: Download prebuilt Python 3.13 (dynamic library) for iOS
         run: |
           cd blender
           mkdir -p lib/ios_arm64/python/lib
           mkdir -p lib/ios_arm64/python/include
 
-          # 下载预编译包
+          # 下载预编译包（使用最新的 b14 版本）
           echo "Downloading Python 3.13 prebuilt package from BeeWare..."
           curl -L -o python-ios.tar.gz \
             https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-iOS-support.b14.tar.gz
@@ -55,27 +55,26 @@ jobs:
           mkdir -p python_temp
           tar -xzf python-ios.tar.gz -C python_temp/
 
-          # 从 XCFramework 中提取真机架构的静态库和头文件
-          # BeeWare 的结构: Python.xcframework/ios-arm64/Python.framework/
+          # 从 XCFramework 中提取真机架构的动态库和头文件
           FRAMEWORK_PATH="python_temp/Python.xcframework/ios-arm64/Python.framework"
           
           if [ -d "$FRAMEWORK_PATH" ]; then
             echo "✅ Found Python.framework"
             
-            # 复制静态库 (libpython3.13.a)
-            if [ -f "$FRAMEWORK_PATH/Versions/Current/lib/libpython3.13.a" ]; then
-              cp "$FRAMEWORK_PATH/Versions/Current/lib/libpython3.13.a" lib/ios_arm64/python/lib/
-              echo "✅ Copied libpython3.13.a from Versions/Current/lib/"
-            elif [ -f "$FRAMEWORK_PATH/lib/libpython3.13.a" ]; then
-              cp "$FRAMEWORK_PATH/lib/libpython3.13.a" lib/ios_arm64/python/lib/
-              echo "✅ Copied libpython3.13.a from lib/"
+            # 【关键修改】复制动态库 (libpython3.13.dylib)
+            if [ -f "$FRAMEWORK_PATH/Versions/Current/lib/libpython3.13.dylib" ]; then
+              cp "$FRAMEWORK_PATH/Versions/Current/lib/libpython3.13.dylib" lib/ios_arm64/python/lib/
+              echo "✅ Copied libpython3.13.dylib from Versions/Current/lib/"
+            elif [ -f "$FRAMEWORK_PATH/lib/libpython3.13.dylib" ]; then
+              cp "$FRAMEWORK_PATH/lib/libpython3.13.dylib" lib/ios_arm64/python/lib/
+              echo "✅ Copied libpython3.13.dylib from lib/"
             else
-              echo "❌ libpython3.13.a not found in Python.framework!"
-              find python_temp -name "libpython3.13.a" -type f
+              echo "❌ libpython3.13.dylib not found in Python.framework!"
+              find python_temp -name "libpython3.13.dylib" -type f
               exit 1
             fi
             
-            # 复制头文件
+            # 复制头文件（与之前相同）
             if [ -d "$FRAMEWORK_PATH/Versions/Current/include/python3.13" ]; then
               cp -r "$FRAMEWORK_PATH/Versions/Current/include/python3.13/"* lib/ios_arm64/python/include/
               echo "✅ Copied headers from Versions/Current/include/python3.13/"
@@ -96,29 +95,29 @@ jobs:
           # 清理临时文件
           rm -rf python_temp python-ios.tar.gz
 
-          # 最终验证
+          # 最终验证（检查 .dylib 文件）
           echo "Final verification:"
-          if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
-            echo "✅ Python 3.13 library successfully installed!"
-            ls -la lib/ios_arm64/python/lib/libpython3.13.a
+          if [ -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
+            echo "✅ Python 3.13 dynamic library successfully installed!"
+            ls -la lib/ios_arm64/python/lib/libpython3.13.dylib
           else
-            echo "❌ Python 3.13 library not found!"
+            echo "❌ Python 3.13 dynamic library not found!"
             exit 1
           fi
 
       # ============================================================
-      # 4. 验证所有库
+      # 4. 验证所有库（注意检查 .dylib）
       # ============================================================
       - name: Verify libraries
         run: |
           cd blender
           echo "=== Checking iOS libraries ==="
           ls -la lib/ios_arm64/ | head -20
-          echo "=== Checking Python library ==="
-          if [ -f "lib/ios_arm64/python/lib/libpython3.13.a" ]; then
-            echo "✅ Python 3.13 found!"
+          echo "=== Checking Python dynamic library ==="
+          if [ -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
+            echo "✅ Python 3.13 dynamic library found!"
           else
-            echo "❌ Python 3.13 missing!"
+            echo "❌ Python 3.13 dynamic library missing!"
             exit 1
           fi
           echo "=== Checking Python headers ==="
@@ -145,6 +144,8 @@ jobs:
 
       # ============================================================
       # 6. 生成 Xcode 项目
+      # 注意：由于我们使用动态库，可能需要修改 CMake 配置，
+      # 但此处我们保持原样，如果链接失败可能需要额外调整。
       # ============================================================
       - name: Generate Xcode project
         run: |
