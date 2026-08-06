@@ -51,7 +51,7 @@ jobs:
           echo "✅ iOS libraries cloned successfully"
 
       # ============================================================
-      # 【新增】强制拉取 OpenEXR 的 LFS 文件（唯一改动点1）
+      # 【保持】强制拉取 OpenEXR 的 LFS 文件
       # ============================================================
       - name: Force pull OpenEXR LFS files
         run: |
@@ -60,14 +60,14 @@ jobs:
           ls -la openexr/ || echo "openexr directory not found!"
           echo "=== Pulling OpenEXR LFS files ==="
           git lfs pull --include="openexr/**"
-          if [ ! -f "openexr/lib/libOpenEXR.a" ]; then
+          if [ ! -f "openexr/lib/libOpenEXR.dylib" ] && [ ! -f "openexr/lib/libOpenEXR.a" ]; then
             echo "OpenEXR still missing, pulling all LFS..."
             git lfs fetch --all
             git lfs checkout
           fi
           echo "=== After pull ==="
           ls -la openexr/lib/ || echo "OpenEXR lib directory still missing!"
-          if [ ! -f "openexr/lib/libOpenEXR.a" ]; then
+          if [ ! -f "openexr/lib/libOpenEXR.dylib" ] && [ ! -f "openexr/lib/libOpenEXR.a" ]; then
             echo "❌ OpenEXR library still missing!"
             exit 1
           fi
@@ -149,7 +149,7 @@ jobs:
           fi
 
       # ============================================================
-      # 6. 验证关键库目录（不改动）
+      # 6. 验证关键库目录
       # ============================================================
       - name: Verify library directories
         run: |
@@ -172,7 +172,7 @@ jobs:
           echo "✅ All required libraries are present."
 
       # ============================================================
-      # 7. 动态查找库路径（改动点2：OpenEXR 使用直接路径）
+      # 7. 动态查找库路径（修正 OpenEXR 为 .dylib）
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
@@ -200,15 +200,26 @@ jobs:
             exit 1
           fi
           
-          # ---- OpenEXR（直接使用已知路径） ----
-          OPENEXR_LIB="$LIB_BASE/openexr/lib/libOpenEXR.a"
-          if [ -f "$OPENEXR_LIB" ]; then
+          # ---- OpenEXR（动态库） ----
+          OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.dylib" -type f | head -1)
+          if [ -n "$OPENEXR_LIB" ]; then
             OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
             echo "OPENEXR_LIB_DIR=$OPENEXR_LIB_DIR" >> $GITHUB_ENV
+            # 保存完整的库文件路径，用于生成配置文件
+            echo "OPENEXR_LIB_FILE=$OPENEXR_LIB" >> $GITHUB_ENV
             echo "✅ OpenEXR library: $OPENEXR_LIB"
           else
-            echo "❌ OpenEXR library not found at $OPENEXR_LIB!"
-            exit 1
+            # 如果 .dylib 不存在，尝试 .a
+            OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.a" -type f | head -1)
+            if [ -n "$OPENEXR_LIB" ]; then
+              OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
+              echo "OPENEXR_LIB_DIR=$OPENEXR_LIB_DIR" >> $GITHUB_ENV
+              echo "OPENEXR_LIB_FILE=$OPENEXR_LIB" >> $GITHUB_ENV
+              echo "✅ OpenEXR library (static): $OPENEXR_LIB"
+            else
+              echo "❌ OpenEXR library not found!"
+              exit 1
+            fi
           fi
           OPENEXR_INC="$LIB_BASE/openexr/include/OpenEXR/OpenEXRConfig.h"
           if [ -f "$OPENEXR_INC" ]; then
@@ -241,7 +252,7 @@ jobs:
           fi
 
       # ============================================================
-      # 8. 创建缺失的 CMake 配置文件（不改动）
+      # 8. 创建缺失的 CMake 配置文件（OpenEXR 使用 .dylib 路径）
       # ============================================================
       - name: Create missing CMake config files
         run: |
@@ -255,8 +266,8 @@ jobs:
             "set(OpenEXR_FOUND TRUE)" \
             "set(OPENEXR_FOUND TRUE)" \
             "set(OPENEXR_INCLUDE_DIR \"${OPENEXR_INC_DIR}\")" \
-            "set(OPENEXR_LIBRARY \"${OPENEXR_LIB_DIR}/libOpenEXR.a\")" \
-            "set(OPENEXR_LIBRARIES \"${OPENEXR_LIB_DIR}/libOpenEXR.a\")" \
+            "set(OPENEXR_LIBRARY \"${OPENEXR_LIB_FILE}\")" \
+            "set(OPENEXR_LIBRARIES \"${OPENEXR_LIB_FILE}\")" \
             "set(OPENEXR_VERSION_STRING \"3.1.0\")" \
             "set(OpenEXR_VERSION \"3.1.0\")" \
             > "$OPENEXR_DIR/OpenEXRConfig.cmake"
@@ -277,7 +288,7 @@ jobs:
           echo "✅ Created OpenImageIOConfig.cmake"
 
       # ============================================================
-      # 9. 设置 Xcode 环境（不改动）
+      # 9. 设置 Xcode 环境
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -291,7 +302,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 10. 生成 Xcode 项目（不改动）
+      # 10. 生成 Xcode 项目
       # ============================================================
       - name: Generate Xcode project
         run: |
@@ -310,7 +321,7 @@ jobs:
             -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio"
 
       # ============================================================
-      # 11. 编译 Blender.app（不改动）
+      # 11. 编译 Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         run: |
@@ -329,7 +340,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 12. 打包成未签名 IPA（不改动）
+      # 12. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         run: |
@@ -348,7 +359,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 13. 上传 IPA（不改动）
+      # 13. 上传 IPA
       # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -358,7 +369,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 14. 失败时上传日志（不改动）
+      # 14. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
