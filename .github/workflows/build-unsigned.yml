@@ -108,7 +108,7 @@ jobs:
           fi
 
       # ============================================================
-      # 5. 创建缺失的 CMake 配置文件（纯 echo 方式，无 heredoc）
+      # 5. 创建缺失的 CMake 配置文件（OpenEXR, fmt, OpenImageIO）
       # ============================================================
       - name: Create missing CMake config files
         run: |
@@ -117,60 +117,90 @@ jobs:
           # ----- 5a. OpenEXR -----
           OPENEXR_DIR="$PWD/lib/ios_arm64/openexr"
           mkdir -p "$OPENEXR_DIR"
-          
           OPENEXR_INC=$(find "$OPENEXR_DIR" -name "OpenEXRConfig.h" -type f | head -1)
           if [ -n "$OPENEXR_INC" ]; then
             OPENEXR_INC_DIR=$(dirname "$OPENEXR_INC")
           else
             OPENEXR_INC_DIR="$OPENEXR_DIR/include"
           fi
-          
           OPENEXR_LIB=$(find "$OPENEXR_DIR" -name "libOpenEXR.a" -type f | head -1)
           if [ -n "$OPENEXR_LIB" ]; then
             OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
           else
             OPENEXR_LIB_DIR="$OPENEXR_DIR/lib"
           fi
-          
-          echo "# Fake OpenEXRConfig.cmake for cross-compilation" > "$OPENEXR_DIR/OpenEXRConfig.cmake"
-          echo "set(OpenEXR_FOUND TRUE)" >> "$OPENEXR_DIR/OpenEXRConfig.cmake"
-          echo "set(OPENEXR_FOUND TRUE)" >> "$OPENEXR_DIR/OpenEXRConfig.cmake"
-          echo "set(OPENEXR_INCLUDE_DIR \"${OPENEXR_INC_DIR}\")" >> "$OPENEXR_DIR/OpenEXRConfig.cmake"
-          echo "set(OPENEXR_LIBRARY \"${OPENEXR_LIB_DIR}/libOpenEXR.a\")" >> "$OPENEXR_DIR/OpenEXRConfig.cmake"
-          echo "set(OPENEXR_LIBRARIES \"${OPENEXR_LIB_DIR}/libOpenEXR.a\")" >> "$OPENEXR_DIR/OpenEXRConfig.cmake"
-          echo "set(OPENEXR_VERSION_STRING \"3.1.0\")" >> "$OPENEXR_DIR/OpenEXRConfig.cmake"
-          echo "set(OpenEXR_VERSION \"3.1.0\")" >> "$OPENEXR_DIR/OpenEXRConfig.cmake"
-          
+          cat > "$OPENEXR_DIR/OpenEXRConfig.cmake" << 'EOF'
+# Fake OpenEXRConfig.cmake for cross-compilation
+set(OpenEXR_FOUND TRUE)
+set(OPENEXR_FOUND TRUE)
+set(OPENEXR_INCLUDE_DIR "${OPENEXR_INC_DIR}")
+set(OPENEXR_LIBRARY "${OPENEXR_LIB_DIR}/libOpenEXR.a")
+set(OPENEXR_LIBRARIES "${OPENEXR_LIB_DIR}/libOpenEXR.a")
+set(OPENEXR_VERSION_STRING "3.1.0")
+set(OpenEXR_VERSION "3.1.0")
+EOF
+          sed -i '' "s|\${OPENEXR_INC_DIR}|${OPENEXR_INC_DIR}|g" "$OPENEXR_DIR/OpenEXRConfig.cmake"
+          sed -i '' "s|\${OPENEXR_LIB_DIR}|${OPENEXR_LIB_DIR}|g" "$OPENEXR_DIR/OpenEXRConfig.cmake"
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
           echo "✅ Created OpenEXRConfig.cmake"
           
           # ----- 5b. fmt -----
           FMT_DIR="$PWD/lib/ios_arm64/fmt"
           mkdir -p "$FMT_DIR"
-          
           FMT_INC=$(find "$FMT_DIR" -name "fmt" -type d | head -1)
           if [ -n "$FMT_INC" ]; then
             FMT_INC_DIR=$(dirname "$FMT_INC")
           else
             FMT_INC_DIR="$FMT_DIR/include"
           fi
-          
           FMT_LIB=$(find "$FMT_DIR" -name "libfmt.a" -type f | head -1)
           if [ -n "$FMT_LIB" ]; then
             FMT_LIB_DIR=$(dirname "$FMT_LIB")
           else
             FMT_LIB_DIR="$FMT_DIR/lib"
           fi
-          
-          echo "# Fake fmt-config.cmake for cross-compilation" > "$FMT_DIR/fmt-config.cmake"
-          echo "set(fmt_FOUND TRUE)" >> "$FMT_DIR/fmt-config.cmake"
-          echo "set(FMT_FOUND TRUE)" >> "$FMT_DIR/fmt-config.cmake"
-          echo "set(FMT_INCLUDE_DIR \"${FMT_INC_DIR}\")" >> "$FMT_DIR/fmt-config.cmake"
-          echo "set(FMT_LIBRARY \"${FMT_LIB_DIR}/libfmt.a\")" >> "$FMT_DIR/fmt-config.cmake"
-          echo "set(FMT_LIBRARIES \"${FMT_LIB_DIR}/libfmt.a\")" >> "$FMT_DIR/fmt-config.cmake"
-          
+          cat > "$FMT_DIR/fmt-config.cmake" << 'EOF'
+# Fake fmt-config.cmake for cross-compilation
+set(fmt_FOUND TRUE)
+set(FMT_FOUND TRUE)
+set(FMT_INCLUDE_DIR "${FMT_INC_DIR}")
+set(FMT_LIBRARY "${FMT_LIB_DIR}/libfmt.a")
+set(FMT_LIBRARIES "${FMT_LIB_DIR}/libfmt.a")
+EOF
+          sed -i '' "s|\${FMT_INC_DIR}|${FMT_INC_DIR}|g" "$FMT_DIR/fmt-config.cmake"
+          sed -i '' "s|\${FMT_LIB_DIR}|${FMT_LIB_DIR}|g" "$FMT_DIR/fmt-config.cmake"
           cp "$FMT_DIR/fmt-config.cmake" "$FMT_DIR/fmtConfig.cmake"
           echo "✅ Created fmt-config.cmake"
+          
+          # ----- 5c. OpenImageIO -----
+          OIIO_DIR="$PWD/lib/ios_arm64/openimageio"
+          mkdir -p "$OIIO_DIR"
+          # 查找头文件目录（通常为 include/OpenImageIO）
+          OIIO_INC=$(find "$OIIO_DIR" -name "OpenImageIO" -type d | head -1)
+          if [ -n "$OIIO_INC" ]; then
+            OIIO_INC_DIR=$(dirname "$OIIO_INC")
+          else
+            OIIO_INC_DIR="$OIIO_DIR/include"
+          fi
+          # 查找库文件
+          OIIO_LIB=$(find "$OIIO_DIR" -name "libOpenImageIO.a" -type f | head -1)
+          if [ -n "$OIIO_LIB" ]; then
+            OIIO_LIB_DIR=$(dirname "$OIIO_LIB")
+          else
+            OIIO_LIB_DIR="$OIIO_DIR/lib"
+          fi
+          cat > "$OIIO_DIR/OpenImageIOConfig.cmake" << 'EOF'
+# Fake OpenImageIOConfig.cmake for cross-compilation
+set(OpenImageIO_FOUND TRUE)
+set(OPENIMAGEIO_FOUND TRUE)
+set(OPENIMAGEIO_INCLUDE_DIR "${OIIO_INC_DIR}")
+set(OPENIMAGEIO_LIBRARY "${OIIO_LIB_DIR}/libOpenImageIO.a")
+set(OPENIMAGEIO_LIBRARIES "${OIIO_LIB_DIR}/libOpenImageIO.a")
+EOF
+          sed -i '' "s|\${OIIO_INC_DIR}|${OIIO_INC_DIR}|g" "$OIIO_DIR/OpenImageIOConfig.cmake"
+          sed -i '' "s|\${OIIO_LIB_DIR}|${OIIO_LIB_DIR}|g" "$OIIO_DIR/OpenImageIOConfig.cmake"
+          cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
+          echo "✅ Created OpenImageIOConfig.cmake"
 
       # ============================================================
       # 6. 设置 Xcode 环境
@@ -201,7 +231,8 @@ jobs:
             -DPYTHON_INCLUDE_DIR="$PWD/lib/ios_arm64/python/include" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
             -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
-            -Dfmt_DIR="$PWD/lib/ios_arm64/fmt"
+            -Dfmt_DIR="$PWD/lib/ios_arm64/fmt" \
+            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio"
 
       # ============================================================
       # 8. 编译 Blender.app
