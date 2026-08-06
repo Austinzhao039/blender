@@ -44,6 +44,20 @@ jobs:
           git submodule sync --recursive
 
       # ============================================================
+      # 🔥 新增：仅拉取必要的启动文件（不拉测试数据）
+      # ============================================================
+      - name: Pull essential LFS files (startup.blend)
+        run: |
+          cd blender
+          git lfs pull --include="release/datafiles/**"
+          # 验证文件存在
+          if [ ! -f "release/datafiles/startup.blend" ]; then
+            echo "❌ startup.blend still missing!"
+            exit 1
+          fi
+          echo "✅ Essential startup files pulled"
+
+      # ============================================================
       # 1.5 缓存 iOS 库
       # ============================================================
       - name: Cache iOS libraries
@@ -65,7 +79,6 @@ jobs:
           rm -rf lib/ios_arm64
           git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
           cd lib/ios_arm64
-          # 只拉取 OpenEXR
           git lfs pull --include="openexr/**"
           cd ../..
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
@@ -103,7 +116,7 @@ jobs:
           echo "✅ OpenEXR is ready"
 
       # ============================================================
-      # 4. (已跳过) 不再运行 make_update.py，避免触发 LFS 速率限制
+      # 4. (已跳过) 不再运行 make_update.py
       # ============================================================
 
       # ============================================================
