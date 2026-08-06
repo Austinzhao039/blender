@@ -108,27 +108,124 @@ jobs:
           fi
 
       # ============================================================
-      # 5. 创建缺失的 CMake 配置文件（无 heredoc，纯 echo）
+      # 5. 动态查找所有库路径并设置环境变量
+      # ============================================================
+      - name: Locate all library paths dynamically
+        id: locate_libs
+        run: |
+          cd blender
+          LIB_BASE="$PWD/lib/ios_arm64"
+          
+          # ---- Python ----
+          PYTHON_LIB=$(find "$LIB_BASE/python" -name "libpython3.13.dylib" -type f | head -1)
+          if [ -n "$PYTHON_LIB" ]; then
+            PYTHON_LIB_DIR=$(dirname "$PYTHON_LIB")
+            echo "PYTHON_LIB_DIR=$PYTHON_LIB_DIR" >> $GITHUB_ENV
+            echo "✅ Python library: $PYTHON_LIB"
+          else
+            echo "❌ Python library not found!"
+            exit 1
+          fi
+          PYTHON_INC=$(find "$LIB_BASE/python" -name "Python.h" -type f | head -1)
+          if [ -n "$PYTHON_INC" ]; then
+            PYTHON_INC_DIR=$(dirname "$PYTHON_INC")
+            echo "PYTHON_INC_DIR=$PYTHON_INC_DIR" >> $GITHUB_ENV
+            echo "✅ Python headers: $PYTHON_INC"
+          else
+            echo "❌ Python headers not found!"
+            exit 1
+          fi
+          
+          # ---- fmt ----
+          FMT_LIB=$(find "$LIB_BASE/fmt" -name "libfmt.a" -type f | head -1)
+          if [ -n "$FMT_LIB" ]; then
+            FMT_LIB_DIR=$(dirname "$FMT_LIB")
+            echo "FMT_LIB_DIR=$FMT_LIB_DIR" >> $GITHUB_ENV
+            echo "✅ fmt library: $FMT_LIB"
+          else
+            echo "❌ fmt library not found!"
+            exit 1
+          fi
+          FMT_INC=$(find "$LIB_BASE/fmt" -name "fmt" -type d | head -1)
+          if [ -n "$FMT_INC" ]; then
+            FMT_INC_DIR=$(dirname "$FMT_INC")
+            echo "FMT_INC_DIR=$FMT_INC_DIR" >> $GITHUB_ENV
+            echo "✅ fmt headers: $FMT_INC"
+          else
+            echo "❌ fmt headers not found!"
+            exit 1
+          fi
+          
+          # ---- OpenEXR ----
+          OPENEXR_LIB=$(find "$LIB_BASE/openexr" -name "libOpenEXR.a" -type f | head -1)
+          if [ -n "$OPENEXR_LIB" ]; then
+            OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
+            echo "OPENEXR_LIB_DIR=$OPENEXR_LIB_DIR" >> $GITHUB_ENV
+            echo "✅ OpenEXR library: $OPENEXR_LIB"
+          else
+            echo "❌ OpenEXR library not found!"
+            exit 1
+          fi
+          OPENEXR_INC=$(find "$LIB_BASE/openexr" -name "OpenEXRConfig.h" -type f | head -1)
+          if [ -n "$OPENEXR_INC" ]; then
+            OPENEXR_INC_DIR=$(dirname "$OPENEXR_INC")
+            echo "OPENEXR_INC_DIR=$OPENEXR_INC_DIR" >> $GITHUB_ENV
+            echo "✅ OpenEXR headers: $OPENEXR_INC"
+          else
+            echo "❌ OpenEXR headers not found!"
+            exit 1
+          fi
+          
+          # ---- OpenImageIO ----
+          OIIO_LIB=$(find "$LIB_BASE/openimageio" -name "libOpenImageIO.a" -type f | head -1)
+          if [ -n "$OIIO_LIB" ]; then
+            OIIO_LIB_DIR=$(dirname "$OIIO_LIB")
+            echo "OIIO_LIB_DIR=$OIIO_LIB_DIR" >> $GITHUB_ENV
+            echo "✅ OpenImageIO library: $OIIO_LIB"
+          else
+            echo "❌ OpenImageIO library not found!"
+            exit 1
+          fi
+          OIIO_INC=$(find "$LIB_BASE/openimageio" -name "OpenImageIO" -type d | head -1)
+          if [ -n "$OIIO_INC" ]; then
+            OIIO_INC_DIR=$(dirname "$OIIO_INC")
+            echo "OIIO_INC_DIR=$OIIO_INC_DIR" >> $GITHUB_ENV
+            echo "✅ OpenImageIO headers: $OIIO_INC"
+          else
+            echo "❌ OpenImageIO headers not found!"
+            exit 1
+          fi
+          
+          # ---- Rubberband ----
+          RUBBERBAND_LIB=$(find "$LIB_BASE/rubberband" -name "librubberband.a" -type f | head -1)
+          if [ -n "$RUBBERBAND_LIB" ]; then
+            RUBBERBAND_LIB_DIR=$(dirname "$RUBBERBAND_LIB")
+            echo "RUBBERBAND_LIB_DIR=$RUBBERBAND_LIB_DIR" >> $GITHUB_ENV
+            echo "✅ Rubberband library: $RUBBERBAND_LIB"
+          else
+            echo "❌ Rubberband library not found!"
+            exit 1
+          fi
+          RUBBERBAND_INC=$(find "$LIB_BASE/rubberband" -name "RubberBandStretcher.h" -type f | head -1)
+          if [ -n "$RUBBERBAND_INC" ]; then
+            RUBBERBAND_INC_DIR=$(dirname "$RUBBERBAND_INC")
+            echo "RUBBERBAND_INC_DIR=$RUBBERBAND_INC_DIR" >> $GITHUB_ENV
+            echo "✅ Rubberband headers: $RUBBERBAND_INC"
+          else
+            echo "❌ Rubberband headers not found!"
+            exit 1
+          fi
+
+      # ============================================================
+      # 6. 创建缺失的 CMake 配置文件（使用环境变量中的路径）
       # ============================================================
       - name: Create missing CMake config files
         run: |
           cd blender
+          LIB_BASE="$PWD/lib/ios_arm64"
           
-          # ----- 5a. OpenEXR -----
-          OPENEXR_DIR="$PWD/lib/ios_arm64/openexr"
-          mkdir -p "$OPENEXR_DIR"
-          OPENEXR_INC=$(find "$OPENEXR_DIR" -name "OpenEXRConfig.h" -type f | head -1)
-          if [ -n "$OPENEXR_INC" ]; then
-            OPENEXR_INC_DIR=$(dirname "$OPENEXR_INC")
-          else
-            OPENEXR_INC_DIR="$OPENEXR_DIR/include"
-          fi
-          OPENEXR_LIB=$(find "$OPENEXR_DIR" -name "libOpenEXR.a" -type f | head -1)
-          if [ -n "$OPENEXR_LIB" ]; then
-            OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
-          else
-            OPENEXR_LIB_DIR="$OPENEXR_DIR/lib"
-          fi
+          # OpenEXR
+          OPENEXR_DIR="$LIB_BASE/openexr"
           printf '%s\n' \
             "# Fake OpenEXRConfig.cmake" \
             "set(OpenEXR_FOUND TRUE)" \
@@ -142,21 +239,8 @@ jobs:
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
           echo "✅ Created OpenEXRConfig.cmake"
           
-          # ----- 5b. fmt -----
-          FMT_DIR="$PWD/lib/ios_arm64/fmt"
-          mkdir -p "$FMT_DIR"
-          FMT_INC=$(find "$FMT_DIR" -name "fmt" -type d | head -1)
-          if [ -n "$FMT_INC" ]; then
-            FMT_INC_DIR=$(dirname "$FMT_INC")
-          else
-            FMT_INC_DIR="$FMT_DIR/include"
-          fi
-          FMT_LIB=$(find "$FMT_DIR" -name "libfmt.a" -type f | head -1)
-          if [ -n "$FMT_LIB" ]; then
-            FMT_LIB_DIR=$(dirname "$FMT_LIB")
-          else
-            FMT_LIB_DIR="$FMT_DIR/lib"
-          fi
+          # fmt
+          FMT_DIR="$LIB_BASE/fmt"
           printf '%s\n' \
             "# Fake fmt-config.cmake" \
             "set(fmt_FOUND TRUE)" \
@@ -168,21 +252,8 @@ jobs:
           cp "$FMT_DIR/fmt-config.cmake" "$FMT_DIR/fmtConfig.cmake"
           echo "✅ Created fmt-config.cmake"
           
-          # ----- 5c. OpenImageIO -----
-          OIIO_DIR="$PWD/lib/ios_arm64/openimageio"
-          mkdir -p "$OIIO_DIR"
-          OIIO_INC=$(find "$OIIO_DIR" -name "OpenImageIO" -type d | head -1)
-          if [ -n "$OIIO_INC" ]; then
-            OIIO_INC_DIR=$(dirname "$OIIO_INC")
-          else
-            OIIO_INC_DIR="$OIIO_DIR/include"
-          fi
-          OIIO_LIB=$(find "$OIIO_DIR" -name "libOpenImageIO.a" -type f | head -1)
-          if [ -n "$OIIO_LIB" ]; then
-            OIIO_LIB_DIR=$(dirname "$OIIO_LIB")
-          else
-            OIIO_LIB_DIR="$OIIO_DIR/lib"
-          fi
+          # OpenImageIO
+          OIIO_DIR="$LIB_BASE/openimageio"
           printf '%s\n' \
             "# Fake OpenImageIOConfig.cmake" \
             "set(OpenImageIO_FOUND TRUE)" \
@@ -195,7 +266,7 @@ jobs:
           echo "✅ Created OpenImageIOConfig.cmake"
 
       # ============================================================
-      # 6. 设置 Xcode 环境
+      # 7. 设置 Xcode 环境
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -209,7 +280,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 7. 生成 Xcode 项目
+      # 8. 生成 Xcode 项目（使用环境变量中的路径）
       # ============================================================
       - name: Generate Xcode project
         run: |
@@ -219,15 +290,17 @@ jobs:
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF \
-            -DPYTHON_LIBRARY="$PWD/lib/ios_arm64/python/lib/libpython3.13.dylib" \
-            -DPYTHON_INCLUDE_DIR="$PWD/lib/ios_arm64/python/include" \
+            -DPYTHON_LIBRARY="${PYTHON_LIB_DIR}/libpython3.13.dylib" \
+            -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
             -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
             -Dfmt_DIR="$PWD/lib/ios_arm64/fmt" \
-            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio"
+            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio" \
+            -DRUBBERBAND_INCLUDE_DIR="${RUBBERBAND_INC_DIR}" \
+            -DRUBBERBAND_LIBRARY="${RUBBERBAND_LIB_DIR}/librubberband.a"
 
       # ============================================================
-      # 8. 编译 Blender.app
+      # 9. 编译 Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         run: |
@@ -246,7 +319,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 9. 打包成未签名 IPA
+      # 10. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         run: |
@@ -265,7 +338,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 10. 上传 IPA
+      # 11. 上传 IPA
       # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -275,7 +348,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 11. 失败时上传日志
+      # 12. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
