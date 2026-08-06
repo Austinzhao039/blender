@@ -10,21 +10,20 @@ jobs:
 
     steps:
       # ============================================================
-      # 第一步：清除所有 iOS 库缓存（强制重新下载）
+      # 第一步：清除所有 iOS 库缓存（使用 --repo 显式指定仓库）
       # ============================================================
       - name: Delete all iOS library caches
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # 列出所有匹配的缓存
-          echo "🔍 Looking for caches with prefix 'ios-libs-'..."
-          CACHES=$(gh cache list --limit 100 --json key,id --jq '.[] | select(.key | startswith("ios-libs-")) | .id')
+          echo "🔍 Looking for caches with prefix 'ios-libs-' in repo ${{ github.repository }}..."
+          CACHES=$(gh cache list --repo ${{ github.repository }} --limit 100 --json key,id --jq '.[] | select(.key | startswith("ios-libs-")) | .id')
           if [ -z "$CACHES" ]; then
             echo "✅ No matching caches found."
           else
             echo "🗑️  Deleting caches: $CACHES"
             for id in $CACHES; do
-              gh cache delete $id
+              gh cache delete $id --repo ${{ github.repository }}
             done
             echo "✅ All matching caches deleted."
           fi
@@ -78,7 +77,7 @@ jobs:
             ios-libs-
 
       # ============================================================
-      # 2. 克隆 iOS 预编译库（缓存未命中时才执行，但缓存已被删，所以必定执行）
+      # 2. 克隆 iOS 预编译库（缓存未命中时才执行）
       # ============================================================
       - name: Clone iOS precompiled libraries (cache miss)
         if: steps.cache-ios.outputs.cache-hit != 'true'
