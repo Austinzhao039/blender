@@ -10,7 +10,7 @@ jobs:
 
     steps:
       # ============================================================
-      # 0. 安装依赖（包括 fmt，动态查找 CMake 配置路径）
+      # 0. 安装依赖
       # ============================================================
       - name: Install dependencies
         run: |
@@ -44,7 +44,7 @@ jobs:
           git submodule sync --recursive
 
       # ============================================================
-      # 1.5 缓存 iOS 库（仅缓存 OpenEXR 和头文件，不含 OpenImageIO）
+      # 1.5 缓存 iOS 库
       # ============================================================
       - name: Cache iOS libraries
         id: cache-ios
@@ -56,7 +56,7 @@ jobs:
             ios-libs-
 
       # ============================================================
-      # 2. 克隆 iOS 预编译库（仅拉取 OpenEXR，避免速率限制）
+      # 2. 克隆 iOS 预编译库（仅拉取 OpenEXR）
       # ============================================================
       - name: Clone iOS precompiled libraries (cache miss)
         if: steps.cache-ios.outputs.cache-hit != 'true'
@@ -65,7 +65,7 @@ jobs:
           rm -rf lib/ios_arm64
           git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
           cd lib/ios_arm64
-          # 只拉取 OpenEXR，不拉 OpenImageIO
+          # 只拉取 OpenEXR
           git lfs pull --include="openexr/**"
           cd ../..
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
@@ -76,12 +76,9 @@ jobs:
       - name: Download OpenImageIO from custom release
         run: |
           cd blender/lib/ios_arm64/openimageio/lib/
-          # 下载 zip 包
           curl -L -o openimageio-libs.zip https://github.com/Austinzhao039/blender/releases/download/main/openimageio-libs.zip
-          # 解压（覆盖已有的文件）
           unzip -o openimageio-libs.zip
           rm openimageio-libs.zip
-          # 验证文件
           ls -lh libOpenImageIO*.dylib
           if [ ! -f libOpenImageIO.dylib ] || [ $(stat -f%z libOpenImageIO.dylib) -lt 1000000 ]; then
             echo "❌ libOpenImageIO.dylib missing or too small!"
@@ -90,7 +87,7 @@ jobs:
           echo "✅ OpenImageIO dynamic libraries ready"
 
       # ============================================================
-      # 3. 验证 OpenEXR（确保存在）
+      # 3. 验证 OpenEXR
       # ============================================================
       - name: Verify OpenEXR files
         run: |
@@ -106,14 +103,8 @@ jobs:
           echo "✅ OpenEXR is ready"
 
       # ============================================================
-      # 4. 运行 make_update.py（跳过 LFS）
+      # 4. (已跳过) 不再运行 make_update.py，避免触发 LFS 速率限制
       # ============================================================
-      - name: Run make_update.py (skip LFS)
-        run: |
-          cd blender
-          export GIT_LFS_SKIP_SMUDGE=1
-          python3 ./build_files/utils/make_update.py
-          echo "✅ make_update.py completed"
 
       # ============================================================
       # 5. 下载 Python 3.13 动态库
@@ -169,7 +160,7 @@ jobs:
           fi
 
       # ============================================================
-      # 6. 动态查找库路径（Python、OpenEXR、OpenImageIO）
+      # 6. 动态查找库路径
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
@@ -197,7 +188,7 @@ jobs:
             exit 1
           fi
           
-          # ---- OpenEXR（优先 .dylib） ----
+          # ---- OpenEXR ----
           OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.dylib" -type f | head -1)
           if [ -n "$OPENEXR_LIB" ]; then
             OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
@@ -226,7 +217,7 @@ jobs:
             exit 1
           fi
           
-          # ---- OpenImageIO（动态库） ----
+          # ---- OpenImageIO ----
           OIIO_LIB="$LIB_BASE/openimageio/lib/libOpenImageIO.dylib"
           if [ -f "$OIIO_LIB" ]; then
             OIIO_LIB_DIR=$(dirname "$OIIO_LIB")
@@ -284,7 +275,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 9. 生成 Xcode 项目（启用 OpenImageIO）
+      # 9. 生成 Xcode 项目
       # ============================================================
       - name: Generate Xcode project
         run: |
