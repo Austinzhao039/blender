@@ -44,14 +44,15 @@ jobs:
           git submodule sync --recursive
 
       # ============================================================
-      # 2. 下载 startup.blend（从你的 Release）
+      # 2. 下载 startup.blend（从 main2 标签）
       # ============================================================
-      - name: Download startup.blend from custom release
+      - name: Download startup.blend from Release (main2)
         run: |
           cd blender
-          curl -L -o startup-data.zip https://github.com/Austinzhao039/blender/releases/download/main/startup-data.zip
-          unzip -o startup-data.zip
-          rm startup-data.zip
+          mkdir -p release/datafiles
+          curl -L -o startup.zip https://github.com/Austinzhao039/blender/releases/download/main2/startup.zip
+          unzip -o startup.zip
+          rm startup.zip
           if [ ! -f "release/datafiles/startup.blend" ]; then
             echo "❌ startup.blend still missing!"
             exit 1
@@ -59,17 +60,16 @@ jobs:
           echo "✅ startup.blend ready"
 
       # ============================================================
-      # 3. 下载 macOS Python（直接从 BeeWare，无需 LFS）
+      # 3. 下载 macOS Python（从 mainly 标签）
       # ============================================================
-      - name: Download macOS Python 3.13 from BeeWare
+      - name: Download macOS Python from Release (mainly)
         run: |
           cd blender
           mkdir -p lib/macos_arm64/python/bin
-          curl -L -o python-macos.tar.gz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-macOS-support.b14.tar.gz
-          tar -xzf python-macos.tar.gz -C /tmp/
-          cp /tmp/Python.xcframework/macos-arm64/bin/python3.13 lib/macos_arm64/python/bin/
+          curl -L -o macos-python.zip https://github.com/Austinzhao039/blender/releases/download/mainly/macos-python.zip
+          unzip -o macos-python.zip
+          rm macos-python.zip
           chmod +x lib/macos_arm64/python/bin/python3.13
-          rm python-macos.tar.gz
           if [ ! -f "lib/macos_arm64/python/bin/python3.13" ]; then
             echo "❌ macOS Python still missing!"
             exit 1
@@ -77,7 +77,7 @@ jobs:
           echo "✅ macOS Python ready"
 
       # ============================================================
-      # 4. 缓存 iOS 库（仅缓存 OpenEXR + 头文件）
+      # 4. 缓存 iOS 库
       # ============================================================
       - name: Cache iOS libraries
         id: cache-ios
@@ -98,15 +98,14 @@ jobs:
           rm -rf lib/ios_arm64
           git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
           cd lib/ios_arm64
-          # 只拉取 OpenEXR
           git lfs pull --include="openexr/**"
           cd ../..
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
       # ============================================================
-      # 6. 下载 OpenImageIO 动态库（从你的 Release）
+      # 6. 下载 OpenImageIO 动态库（从 main 标签）
       # ============================================================
-      - name: Download OpenImageIO from custom release
+      - name: Download OpenImageIO from Release (main)
         run: |
           cd blender/lib/ios_arm64/openimageio/lib/
           curl -L -o openimageio-libs.zip https://github.com/Austinzhao039/blender/releases/download/main/openimageio-libs.zip
@@ -120,7 +119,7 @@ jobs:
           echo "✅ OpenImageIO dynamic libraries ready"
 
       # ============================================================
-      # 7. 验证 OpenEXR（确保存在）
+      # 7. 验证 OpenEXR
       # ============================================================
       - name: Verify OpenEXR files
         run: |
@@ -136,13 +135,13 @@ jobs:
           echo "✅ OpenEXR is ready"
 
       # ============================================================
-      # 8. (已跳过) 不再运行 make_update.py
+      # 8. (已跳过) 不运行 make_update.py
       # ============================================================
 
       # ============================================================
-      # 9. 下载 iOS Python 3.13 动态库（用于运行）
+      # 9. 下载 iOS Python 3.13 动态库（从 BeeWare）
       # ============================================================
-      - name: Download Python 3.13 dynamic library for iOS from BeeWare
+      - name: Download iOS Python 3.13 dynamic library from BeeWare
         run: |
           cd blender
           mkdir -p lib/ios_arm64/python/lib
@@ -180,15 +179,15 @@ jobs:
           rm -rf python_temp python-ios.tar.gz
 
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
-            echo "✅ Python 3.13 dynamic library installed!"
+            echo "✅ iOS Python 3.13 dynamic library installed!"
           else
-            echo "❌ Python 3.13 dynamic library not found!"
+            echo "❌ iOS Python 3.13 dynamic library not found!"
             exit 1
           fi
           if [ -f "lib/ios_arm64/python/include/Python.h" ]; then
-            echo "✅ Python headers installed!"
+            echo "✅ iOS Python headers installed!"
           else
-            echo "❌ Python headers not found!"
+            echo "❌ iOS Python headers not found!"
             exit 1
           fi
 
