@@ -10,12 +10,20 @@ jobs:
 
     steps:
       # ============================================================
-      # 0. 安装依赖（包括 fmt）
+      # 0. 安装依赖（包括 fmt，并验证）
       # ============================================================
       - name: Install dependencies
         run: |
           brew install git-lfs cmake fmt
           git lfs install
+          # 验证 fmt 是否安装成功
+          if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
+            echo "❌ fmt not installed correctly!"
+            echo "Attempting to find fmt..."
+            find /opt/homebrew -name "libfmt.a" 2>/dev/null || echo "No fmt found"
+            exit 1
+          fi
+          echo "✅ fmt installed at /opt/homebrew/lib/libfmt.a"
 
       # ============================================================
       # 1. 克隆 Blender 源码
@@ -144,7 +152,8 @@ jobs:
           echo "✅ All required libraries are present."
 
       # ============================================================
-      # 7. 动态查找库路径（Python, fmt, OpenEXR, OpenImageIO）
+      # 7. 动态查找库路径（Python, OpenEXR, OpenImageIO）
+      # 注意：fmt 由 Homebrew 提供，CMake 通过 -Dfmt_DIR 自动查找，不需要手动设置
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
@@ -169,26 +178,6 @@ jobs:
             echo "✅ Python headers: $PYTHON_INC"
           else
             echo "❌ Python headers not found!"
-            exit 1
-          fi
-          
-          # ---- fmt (由 Homebrew 提供) ----
-          FMT_LIB=$(find /opt/homebrew/lib -name "libfmt.a" -type f | head -1)
-          if [ -n "$FMT_LIB" ]; then
-            FMT_LIB_DIR=$(dirname "$FMT_LIB")
-            echo "FMT_LIB_DIR=$FMT_LIB_DIR" >> $GITHUB_ENV
-            echo "✅ fmt library: $FMT_LIB"
-          else
-            echo "❌ fmt library not found in Homebrew!"
-            exit 1
-          fi
-          FMT_INC=$(find /opt/homebrew/include -name "fmt" -type d | head -1)
-          if [ -n "$FMT_INC" ]; then
-            FMT_INC_DIR=$(dirname "$FMT_INC")
-            echo "FMT_INC_DIR=$FMT_INC_DIR" >> $GITHUB_ENV
-            echo "✅ fmt headers: $FMT_INC"
-          else
-            echo "❌ fmt headers not found in Homebrew!"
             exit 1
           fi
           
@@ -284,7 +273,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 10. 生成 Xcode 项目（禁用 Rubberband）
+      # 10. 生成 Xcode 项目（禁用 Rubberband，使用 Homebrew 的 fmt）
       # ============================================================
       - name: Generate Xcode project
         run: |
