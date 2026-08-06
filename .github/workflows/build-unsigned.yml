@@ -51,7 +51,7 @@ jobs:
           echo "✅ iOS libraries cloned successfully"
 
       # ============================================================
-      # 【保持】强制拉取 OpenEXR 的 LFS 文件
+      # 3. 强制拉取 OpenEXR 的 LFS 文件
       # ============================================================
       - name: Force pull OpenEXR LFS files
         run: |
@@ -74,7 +74,7 @@ jobs:
           echo "✅ OpenEXR library found!"
 
       # ============================================================
-      # 3. 运行 make_update.py 补全可能缺失的库
+      # 4. 运行 make_update.py 补全可能缺失的库
       # ============================================================
       - name: Run make_update.py to fetch missing libs
         run: |
@@ -84,7 +84,7 @@ jobs:
           echo "✅ make_update.py completed"
 
       # ============================================================
-      # 4. 克隆 macOS 预编译库（CMake 需要）
+      # 5. 克隆 macOS 预编译库（CMake 需要）
       # ============================================================
       - name: Clone macOS precompiled libraries
         run: |
@@ -96,7 +96,7 @@ jobs:
           cd ../..
 
       # ============================================================
-      # 5. 下载 Python 3.13 动态库
+      # 6. 下载 Python 3.13 动态库
       # ============================================================
       - name: Download Python 3.13 dynamic library from BeeWare
         run: |
@@ -149,7 +149,7 @@ jobs:
           fi
 
       # ============================================================
-      # 6. 验证关键库目录
+      # 7. 验证关键库目录
       # ============================================================
       - name: Verify library directories
         run: |
@@ -172,7 +172,7 @@ jobs:
           echo "✅ All required libraries are present."
 
       # ============================================================
-      # 7. 动态查找库路径（修正 OpenEXR 为 .dylib）
+      # 8. 动态查找库路径
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
@@ -205,7 +205,6 @@ jobs:
           if [ -n "$OPENEXR_LIB" ]; then
             OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
             echo "OPENEXR_LIB_DIR=$OPENEXR_LIB_DIR" >> $GITHUB_ENV
-            # 保存完整的库文件路径，用于生成配置文件
             echo "OPENEXR_LIB_FILE=$OPENEXR_LIB" >> $GITHUB_ENV
             echo "✅ OpenEXR library: $OPENEXR_LIB"
           else
@@ -252,14 +251,14 @@ jobs:
           fi
 
       # ============================================================
-      # 8. 创建缺失的 CMake 配置文件（OpenEXR 使用 .dylib 路径）
+      # 9. 创建缺失的 CMake 配置文件（新增 OpenImageIO 配置）
       # ============================================================
       - name: Create missing CMake config files
         run: |
           cd blender
           LIB_BASE="$PWD/lib/ios_arm64"
           
-          # OpenEXR
+          # ----- OpenEXR -----
           OPENEXR_DIR="$LIB_BASE/openexr"
           printf '%s\n' \
             "# Fake OpenEXRConfig.cmake" \
@@ -274,7 +273,7 @@ jobs:
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
           echo "✅ Created OpenEXRConfig.cmake"
           
-          # OpenImageIO
+          # ----- OpenImageIO (新增) -----
           OIIO_DIR="$LIB_BASE/openimageio"
           printf '%s\n' \
             "# Fake OpenImageIOConfig.cmake" \
@@ -288,7 +287,7 @@ jobs:
           echo "✅ Created OpenImageIOConfig.cmake"
 
       # ============================================================
-      # 9. 设置 Xcode 环境
+      # 10. 设置 Xcode 环境
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -302,7 +301,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 10. 生成 Xcode 项目
+      # 11. 生成 Xcode 项目
       # ============================================================
       - name: Generate Xcode project
         run: |
@@ -321,7 +320,7 @@ jobs:
             -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio"
 
       # ============================================================
-      # 11. 编译 Blender.app
+      # 12. 编译 Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         run: |
@@ -340,7 +339,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 12. 打包成未签名 IPA
+      # 13. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         run: |
@@ -359,7 +358,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 13. 上传 IPA
+      # 14. 上传 IPA
       # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -369,7 +368,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 14. 失败时上传日志
+      # 15. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
