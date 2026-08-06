@@ -108,34 +108,30 @@ jobs:
           fi
 
       # ============================================================
-      # 5. 【核心修复】创建 OpenEXRConfig.cmake 配置文件（逐行 echo）
+      # 5. 创建缺失的 CMake 配置文件（纯 echo 方式，无 heredoc）
       # ============================================================
-      - name: Create OpenEXRConfig.cmake
+      - name: Create missing CMake config files
         run: |
           cd blender
+          
+          # ----- 5a. OpenEXR -----
           OPENEXR_DIR="$PWD/lib/ios_arm64/openexr"
           mkdir -p "$OPENEXR_DIR"
           
-          # 查找 OpenEXR 头文件和库的实际位置
           OPENEXR_INC=$(find "$OPENEXR_DIR" -name "OpenEXRConfig.h" -type f | head -1)
           if [ -n "$OPENEXR_INC" ]; then
             OPENEXR_INC_DIR=$(dirname "$OPENEXR_INC")
-            echo "Found OpenEXR headers in: $OPENEXR_INC_DIR"
           else
-            echo "⚠️ OpenEXRConfig.h not found, using default path"
             OPENEXR_INC_DIR="$OPENEXR_DIR/include"
           fi
           
           OPENEXR_LIB=$(find "$OPENEXR_DIR" -name "libOpenEXR.a" -type f | head -1)
           if [ -n "$OPENEXR_LIB" ]; then
             OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
-            echo "Found OpenEXR library in: $OPENEXR_LIB_DIR"
           else
-            echo "⚠️ libOpenEXR.a not found, using default path"
             OPENEXR_LIB_DIR="$OPENEXR_DIR/lib"
           fi
           
-          # 使用 echo 逐行写入配置文件（避免 heredoc 的 YAML 语法问题）
           echo "# Fake OpenEXRConfig.cmake for cross-compilation" > "$OPENEXR_DIR/OpenEXRConfig.cmake"
           echo "set(OpenEXR_FOUND TRUE)" >> "$OPENEXR_DIR/OpenEXRConfig.cmake"
           echo "set(OPENEXR_FOUND TRUE)" >> "$OPENEXR_DIR/OpenEXRConfig.cmake"
@@ -145,11 +141,36 @@ jobs:
           echo "set(OPENEXR_VERSION_STRING \"3.1.0\")" >> "$OPENEXR_DIR/OpenEXRConfig.cmake"
           echo "set(OpenEXR_VERSION \"3.1.0\")" >> "$OPENEXR_DIR/OpenEXRConfig.cmake"
           
-          echo "✅ Created OpenEXRConfig.cmake at $OPENEXR_DIR/OpenEXRConfig.cmake"
-          cat "$OPENEXR_DIR/OpenEXRConfig.cmake"
-          
-          # 同时创建 openexr-config.cmake（CMake 也可能查找这个名称）
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
+          echo "✅ Created OpenEXRConfig.cmake"
+          
+          # ----- 5b. fmt -----
+          FMT_DIR="$PWD/lib/ios_arm64/fmt"
+          mkdir -p "$FMT_DIR"
+          
+          FMT_INC=$(find "$FMT_DIR" -name "fmt" -type d | head -1)
+          if [ -n "$FMT_INC" ]; then
+            FMT_INC_DIR=$(dirname "$FMT_INC")
+          else
+            FMT_INC_DIR="$FMT_DIR/include"
+          fi
+          
+          FMT_LIB=$(find "$FMT_DIR" -name "libfmt.a" -type f | head -1)
+          if [ -n "$FMT_LIB" ]; then
+            FMT_LIB_DIR=$(dirname "$FMT_LIB")
+          else
+            FMT_LIB_DIR="$FMT_DIR/lib"
+          fi
+          
+          echo "# Fake fmt-config.cmake for cross-compilation" > "$FMT_DIR/fmt-config.cmake"
+          echo "set(fmt_FOUND TRUE)" >> "$FMT_DIR/fmt-config.cmake"
+          echo "set(FMT_FOUND TRUE)" >> "$FMT_DIR/fmt-config.cmake"
+          echo "set(FMT_INCLUDE_DIR \"${FMT_INC_DIR}\")" >> "$FMT_DIR/fmt-config.cmake"
+          echo "set(FMT_LIBRARY \"${FMT_LIB_DIR}/libfmt.a\")" >> "$FMT_DIR/fmt-config.cmake"
+          echo "set(FMT_LIBRARIES \"${FMT_LIB_DIR}/libfmt.a\")" >> "$FMT_DIR/fmt-config.cmake"
+          
+          cp "$FMT_DIR/fmt-config.cmake" "$FMT_DIR/fmtConfig.cmake"
+          echo "✅ Created fmt-config.cmake"
 
       # ============================================================
       # 6. 设置 Xcode 环境
@@ -166,7 +187,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 7. 生成 Xcode 项目（使用 OpenEXR_DIR 指向配置文件位置）
+      # 7. 生成 Xcode 项目
       # ============================================================
       - name: Generate Xcode project
         run: |
@@ -179,7 +200,8 @@ jobs:
             -DPYTHON_LIBRARY="$PWD/lib/ios_arm64/python/lib/libpython3.13.dylib" \
             -DPYTHON_INCLUDE_DIR="$PWD/lib/ios_arm64/python/include" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
-            -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr"
+            -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
+            -Dfmt_DIR="$PWD/lib/ios_arm64/fmt"
 
       # ============================================================
       # 8. 编译 Blender.app
