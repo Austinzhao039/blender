@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake
+          brew install git-lfs cmake fmt
           git lfs install
 
       # ============================================================
@@ -30,9 +30,9 @@ jobs:
           git submodule sync --recursive
 
       # ============================================================
-      # 2. 直接克隆完整的 iOS 预编译库
+      # 2. 直接克隆完整的 iOS 预编译库（基础部分）
       # ============================================================
-      - name: Clone iOS precompiled libraries (complete)
+      - name: Clone iOS precompiled libraries (base)
         run: |
           cd blender
           rm -rf lib/ios_arm64
@@ -43,69 +43,17 @@ jobs:
           echo "✅ iOS libraries cloned successfully"
 
       # ============================================================
-      # 3. 【新增】验证并补全缺失的库目录
+      # 3. 运行 make_update.py 补全可能缺失的库（如 rubberband 等）
       # ============================================================
-      - name: Verify and fix missing library directories
+      - name: Run make_update.py to fetch missing libs
         run: |
           cd blender
-          LIB_BASE="$PWD/lib/ios_arm64"
-          echo "=== Checking existing directories in lib/ios_arm64 ==="
-          ls -la "$LIB_BASE"
-          echo ""
-          
-          # 定义必需的库列表
-          REQUIRED_LIBS="fmt openexr openimageio rubberband python"
-          MISSING_LIBS=""
-          for lib in $REQUIRED_LIBS; do
-            if [ ! -d "$LIB_BASE/$lib" ]; then
-              echo "❌ $lib directory is missing!"
-              MISSING_LIBS="$MISSING_LIBS $lib"
-            else
-              echo "✅ $lib directory exists"
-            fi
-          done
-          
-          # 如果有缺失的库，尝试单独克隆
-          if [ -n "$MISSING_LIBS" ]; then
-            echo "⚠️ Some libraries are missing, attempting to clone them individually..."
-            for lib in $MISSING_LIBS; do
-              echo "Cloning $lib..."
-              # 从官方源克隆单独的库仓库（如果存在）
-              # 注意：有些库可能没有独立的仓库，这时需要从 lib-ios_arm64 中强制拉取
-              git clone https://projects.blender.org/blender/lib-ios_arm64.git temp_lib
-              cd temp_lib
-              # 只复制缺失的库目录
-              if [ -d "$lib" ]; then
-                cp -r "$lib" "$LIB_BASE/"
-                echo "✅ Copied $lib from temporary clone"
-              else
-                echo "❌ $lib not found in temporary clone either!"
-              fi
-              cd ..
-              rm -rf temp_lib
-            done
-          fi
-          
-          # 再次验证所有库目录是否存在
-          echo ""
-          echo "=== Final verification ==="
-          MISSING_AFTER=""
-          for lib in $REQUIRED_LIBS; do
-            if [ ! -d "$LIB_BASE/$lib" ]; then
-              echo "❌ $lib still missing after fix attempt!"
-              MISSING_AFTER="$MISSING_AFTER $lib"
-            else
-              echo "✅ $lib exists"
-            fi
-          done
-          if [ -n "$MISSING_AFTER" ]; then
-            echo "❌ Some libraries are still missing: $MISSING_AFTER"
-            exit 1
-          fi
-          echo "✅ All required libraries are present."
+          python3 ./build_files/utils/make_update.py
+          git submodule foreach git lfs pull
+          echo "✅ make_update.py completed"
 
       # ============================================================
-      # 4. 克隆 macOS 预编译库
+      # 4. 克隆 macOS 预编译库（CMake 需要）
       # ============================================================
       - name: Clone macOS precompiled libraries
         run: |
@@ -117,7 +65,7 @@ jobs:
           cd ../..
 
       # ============================================================
-      # 5. 下载 Python 3.13 动态库
+      # 5. 下载 Python 3.13 动态库（覆盖 make_update.py 可能提供的旧版）
       # ============================================================
       - name: Download Python 3.13 dynamic library from BeeWare
         run: |
@@ -170,7 +118,31 @@ jobs:
           fi
 
       # ============================================================
-      # 6. 动态查找所有库路径并设置环境变量
+      # 6. 验证所有关键库目录是否存在（fmt 现在由系统提供，不再需要检查）
+      # ============================================================
+      - name: Verify library directories
+        run: |
+          cd blender
+          LIB_BASE="$PWD/lib/ios_arm64"
+          # 注意：fmt 现在由 Homebrew 提供，不在 lib/ios_arm64 中
+          REQUIRED_LIBS="rubberband openexr openimageio python"
+          MISSING=0
+          for lib in $REQUIRED_LIBS; do
+            if [ -d "$LIB_BASE/$lib" ]; then
+              echo "✅ $lib exists"
+            else
+              echo "❌ $lib missing!"
+              MISSING=1
+            fi
+          done
+          if [ $MISSING -eq 1 ]; then
+            echo "Some libraries are still missing!"
+            exit 1
+          fi
+          echo "✅ All required libraries are present."
+
+      # ============================================================
+      # 7. 动态查找所有库路径并设置环境变量
       # ============================================================
       - name: Locate all library paths dynamically
         id: locate_libs
@@ -198,23 +170,24 @@ jobs:
             exit 1
           fi
           
-          # ---- fmt ----
-          FMT_LIB=$(find "$LIB_BASE/fmt" -name "libfmt.a" -type f | head -1)
+          # ---- fmt (现在由 Homebrew 提供) ----
+          # 查找 Homebrew 安装的 fmt 库
+          FMT_LIB=$(find /opt/homebrew/lib -name "libfmt.a" -type f | head -1)
           if [ -n "$FMT_LIB" ]; then
             FMT_LIB_DIR=$(dirname "$FMT_LIB")
             echo "FMT_LIB_DIR=$FMT_LIB_DIR" >> $GITHUB_ENV
             echo "✅ fmt library: $FMT_LIB"
           else
-            echo "❌ fmt library not found!"
+            echo "❌ fmt library not found in Homebrew!"
             exit 1
           fi
-          FMT_INC=$(find "$LIB_BASE/fmt" -name "fmt" -type d | head -1)
+          FMT_INC=$(find /opt/homebrew/include -name "fmt" -type d | head -1)
           if [ -n "$FMT_INC" ]; then
             FMT_INC_DIR=$(dirname "$FMT_INC")
             echo "FMT_INC_DIR=$FMT_INC_DIR" >> $GITHUB_ENV
             echo "✅ fmt headers: $FMT_INC"
           else
-            echo "❌ fmt headers not found!"
+            echo "❌ fmt headers not found in Homebrew!"
             exit 1
           fi
           
@@ -279,7 +252,8 @@ jobs:
           fi
 
       # ============================================================
-      # 7. 创建缺失的 CMake 配置文件
+      # 8. 创建缺失的 CMake 配置文件（OpenEXR, fmt, OpenImageIO）
+      # 注意：fmt 现在由 Homebrew 提供，不需要创建假配置文件
       # ============================================================
       - name: Create missing CMake config files
         run: |
@@ -301,18 +275,9 @@ jobs:
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
           echo "✅ Created OpenEXRConfig.cmake"
           
-          # fmt
-          FMT_DIR="$LIB_BASE/fmt"
-          printf '%s\n' \
-            "# Fake fmt-config.cmake" \
-            "set(fmt_FOUND TRUE)" \
-            "set(FMT_FOUND TRUE)" \
-            "set(FMT_INCLUDE_DIR \"${FMT_INC_DIR}\")" \
-            "set(FMT_LIBRARY \"${FMT_LIB_DIR}/libfmt.a\")" \
-            "set(FMT_LIBRARIES \"${FMT_LIB_DIR}/libfmt.a\")" \
-            > "$FMT_DIR/fmt-config.cmake"
-          cp "$FMT_DIR/fmt-config.cmake" "$FMT_DIR/fmtConfig.cmake"
-          echo "✅ Created fmt-config.cmake"
+          # fmt 不再需要创建假配置文件，因为 Homebrew 提供了 fmt-config.cmake 或 fmtConfig.cmake
+          # 但为了保险，也可以创建，但系统库通常自带
+          # 跳过，让 CMake 使用 Homebrew 的查找机制
           
           # OpenImageIO
           OIIO_DIR="$LIB_BASE/openimageio"
@@ -328,7 +293,7 @@ jobs:
           echo "✅ Created OpenImageIOConfig.cmake"
 
       # ============================================================
-      # 8. 设置 Xcode 环境
+      # 9. 设置 Xcode 环境
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -342,7 +307,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 9. 生成 Xcode 项目
+      # 10. 生成 Xcode 项目
       # ============================================================
       - name: Generate Xcode project
         run: |
@@ -356,13 +321,13 @@ jobs:
             -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
             -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
-            -Dfmt_DIR="$PWD/lib/ios_arm64/fmt" \
+            -Dfmt_DIR="/opt/homebrew/lib/cmake/fmt" \
             -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio" \
             -DRUBBERBAND_INCLUDE_DIR="${RUBBERBAND_INC_DIR}" \
             -DRUBBERBAND_LIBRARY="${RUBBERBAND_LIB_DIR}/librubberband.a"
 
       # ============================================================
-      # 10. 编译 Blender.app
+      # 11. 编译 Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         run: |
@@ -381,7 +346,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 11. 打包成未签名 IPA
+      # 12. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         run: |
@@ -400,7 +365,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 12. 上传 IPA
+      # 13. 上传 IPA
       # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -410,7 +375,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 13. 失败时上传日志
+      # 14. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
