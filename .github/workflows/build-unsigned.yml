@@ -9,6 +9,9 @@ jobs:
     timeout-minutes: 210
 
     steps:
+      # ============================================================
+      # 0. 安装依赖（包括 fmt）
+      # ============================================================
       - name: Install dependencies
         run: |
           brew install git-lfs cmake fmt
@@ -43,7 +46,7 @@ jobs:
           echo "✅ iOS libraries cloned successfully"
 
       # ============================================================
-      # 3. 运行 make_update.py 补全可能缺失的库（如 rubberband 等）
+      # 3. 运行 make_update.py 补全可能缺失的库
       # ============================================================
       - name: Run make_update.py to fetch missing libs
         run: |
@@ -118,14 +121,13 @@ jobs:
           fi
 
       # ============================================================
-      # 6. 验证所有关键库目录是否存在（fmt 现在由系统提供，不再需要检查）
+      # 6. 验证关键库目录（rubberband 已被禁用，不再检查）
       # ============================================================
       - name: Verify library directories
         run: |
           cd blender
           LIB_BASE="$PWD/lib/ios_arm64"
-          # 注意：fmt 现在由 Homebrew 提供，不在 lib/ios_arm64 中
-          REQUIRED_LIBS="rubberband openexr openimageio python"
+          REQUIRED_LIBS="openexr openimageio python"
           MISSING=0
           for lib in $REQUIRED_LIBS; do
             if [ -d "$LIB_BASE/$lib" ]; then
@@ -142,9 +144,9 @@ jobs:
           echo "✅ All required libraries are present."
 
       # ============================================================
-      # 7. 动态查找所有库路径并设置环境变量
+      # 7. 动态查找库路径（Python, fmt, OpenEXR, OpenImageIO）
       # ============================================================
-      - name: Locate all library paths dynamically
+      - name: Locate library paths dynamically
         id: locate_libs
         run: |
           cd blender
@@ -170,8 +172,7 @@ jobs:
             exit 1
           fi
           
-          # ---- fmt (现在由 Homebrew 提供) ----
-          # 查找 Homebrew 安装的 fmt 库
+          # ---- fmt (由 Homebrew 提供) ----
           FMT_LIB=$(find /opt/homebrew/lib -name "libfmt.a" -type f | head -1)
           if [ -n "$FMT_LIB" ]; then
             FMT_LIB_DIR=$(dirname "$FMT_LIB")
@@ -230,30 +231,10 @@ jobs:
             echo "❌ OpenImageIO headers not found!"
             exit 1
           fi
-          
-          # ---- Rubberband ----
-          RUBBERBAND_LIB=$(find "$LIB_BASE/rubberband" -name "librubberband.a" -type f | head -1)
-          if [ -n "$RUBBERBAND_LIB" ]; then
-            RUBBERBAND_LIB_DIR=$(dirname "$RUBBERBAND_LIB")
-            echo "RUBBERBAND_LIB_DIR=$RUBBERBAND_LIB_DIR" >> $GITHUB_ENV
-            echo "✅ Rubberband library: $RUBBERBAND_LIB"
-          else
-            echo "❌ Rubberband library not found!"
-            exit 1
-          fi
-          RUBBERBAND_INC=$(find "$LIB_BASE/rubberband" -name "RubberBandStretcher.h" -type f | head -1)
-          if [ -n "$RUBBERBAND_INC" ]; then
-            RUBBERBAND_INC_DIR=$(dirname "$RUBBERBAND_INC")
-            echo "RUBBERBAND_INC_DIR=$RUBBERBAND_INC_DIR" >> $GITHUB_ENV
-            echo "✅ Rubberband headers: $RUBBERBAND_INC"
-          else
-            echo "❌ Rubberband headers not found!"
-            exit 1
-          fi
 
       # ============================================================
-      # 8. 创建缺失的 CMake 配置文件（OpenEXR, fmt, OpenImageIO）
-      # 注意：fmt 现在由 Homebrew 提供，不需要创建假配置文件
+      # 8. 创建缺失的 CMake 配置文件（OpenEXR, OpenImageIO）
+      # fmt 由 Homebrew 提供，自带配置，不需要创建
       # ============================================================
       - name: Create missing CMake config files
         run: |
@@ -274,10 +255,6 @@ jobs:
             > "$OPENEXR_DIR/OpenEXRConfig.cmake"
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
           echo "✅ Created OpenEXRConfig.cmake"
-          
-          # fmt 不再需要创建假配置文件，因为 Homebrew 提供了 fmt-config.cmake 或 fmtConfig.cmake
-          # 但为了保险，也可以创建，但系统库通常自带
-          # 跳过，让 CMake 使用 Homebrew 的查找机制
           
           # OpenImageIO
           OIIO_DIR="$LIB_BASE/openimageio"
@@ -307,7 +284,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 10. 生成 Xcode 项目
+      # 10. 生成 Xcode 项目（禁用 Rubberband）
       # ============================================================
       - name: Generate Xcode project
         run: |
@@ -317,14 +294,13 @@ jobs:
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF \
+            -DWITH_RUBBERBAND=OFF \
             -DPYTHON_LIBRARY="${PYTHON_LIB_DIR}/libpython3.13.dylib" \
             -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
             -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
             -Dfmt_DIR="/opt/homebrew/lib/cmake/fmt" \
-            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio" \
-            -DRUBBERBAND_INCLUDE_DIR="${RUBBERBAND_INC_DIR}" \
-            -DRUBBERBAND_LIBRARY="${RUBBERBAND_LIB_DIR}/librubberband.a"
+            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio"
 
       # ============================================================
       # 11. 编译 Blender.app
