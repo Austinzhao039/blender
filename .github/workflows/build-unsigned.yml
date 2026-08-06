@@ -1,4 +1,4 @@
-name: Build Blender iOS IPA (with cache cleanup)
+name: Build Blender iOS IPA
 
 on:
   workflow_dispatch:
@@ -9,25 +9,6 @@ jobs:
     timeout-minutes: 210
 
     steps:
-      # ============================================================
-      # 第一步：清除所有 iOS 库缓存（使用 --repo 显式指定仓库）
-      # ============================================================
-      - name: Delete all iOS library caches
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "🔍 Looking for caches with prefix 'ios-libs-' in repo ${{ github.repository }}..."
-          CACHES=$(gh cache list --repo ${{ github.repository }} --limit 100 --json key,id --jq '.[] | select(.key | startswith("ios-libs-")) | .id')
-          if [ -z "$CACHES" ]; then
-            echo "✅ No matching caches found."
-          else
-            echo "🗑️  Deleting caches: $CACHES"
-            for id in $CACHES; do
-              gh cache delete $id --repo ${{ github.repository }}
-            done
-            echo "✅ All matching caches deleted."
-          fi
-
       # ============================================================
       # 0. 安装依赖（包括 fmt，动态查找 CMake 配置路径）
       # ============================================================
@@ -65,7 +46,7 @@ jobs:
           git submodule sync --recursive
 
       # ============================================================
-      # 1.5 缓存 iOS 库（此时缓存已被清空，会全新下载）
+      # 1.5 缓存 iOS 库（缓存可以加速后续构建，但不强制删除）
       # ============================================================
       - name: Cache iOS libraries
         id: cache-ios
@@ -86,33 +67,50 @@ jobs:
           rm -rf lib/ios_arm64
           git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
           cd lib/ios_arm64
-          # 按需拉取（只拉需要的两个目录，避免全量）
+          # 先按需拉取（快速）
           git lfs pull --include="openexr/**,openimageio/**"
           cd ../..
-          echo "✅ iOS libraries cloned and LFS pulled"
+          echo "✅ iOS libraries cloned and LFS pulled (partial)"
 
       # ============================================================
-      # 2.5 验证并修复 LFS 文件（确保真实文件存在）
+      # 2.5 验证并强制修复 LFS 文件（确保 OpenImageIO 真实存在）
       # ============================================================
       - name: Verify and fix LFS files if needed
         run: |
           cd blender/lib/ios_arm64
 
-          # 如果 OpenImageIO 是 LFS 指针（小文件），强制重新拉取
+          # 检查 OpenImageIO 目录是否存在
+          echo "📂 Checking openimageio directory..."
+          ls -la openimageio/ || echo "❌ openimageio directory not found!"
+          ls -la openimageio/lib/ || echo "❌ openimageio/lib not found!"
+
+          # 如果 libOpenImageIO.a 缺失或是指针文件，强制拉取
+          NEED_PULL=0
           if [ -f "openimageio/lib/libOpenImageIO.a" ]; then
             SIZE=$(stat -f%z "openimageio/lib/libOpenImageIO.a")
             if [ $SIZE -lt 100000 ]; then
-              echo "⚠️  libOpenImageIO.a is a LFS pointer (size $SIZE), re-pulling..."
-              git lfs pull --include="openimageio/**"
+              echo "⚠️  libOpenImageIO.a is a LFS pointer (size $SIZE), need to pull real file."
+              NEED_PULL=1
             else
               echo "✅ libOpenImageIO.a is real (size $SIZE bytes)"
             fi
           else
-            echo "⚠️  libOpenImageIO.a missing, pulling..."
-            git lfs pull --include="openimageio/**"
+            echo "⚠️  libOpenImageIO.a missing, need to pull."
+            NEED_PULL=1
           fi
 
-          # 检查 OpenEXR
+          if [ $NEED_PULL -eq 1 ]; then
+            echo "🔄 Attempting to pull OpenImageIO LFS files..."
+            # 先尝试按需拉取（可能因为模式问题失败，但加上 --verbose 查看详情）
+            git lfs pull --include="openimageio/**" --verbose || true
+            # 如果仍然缺失，则进行全量拉取（虽然慢，但可靠）
+            if [ ! -f "openimageio/lib/libOpenImageIO.a" ] || [ $(stat -f%z "openimageio/lib/libOpenImageIO.a") -lt 100000 ]; then
+              echo "⚠️  Partial pull failed, performing full LFS pull (may take a few minutes)..."
+              git lfs pull
+            fi
+          fi
+
+          # 再次检查 OpenEXR（若有问题也补拉）
           if [ ! -f "openexr/lib/libOpenEXR.dylib" ] && [ ! -f "openexr/lib/libOpenEXR.a" ]; then
             echo "⚠️  OpenEXR missing, pulling..."
             git lfs pull --include="openexr/**"
@@ -121,6 +119,8 @@ jobs:
           fi
 
           # 最终硬性验证
+          echo "🔍 Final verification:"
+          ls -la openimageio/lib/libOpenImageIO.a || echo "❌ libOpenImageIO.a still not found!"
           if [ ! -f "openimageio/lib/libOpenImageIO.a" ]; then
             echo "❌ OpenImageIO library still missing!"
             exit 1
