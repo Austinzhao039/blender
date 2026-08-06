@@ -1,4 +1,4 @@
-name: Build Blender iOS IPA
+name: Build Blender iOS IPA (with cache cleanup)
 
 on:
   workflow_dispatch:
@@ -10,7 +10,27 @@ jobs:
 
     steps:
       # ============================================================
-      # 0. 安装依赖（包括 fmt，并验证）
+      # 第一步：清除所有 iOS 库缓存（强制重新下载）
+      # ============================================================
+      - name: Delete all iOS library caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 列出所有匹配的缓存
+          echo "🔍 Looking for caches with prefix 'ios-libs-'..."
+          CACHES=$(gh cache list --limit 100 --json key,id --jq '.[] | select(.key | startswith("ios-libs-")) | .id')
+          if [ -z "$CACHES" ]; then
+            echo "✅ No matching caches found."
+          else
+            echo "🗑️  Deleting caches: $CACHES"
+            for id in $CACHES; do
+              gh cache delete $id
+            done
+            echo "✅ All matching caches deleted."
+          fi
+
+      # ============================================================
+      # 0. 安装依赖（包括 fmt，动态查找 CMake 配置路径）
       # ============================================================
       - name: Install dependencies
         run: |
@@ -21,6 +41,14 @@ jobs:
             exit 1
           fi
           echo "✅ fmt installed at /opt/homebrew/lib/libfmt.a"
+          # 动态查找 fmt 的 CMake 配置路径
+          FMT_CMAKE_DIR=$(find /opt/homebrew -name "fmt-config.cmake" 2>/dev/null | head -1 | xargs dirname)
+          if [ -z "$FMT_CMAKE_DIR" ]; then
+            echo "❌ fmt CMake config not found!"
+            exit 1
+          fi
+          echo "FMT_CMAKE_DIR=$FMT_CMAKE_DIR" >> $GITHUB_ENV
+          echo "✅ fmt CMake config at $FMT_CMAKE_DIR"
 
       # ============================================================
       # 1. 克隆 Blender 源码
@@ -38,43 +66,75 @@ jobs:
           git submodule sync --recursive
 
       # ============================================================
-      # 2. 直接克隆完整的 iOS 预编译库（基础部分）
+      # 1.5 缓存 iOS 库（此时缓存已被清空，会全新下载）
       # ============================================================
-      - name: Clone iOS precompiled libraries (base)
+      - name: Cache iOS libraries
+        id: cache-ios
+        uses: actions/cache@v4
+        with:
+          path: blender/lib/ios_arm64
+          key: ios-libs-${{ hashFiles('blender/.gitmodules') }}
+          restore-keys: |
+            ios-libs-
+
+      # ============================================================
+      # 2. 克隆 iOS 预编译库（缓存未命中时才执行，但缓存已被删，所以必定执行）
+      # ============================================================
+      - name: Clone iOS precompiled libraries (cache miss)
+        if: steps.cache-ios.outputs.cache-hit != 'true'
         run: |
           cd blender
           rm -rf lib/ios_arm64
           git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
           cd lib/ios_arm64
-          git lfs pull
+          # 按需拉取（只拉需要的两个目录，避免全量）
+          git lfs pull --include="openexr/**,openimageio/**"
           cd ../..
-          echo "✅ iOS libraries cloned successfully"
+          echo "✅ iOS libraries cloned and LFS pulled"
 
       # ============================================================
-      # 3. 强制拉取 OpenEXR 的 LFS 文件
+      # 2.5 验证并修复 LFS 文件（确保真实文件存在）
       # ============================================================
-      - name: Force pull OpenEXR LFS files
+      - name: Verify and fix LFS files if needed
         run: |
           cd blender/lib/ios_arm64
-          echo "=== Current openexr directory contents ==="
-          ls -la openexr/ || echo "openexr directory not found!"
-          echo "=== Pulling OpenEXR LFS files ==="
-          git lfs pull --include="openexr/**"
-          if [ ! -f "openexr/lib/libOpenEXR.dylib" ] && [ ! -f "openexr/lib/libOpenEXR.a" ]; then
-            echo "OpenEXR still missing, pulling all LFS..."
-            git lfs fetch --all
-            git lfs checkout
+
+          # 如果 OpenImageIO 是 LFS 指针（小文件），强制重新拉取
+          if [ -f "openimageio/lib/libOpenImageIO.a" ]; then
+            SIZE=$(stat -f%z "openimageio/lib/libOpenImageIO.a")
+            if [ $SIZE -lt 100000 ]; then
+              echo "⚠️  libOpenImageIO.a is a LFS pointer (size $SIZE), re-pulling..."
+              git lfs pull --include="openimageio/**"
+            else
+              echo "✅ libOpenImageIO.a is real (size $SIZE bytes)"
+            fi
+          else
+            echo "⚠️  libOpenImageIO.a missing, pulling..."
+            git lfs pull --include="openimageio/**"
           fi
-          echo "=== After pull ==="
-          ls -la openexr/lib/ || echo "OpenEXR lib directory still missing!"
+
+          # 检查 OpenEXR
           if [ ! -f "openexr/lib/libOpenEXR.dylib" ] && [ ! -f "openexr/lib/libOpenEXR.a" ]; then
-            echo "❌ OpenEXR library still missing!"
+            echo "⚠️  OpenEXR missing, pulling..."
+            git lfs pull --include="openexr/**"
+          else
+            echo "✅ OpenEXR found"
+          fi
+
+          # 最终硬性验证
+          if [ ! -f "openimageio/lib/libOpenImageIO.a" ]; then
+            echo "❌ OpenImageIO library still missing!"
             exit 1
           fi
-          echo "✅ OpenEXR library found!"
+          FINAL_SIZE=$(stat -f%z "openimageio/lib/libOpenImageIO.a")
+          if [ $FINAL_SIZE -lt 100000 ]; then
+            echo "❌ libOpenImageIO.a is still a pointer (size $FINAL_SIZE)!"
+            exit 1
+          fi
+          echo "✅ All critical libraries are ready"
 
       # ============================================================
-      # 4. 运行 make_update.py 补全可能缺失的库
+      # 3. 运行 make_update.py 补全可能缺失的库
       # ============================================================
       - name: Run make_update.py to fetch missing libs
         run: |
@@ -84,19 +144,7 @@ jobs:
           echo "✅ make_update.py completed"
 
       # ============================================================
-      # 5. 克隆 macOS 预编译库（CMake 需要）
-      # ============================================================
-      - name: Clone macOS precompiled libraries
-        run: |
-          cd blender
-          rm -rf lib/macos_arm64
-          git clone https://projects.blender.org/blender/lib-macos_arm64.git lib/macos_arm64
-          cd lib/macos_arm64
-          git lfs pull
-          cd ../..
-
-      # ============================================================
-      # 6. 下载 Python 3.13 动态库
+      # 4. 下载 Python 3.13 动态库
       # ============================================================
       - name: Download Python 3.13 dynamic library from BeeWare
         run: |
@@ -149,30 +197,7 @@ jobs:
           fi
 
       # ============================================================
-      # 7. 验证关键库目录
-      # ============================================================
-      - name: Verify library directories
-        run: |
-          cd blender
-          LIB_BASE="$PWD/lib/ios_arm64"
-          REQUIRED_LIBS="openexr openimageio python"
-          MISSING=0
-          for lib in $REQUIRED_LIBS; do
-            if [ -d "$LIB_BASE/$lib" ]; then
-              echo "✅ $lib exists"
-            else
-              echo "❌ $lib missing!"
-              MISSING=1
-            fi
-          done
-          if [ $MISSING -eq 1 ]; then
-            echo "Some libraries are still missing!"
-            exit 1
-          fi
-          echo "✅ All required libraries are present."
-
-      # ============================================================
-      # 8. 动态查找库路径
+      # 5. 动态查找库路径
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
@@ -200,7 +225,7 @@ jobs:
             exit 1
           fi
           
-          # ---- OpenEXR（动态库） ----
+          # ---- OpenEXR ----
           OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.dylib" -type f | head -1)
           if [ -n "$OPENEXR_LIB" ]; then
             OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
@@ -208,7 +233,6 @@ jobs:
             echo "OPENEXR_LIB_FILE=$OPENEXR_LIB" >> $GITHUB_ENV
             echo "✅ OpenEXR library: $OPENEXR_LIB"
           else
-            # 如果 .dylib 不存在，尝试 .a
             OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.a" -type f | head -1)
             if [ -n "$OPENEXR_LIB" ]; then
               OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
@@ -251,14 +275,13 @@ jobs:
           fi
 
       # ============================================================
-      # 9. 创建缺失的 CMake 配置文件（新增 OpenImageIO 配置）
+      # 6. 创建 OpenEXR 的 CMake 假配置文件
       # ============================================================
       - name: Create missing CMake config files
         run: |
           cd blender
           LIB_BASE="$PWD/lib/ios_arm64"
           
-          # ----- OpenEXR -----
           OPENEXR_DIR="$LIB_BASE/openexr"
           printf '%s\n' \
             "# Fake OpenEXRConfig.cmake" \
@@ -272,22 +295,9 @@ jobs:
             > "$OPENEXR_DIR/OpenEXRConfig.cmake"
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
           echo "✅ Created OpenEXRConfig.cmake"
-          
-          # ----- OpenImageIO (新增) -----
-          OIIO_DIR="$LIB_BASE/openimageio"
-          printf '%s\n' \
-            "# Fake OpenImageIOConfig.cmake" \
-            "set(OpenImageIO_FOUND TRUE)" \
-            "set(OPENIMAGEIO_FOUND TRUE)" \
-            "set(OPENIMAGEIO_INCLUDE_DIR \"${OIIO_INC_DIR}\")" \
-            "set(OPENIMAGEIO_LIBRARY \"${OIIO_LIB_DIR}/libOpenImageIO.a\")" \
-            "set(OPENIMAGEIO_LIBRARIES \"${OIIO_LIB_DIR}/libOpenImageIO.a\")" \
-            > "$OIIO_DIR/OpenImageIOConfig.cmake"
-          cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
-          echo "✅ Created OpenImageIOConfig.cmake"
 
       # ============================================================
-      # 10. 设置 Xcode 环境
+      # 7. 设置 Xcode 环境
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -301,13 +311,17 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 11. 生成 Xcode 项目
+      # 8. 生成 Xcode 项目（iOS 平台参数 + 直接传递 OpenImageIO 路径）
       # ============================================================
       - name: Generate Xcode project
         run: |
           cd blender
           rm -rf build_ios
           cmake -G Xcode -S . -B build_ios \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DWITH_GTESTS=OFF \
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF \
@@ -316,11 +330,14 @@ jobs:
             -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
             -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
-            -Dfmt_DIR="/opt/homebrew/lib/cmake/fmt" \
+            -Dfmt_DIR="${FMT_CMAKE_DIR}" \
+            -DOPENIMAGEIO_ROOT_DIR="$PWD/lib/ios_arm64/openimageio" \
+            -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
+            -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_DIR}/libOpenImageIO.a" \
             -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio"
 
       # ============================================================
-      # 12. 编译 Blender.app
+      # 9. 编译 Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         run: |
@@ -339,7 +356,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 13. 打包成未签名 IPA
+      # 10. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         run: |
@@ -358,7 +375,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 14. 上传 IPA
+      # 11. 上传 IPA
       # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -368,7 +385,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 15. 失败时上传日志
+      # 12. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
