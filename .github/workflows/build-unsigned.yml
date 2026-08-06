@@ -21,7 +21,6 @@ jobs:
             exit 1
           fi
           echo "✅ fmt installed at /opt/homebrew/lib/libfmt.a"
-          # 动态查找 fmt 的 CMake 配置路径
           FMT_CMAKE_DIR=$(find /opt/homebrew -name "fmt-config.cmake" 2>/dev/null | head -1 | xargs dirname)
           if [ -z "$FMT_CMAKE_DIR" ]; then
             echo "❌ fmt CMake config not found!"
@@ -31,7 +30,7 @@ jobs:
           echo "✅ fmt CMake config at $FMT_CMAKE_DIR"
 
       # ============================================================
-      # 1. 克隆 Blender 源码（跳过 LFS，避免速率限制）
+      # 1. 克隆 Blender 源码（跳过 LFS）
       # ============================================================
       - name: Clone Blender from official source (skip LFS)
         run: |
@@ -45,7 +44,7 @@ jobs:
           git submodule sync --recursive
 
       # ============================================================
-      # 1.5 缓存 iOS 库（存在则恢复，不存在则后续下载后保存）
+      # 1.5 缓存 iOS 库（仅缓存 OpenEXR 和头文件，不含 OpenImageIO）
       # ============================================================
       - name: Cache iOS libraries
         id: cache-ios
@@ -57,7 +56,7 @@ jobs:
             ios-libs-
 
       # ============================================================
-      # 2. 克隆 iOS 预编译库（仅当缓存未命中时执行）
+      # 2. 克隆 iOS 预编译库（仅拉取 OpenEXR，避免速率限制）
       # ============================================================
       - name: Clone iOS precompiled libraries (cache miss)
         if: steps.cache-ios.outputs.cache-hit != 'true'
@@ -66,104 +65,58 @@ jobs:
           rm -rf lib/ios_arm64
           git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
           cd lib/ios_arm64
-          # 只拉取需要的两个目录
-          git lfs pull --include="openexr/**,openimageio/**"
+          # 只拉取 OpenEXR，不拉 OpenImageIO
+          git lfs pull --include="openexr/**"
           cd ../..
-          echo "✅ iOS libraries cloned and required LFS pulled"
+          echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
       # ============================================================
-      # 2.5 验证并修复 LFS 文件（优先检查 .dylib，其次 .a）
+      # 2.5 下载 OpenImageIO 动态库（从你的 GitHub Release）
       # ============================================================
-      - name: Verify and fix LFS files if needed
+      - name: Download OpenImageIO from custom release
+        run: |
+          cd blender/lib/ios_arm64/openimageio/lib/
+          # 下载 zip 包
+          curl -L -o openimageio-libs.zip https://github.com/Austinzhao039/blender/releases/download/untagged-6d1ecfd572d486aadb24/openimageio-libs.zip
+          # 解压（覆盖已有的文件）
+          unzip -o openimageio-libs.zip
+          rm openimageio-libs.zip
+          # 验证文件
+          ls -lh libOpenImageIO*.dylib
+          if [ ! -f libOpenImageIO.dylib ] || [ $(stat -f%z libOpenImageIO.dylib) -lt 1000000 ]; then
+            echo "❌ libOpenImageIO.dylib missing or too small!"
+            exit 1
+          fi
+          echo "✅ OpenImageIO dynamic libraries ready"
+
+      # ============================================================
+      # 3. 验证 OpenEXR（确保存在）
+      # ============================================================
+      - name: Verify OpenEXR files
         run: |
           cd blender/lib/ios_arm64
-
-          echo "📂 Checking openimageio directory..."
-          ls -la openimageio/ || echo "❌ openimageio directory not found!"
-          ls -la openimageio/lib/ || echo "❌ openimageio/lib not found!"
-
-          # 检查是否存在 .dylib 或 .a，如果缺失或为指针则拉取
-          NEED_PULL=0
-          OIIO_LIB_FILE=""
-          if [ -f "openimageio/lib/libOpenImageIO.dylib" ]; then
-            SIZE=$(stat -f%z "openimageio/lib/libOpenImageIO.dylib")
-            if [ $SIZE -lt 100000 ]; then
-              echo "⚠️  libOpenImageIO.dylib is a LFS pointer (size $SIZE), need pull."
-              NEED_PULL=1
-            else
-              echo "✅ libOpenImageIO.dylib is real (size $SIZE bytes)"
-              OIIO_LIB_FILE="openimageio/lib/libOpenImageIO.dylib"
-            fi
-          elif [ -f "openimageio/lib/libOpenImageIO.a" ]; then
-            SIZE=$(stat -f%z "openimageio/lib/libOpenImageIO.a")
-            if [ $SIZE -lt 100000 ]; then
-              echo "⚠️  libOpenImageIO.a is a LFS pointer (size $SIZE), need pull."
-              NEED_PULL=1
-            else
-              echo "✅ libOpenImageIO.a is real (size $SIZE bytes)"
-              OIIO_LIB_FILE="openimageio/lib/libOpenImageIO.a"
-            fi
-          else
-            echo "⚠️  OpenImageIO library not found, need pull."
-            NEED_PULL=1
-          fi
-
-          if [ $NEED_PULL -eq 1 ]; then
-            echo "🔄 Attempting to pull OpenImageIO LFS files..."
-            git lfs pull --include="openimageio/**"
-            # 重试一次以防瞬态错误
-            if [ ! -f "openimageio/lib/libOpenImageIO.dylib" ] && [ ! -f "openimageio/lib/libOpenImageIO.a" ]; then
-              echo "⚠️  First pull failed, retrying after 5 seconds..."
-              sleep 5
-              git lfs pull --include="openimageio/**"
-            fi
-          fi
-
-          # 检查 OpenEXR
           if [ ! -f "openexr/lib/libOpenEXR.dylib" ] && [ ! -f "openexr/lib/libOpenEXR.a" ]; then
             echo "⚠️  OpenEXR missing, pulling..."
             git lfs pull --include="openexr/**"
-          else
-            echo "✅ OpenEXR found"
           fi
-
-          # 最终硬性验证（至少有一种库文件存在且真实）
-          echo "🔍 Final verification:"
-          if [ -f "openimageio/lib/libOpenImageIO.dylib" ]; then
-            FINAL_SIZE=$(stat -f%z "openimageio/lib/libOpenImageIO.dylib")
-            if [ $FINAL_SIZE -gt 100000 ]; then
-              echo "✅ libOpenImageIO.dylib is real ($FINAL_SIZE bytes)"
-            else
-              echo "❌ libOpenImageIO.dylib is still a pointer!"
-              exit 1
-            fi
-          elif [ -f "openimageio/lib/libOpenImageIO.a" ]; then
-            FINAL_SIZE=$(stat -f%z "openimageio/lib/libOpenImageIO.a")
-            if [ $FINAL_SIZE -gt 100000 ]; then
-              echo "✅ libOpenImageIO.a is real ($FINAL_SIZE bytes)"
-            else
-              echo "❌ libOpenImageIO.a is still a pointer!"
-              exit 1
-            fi
-          else
-            echo "❌ No OpenImageIO library file found!"
+          if [ ! -f "openexr/lib/libOpenEXR.dylib" ] && [ ! -f "openexr/lib/libOpenEXR.a" ]; then
+            echo "❌ OpenEXR library still missing!"
             exit 1
           fi
-          echo "✅ All critical libraries are ready"
+          echo "✅ OpenEXR is ready"
 
       # ============================================================
-      # 3. 运行 make_update.py 补全可能缺失的库
+      # 4. 运行 make_update.py（跳过 LFS）
       # ============================================================
-      - name: Run make_update.py to fetch missing libs
+      - name: Run make_update.py (skip LFS)
         run: |
           cd blender
           export GIT_LFS_SKIP_SMUDGE=1
           python3 ./build_files/utils/make_update.py
-          git submodule foreach git lfs pull --include="openexr/**,openimageio/**" || true
           echo "✅ make_update.py completed"
 
       # ============================================================
-      # 4. 下载 Python 3.13 动态库
+      # 5. 下载 Python 3.13 动态库
       # ============================================================
       - name: Download Python 3.13 dynamic library from BeeWare
         run: |
@@ -216,7 +169,7 @@ jobs:
           fi
 
       # ============================================================
-      # 5. 动态查找库路径（优先 .dylib，其次 .a）
+      # 6. 动态查找库路径（Python、OpenEXR、OpenImageIO）
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
@@ -273,22 +226,17 @@ jobs:
             exit 1
           fi
           
-          # ---- OpenImageIO（优先 .dylib） ----
-          OIIO_LIB=""
-          if [ -f "$LIB_BASE/openimageio/lib/libOpenImageIO.dylib" ]; then
-            OIIO_LIB="$LIB_BASE/openimageio/lib/libOpenImageIO.dylib"
-            echo "✅ OpenImageIO library (dynamic): $OIIO_LIB"
-          elif [ -f "$LIB_BASE/openimageio/lib/libOpenImageIO.a" ]; then
-            OIIO_LIB="$LIB_BASE/openimageio/lib/libOpenImageIO.a"
-            echo "✅ OpenImageIO library (static): $OIIO_LIB"
+          # ---- OpenImageIO（动态库） ----
+          OIIO_LIB="$LIB_BASE/openimageio/lib/libOpenImageIO.dylib"
+          if [ -f "$OIIO_LIB" ]; then
+            OIIO_LIB_DIR=$(dirname "$OIIO_LIB")
+            echo "OIIO_LIB_DIR=$OIIO_LIB_DIR" >> $GITHUB_ENV
+            echo "OIIO_LIB_FILE=$OIIO_LIB" >> $GITHUB_ENV
+            echo "✅ OpenImageIO library: $OIIO_LIB"
           else
             echo "❌ OpenImageIO library not found!"
             exit 1
           fi
-          OIIO_LIB_DIR=$(dirname "$OIIO_LIB")
-          echo "OIIO_LIB_DIR=$OIIO_LIB_DIR" >> $GITHUB_ENV
-          echo "OIIO_LIB_FILE=$OIIO_LIB" >> $GITHUB_ENV
-          
           OIIO_INC="$LIB_BASE/openimageio/include/OpenImageIO"
           if [ -d "$OIIO_INC" ]; then
             OIIO_INC_DIR=$(dirname "$OIIO_INC")
@@ -300,7 +248,7 @@ jobs:
           fi
 
       # ============================================================
-      # 6. 创建 OpenEXR 的 CMake 假配置文件
+      # 7. 创建 OpenEXR 的 CMake 假配置文件
       # ============================================================
       - name: Create missing CMake config files
         run: |
@@ -322,7 +270,7 @@ jobs:
           echo "✅ Created OpenEXRConfig.cmake"
 
       # ============================================================
-      # 7. 设置 Xcode 环境
+      # 8. 设置 Xcode 环境
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -336,7 +284,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 8. 生成 Xcode 项目（传递正确的 OpenImageIO 库文件）
+      # 9. 生成 Xcode 项目（启用 OpenImageIO）
       # ============================================================
       - name: Generate Xcode project
         run: |
@@ -351,6 +299,7 @@ jobs:
             -DWITH_TESTS=OFF \
             -DWITH_DOCS=OFF \
             -DWITH_RUBBERBAND=OFF \
+            -DWITH_OPENIMAGEIO=ON \
             -DPYTHON_LIBRARY="${PYTHON_LIB_DIR}/libpython3.13.dylib" \
             -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
@@ -358,11 +307,10 @@ jobs:
             -Dfmt_DIR="${FMT_CMAKE_DIR}" \
             -DOPENIMAGEIO_ROOT_DIR="$PWD/lib/ios_arm64/openimageio" \
             -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
-            -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}" \
-            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio"
+            -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}"
 
       # ============================================================
-      # 9. 编译 Blender.app
+      # 10. 编译 Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         run: |
@@ -381,7 +329,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 10. 打包成未签名 IPA
+      # 11. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         run: |
@@ -400,7 +348,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 11. 上传 IPA
+      # 12. 上传 IPA
       # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -410,7 +358,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 12. 失败时上传日志
+      # 13. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
