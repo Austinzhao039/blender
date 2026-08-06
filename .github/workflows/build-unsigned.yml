@@ -77,7 +77,7 @@ jobs:
         run: |
           cd blender/lib/ios_arm64/openimageio/lib/
           # 下载 zip 包
-          curl -L -o openimageio-libs.zip https://github.com/Austinzhao039/blender/releases/download/untagged-6d1ecfd572d486aadb24/openimageio-libs.zip
+          curl -L -o openimageio-libs.zip https://github.com/Austinzhao039/blender/releases/download/main/openimageio-libs.zip
           # 解压（覆盖已有的文件）
           unzip -o openimageio-libs.zip
           rm openimageio-libs.zip
