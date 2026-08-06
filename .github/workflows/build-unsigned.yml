@@ -16,11 +16,8 @@ jobs:
         run: |
           brew install git-lfs cmake fmt
           git lfs install
-          # 验证 fmt 是否安装成功
           if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
             echo "❌ fmt not installed correctly!"
-            echo "Attempting to find fmt..."
-            find /opt/homebrew -name "libfmt.a" 2>/dev/null || echo "No fmt found"
             exit 1
           fi
           echo "✅ fmt installed at /opt/homebrew/lib/libfmt.a"
@@ -54,6 +51,29 @@ jobs:
           echo "✅ iOS libraries cloned successfully"
 
       # ============================================================
+      # 【新增】强制拉取 OpenEXR 的 LFS 文件（唯一改动点1）
+      # ============================================================
+      - name: Force pull OpenEXR LFS files
+        run: |
+          cd blender/lib/ios_arm64
+          echo "=== Current openexr directory contents ==="
+          ls -la openexr/ || echo "openexr directory not found!"
+          echo "=== Pulling OpenEXR LFS files ==="
+          git lfs pull --include="openexr/**"
+          if [ ! -f "openexr/lib/libOpenEXR.a" ]; then
+            echo "OpenEXR still missing, pulling all LFS..."
+            git lfs fetch --all
+            git lfs checkout
+          fi
+          echo "=== After pull ==="
+          ls -la openexr/lib/ || echo "OpenEXR lib directory still missing!"
+          if [ ! -f "openexr/lib/libOpenEXR.a" ]; then
+            echo "❌ OpenEXR library still missing!"
+            exit 1
+          fi
+          echo "✅ OpenEXR library found!"
+
+      # ============================================================
       # 3. 运行 make_update.py 补全可能缺失的库
       # ============================================================
       - name: Run make_update.py to fetch missing libs
@@ -76,7 +96,7 @@ jobs:
           cd ../..
 
       # ============================================================
-      # 5. 下载 Python 3.13 动态库（覆盖 make_update.py 可能提供的旧版）
+      # 5. 下载 Python 3.13 动态库
       # ============================================================
       - name: Download Python 3.13 dynamic library from BeeWare
         run: |
@@ -129,7 +149,7 @@ jobs:
           fi
 
       # ============================================================
-      # 6. 验证关键库目录（rubberband 已被禁用，不再检查）
+      # 6. 验证关键库目录（不改动）
       # ============================================================
       - name: Verify library directories
         run: |
@@ -152,8 +172,7 @@ jobs:
           echo "✅ All required libraries are present."
 
       # ============================================================
-      # 7. 动态查找库路径（Python, OpenEXR, OpenImageIO）
-      # 注意：fmt 由 Homebrew 提供，CMake 通过 -Dfmt_DIR 自动查找，不需要手动设置
+      # 7. 动态查找库路径（改动点2：OpenEXR 使用直接路径）
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
@@ -162,8 +181,8 @@ jobs:
           LIB_BASE="$PWD/lib/ios_arm64"
           
           # ---- Python ----
-          PYTHON_LIB=$(find "$LIB_BASE/python" -name "libpython3.13.dylib" -type f | head -1)
-          if [ -n "$PYTHON_LIB" ]; then
+          PYTHON_LIB="$LIB_BASE/python/lib/libpython3.13.dylib"
+          if [ -f "$PYTHON_LIB" ]; then
             PYTHON_LIB_DIR=$(dirname "$PYTHON_LIB")
             echo "PYTHON_LIB_DIR=$PYTHON_LIB_DIR" >> $GITHUB_ENV
             echo "✅ Python library: $PYTHON_LIB"
@@ -171,8 +190,8 @@ jobs:
             echo "❌ Python library not found!"
             exit 1
           fi
-          PYTHON_INC=$(find "$LIB_BASE/python" -name "Python.h" -type f | head -1)
-          if [ -n "$PYTHON_INC" ]; then
+          PYTHON_INC="$LIB_BASE/python/include/Python.h"
+          if [ -f "$PYTHON_INC" ]; then
             PYTHON_INC_DIR=$(dirname "$PYTHON_INC")
             echo "PYTHON_INC_DIR=$PYTHON_INC_DIR" >> $GITHUB_ENV
             echo "✅ Python headers: $PYTHON_INC"
@@ -181,18 +200,18 @@ jobs:
             exit 1
           fi
           
-          # ---- OpenEXR ----
-          OPENEXR_LIB=$(find "$LIB_BASE/openexr" -name "libOpenEXR.a" -type f | head -1)
-          if [ -n "$OPENEXR_LIB" ]; then
+          # ---- OpenEXR（直接使用已知路径） ----
+          OPENEXR_LIB="$LIB_BASE/openexr/lib/libOpenEXR.a"
+          if [ -f "$OPENEXR_LIB" ]; then
             OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
             echo "OPENEXR_LIB_DIR=$OPENEXR_LIB_DIR" >> $GITHUB_ENV
             echo "✅ OpenEXR library: $OPENEXR_LIB"
           else
-            echo "❌ OpenEXR library not found!"
+            echo "❌ OpenEXR library not found at $OPENEXR_LIB!"
             exit 1
           fi
-          OPENEXR_INC=$(find "$LIB_BASE/openexr" -name "OpenEXRConfig.h" -type f | head -1)
-          if [ -n "$OPENEXR_INC" ]; then
+          OPENEXR_INC="$LIB_BASE/openexr/include/OpenEXR/OpenEXRConfig.h"
+          if [ -f "$OPENEXR_INC" ]; then
             OPENEXR_INC_DIR=$(dirname "$OPENEXR_INC")
             echo "OPENEXR_INC_DIR=$OPENEXR_INC_DIR" >> $GITHUB_ENV
             echo "✅ OpenEXR headers: $OPENEXR_INC"
@@ -202,8 +221,8 @@ jobs:
           fi
           
           # ---- OpenImageIO ----
-          OIIO_LIB=$(find "$LIB_BASE/openimageio" -name "libOpenImageIO.a" -type f | head -1)
-          if [ -n "$OIIO_LIB" ]; then
+          OIIO_LIB="$LIB_BASE/openimageio/lib/libOpenImageIO.a"
+          if [ -f "$OIIO_LIB" ]; then
             OIIO_LIB_DIR=$(dirname "$OIIO_LIB")
             echo "OIIO_LIB_DIR=$OIIO_LIB_DIR" >> $GITHUB_ENV
             echo "✅ OpenImageIO library: $OIIO_LIB"
@@ -211,8 +230,8 @@ jobs:
             echo "❌ OpenImageIO library not found!"
             exit 1
           fi
-          OIIO_INC=$(find "$LIB_BASE/openimageio" -name "OpenImageIO" -type d | head -1)
-          if [ -n "$OIIO_INC" ]; then
+          OIIO_INC="$LIB_BASE/openimageio/include/OpenImageIO"
+          if [ -d "$OIIO_INC" ]; then
             OIIO_INC_DIR=$(dirname "$OIIO_INC")
             echo "OIIO_INC_DIR=$OIIO_INC_DIR" >> $GITHUB_ENV
             echo "✅ OpenImageIO headers: $OIIO_INC"
@@ -222,8 +241,7 @@ jobs:
           fi
 
       # ============================================================
-      # 8. 创建缺失的 CMake 配置文件（OpenEXR, OpenImageIO）
-      # fmt 由 Homebrew 提供，自带配置，不需要创建
+      # 8. 创建缺失的 CMake 配置文件（不改动）
       # ============================================================
       - name: Create missing CMake config files
         run: |
@@ -259,7 +277,7 @@ jobs:
           echo "✅ Created OpenImageIOConfig.cmake"
 
       # ============================================================
-      # 9. 设置 Xcode 环境
+      # 9. 设置 Xcode 环境（不改动）
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -273,7 +291,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 10. 生成 Xcode 项目（禁用 Rubberband，使用 Homebrew 的 fmt）
+      # 10. 生成 Xcode 项目（不改动）
       # ============================================================
       - name: Generate Xcode project
         run: |
@@ -292,7 +310,7 @@ jobs:
             -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio"
 
       # ============================================================
-      # 11. 编译 Blender.app
+      # 11. 编译 Blender.app（不改动）
       # ============================================================
       - name: Build Blender.app for iOS
         run: |
@@ -311,7 +329,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 12. 打包成未签名 IPA
+      # 12. 打包成未签名 IPA（不改动）
       # ============================================================
       - name: Package unsigned IPA
         run: |
@@ -330,7 +348,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 13. 上传 IPA
+      # 13. 上传 IPA（不改动）
       # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -340,7 +358,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 14. 失败时上传日志
+      # 14. 失败时上传日志（不改动）
       # ============================================================
       - name: Upload logs on failure
         if: failure()
