@@ -43,7 +43,69 @@ jobs:
           echo "✅ iOS libraries cloned successfully"
 
       # ============================================================
-      # 3. 克隆 macOS 预编译库
+      # 3. 【新增】验证并补全缺失的库目录
+      # ============================================================
+      - name: Verify and fix missing library directories
+        run: |
+          cd blender
+          LIB_BASE="$PWD/lib/ios_arm64"
+          echo "=== Checking existing directories in lib/ios_arm64 ==="
+          ls -la "$LIB_BASE"
+          echo ""
+          
+          # 定义必需的库列表
+          REQUIRED_LIBS="fmt openexr openimageio rubberband python"
+          MISSING_LIBS=""
+          for lib in $REQUIRED_LIBS; do
+            if [ ! -d "$LIB_BASE/$lib" ]; then
+              echo "❌ $lib directory is missing!"
+              MISSING_LIBS="$MISSING_LIBS $lib"
+            else
+              echo "✅ $lib directory exists"
+            fi
+          done
+          
+          # 如果有缺失的库，尝试单独克隆
+          if [ -n "$MISSING_LIBS" ]; then
+            echo "⚠️ Some libraries are missing, attempting to clone them individually..."
+            for lib in $MISSING_LIBS; do
+              echo "Cloning $lib..."
+              # 从官方源克隆单独的库仓库（如果存在）
+              # 注意：有些库可能没有独立的仓库，这时需要从 lib-ios_arm64 中强制拉取
+              git clone https://projects.blender.org/blender/lib-ios_arm64.git temp_lib
+              cd temp_lib
+              # 只复制缺失的库目录
+              if [ -d "$lib" ]; then
+                cp -r "$lib" "$LIB_BASE/"
+                echo "✅ Copied $lib from temporary clone"
+              else
+                echo "❌ $lib not found in temporary clone either!"
+              fi
+              cd ..
+              rm -rf temp_lib
+            done
+          fi
+          
+          # 再次验证所有库目录是否存在
+          echo ""
+          echo "=== Final verification ==="
+          MISSING_AFTER=""
+          for lib in $REQUIRED_LIBS; do
+            if [ ! -d "$LIB_BASE/$lib" ]; then
+              echo "❌ $lib still missing after fix attempt!"
+              MISSING_AFTER="$MISSING_AFTER $lib"
+            else
+              echo "✅ $lib exists"
+            fi
+          done
+          if [ -n "$MISSING_AFTER" ]; then
+            echo "❌ Some libraries are still missing: $MISSING_AFTER"
+            exit 1
+          fi
+          echo "✅ All required libraries are present."
+
+      # ============================================================
+      # 4. 克隆 macOS 预编译库
       # ============================================================
       - name: Clone macOS precompiled libraries
         run: |
@@ -55,7 +117,7 @@ jobs:
           cd ../..
 
       # ============================================================
-      # 4. 下载 Python 3.13 动态库
+      # 5. 下载 Python 3.13 动态库
       # ============================================================
       - name: Download Python 3.13 dynamic library from BeeWare
         run: |
@@ -108,7 +170,7 @@ jobs:
           fi
 
       # ============================================================
-      # 5. 动态查找所有库路径并设置环境变量
+      # 6. 动态查找所有库路径并设置环境变量
       # ============================================================
       - name: Locate all library paths dynamically
         id: locate_libs
@@ -217,7 +279,7 @@ jobs:
           fi
 
       # ============================================================
-      # 6. 创建缺失的 CMake 配置文件（使用环境变量中的路径）
+      # 7. 创建缺失的 CMake 配置文件
       # ============================================================
       - name: Create missing CMake config files
         run: |
@@ -266,7 +328,7 @@ jobs:
           echo "✅ Created OpenImageIOConfig.cmake"
 
       # ============================================================
-      # 7. 设置 Xcode 环境
+      # 8. 设置 Xcode 环境
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -280,7 +342,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 8. 生成 Xcode 项目（使用环境变量中的路径）
+      # 9. 生成 Xcode 项目
       # ============================================================
       - name: Generate Xcode project
         run: |
@@ -300,7 +362,7 @@ jobs:
             -DRUBBERBAND_LIBRARY="${RUBBERBAND_LIB_DIR}/librubberband.a"
 
       # ============================================================
-      # 9. 编译 Blender.app
+      # 10. 编译 Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         run: |
@@ -319,7 +381,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 10. 打包成未签名 IPA
+      # 11. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         run: |
@@ -338,7 +400,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 11. 上传 IPA
+      # 12. 上传 IPA
       # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -348,7 +410,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 12. 失败时上传日志
+      # 13. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
