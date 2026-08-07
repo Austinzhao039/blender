@@ -367,6 +367,7 @@ jobs:
         run: |
           cd blender
           rm -rf build_ios
+          # 运行 CMake，将输出保存到文件，同时显示在控制台
           cmake -G Xcode -S . -B build_ios \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
@@ -391,20 +392,21 @@ jobs:
             -DBoost_DIR="$Boost_DIR" \
             -DTBB_DIR="$TBB_DIR" \
             2>&1 | tee cmake_output.txt
-          if [ $? -ne 0 ]; then
-            echo "CMake configuration failed. See cmake_output.txt for details."
+          # 检查 CMake 是否成功
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "CMake configuration failed!"
             exit 1
           fi
 
-      - name: Print CMake error logs if failed
+      - name: Print error lines from CMake output
         if: steps.cmake_config.outcome == 'failure'
         run: |
-          echo "==================== CMake stdout/stderr ===================="
-          cat blender/cmake_output.txt 2>/dev/null || echo "No cmake_output.txt"
+          echo "==================== Last 50 lines of CMake output ===================="
+          tail -n 50 blender/cmake_output.txt
+          echo "==================== Lines containing 'Error' or 'error' ===================="
+          grep -E "(Error|error|CMake Error)" blender/cmake_output.txt || echo "No error lines found."
           echo "==================== CMakeError.log ===================="
           cat blender/build_ios/CMakeFiles/CMakeError.log 2>/dev/null || echo "No CMakeError.log"
-          echo "==================== CMakeOutput.log ===================="
-          cat blender/build_ios/CMakeFiles/CMakeOutput.log 2>/dev/null || echo "No CMakeOutput.log"
           echo "==================== CMakeCache.txt (relevant) ===================="
           grep -E "(Boost|TBB|Eigen|Ceres|OpenImageIO|Python|OpenEXR)" blender/build_ios/CMakeCache.txt 2>/dev/null || echo "No cache"
           exit 1
