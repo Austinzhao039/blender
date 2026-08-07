@@ -117,7 +117,6 @@ jobs:
           OIIO_INC_DIR="$OIIO_DIR/include"
           OIIO_LIB_FILE="$OIIO_DIR/lib/libOpenImageIO.dylib"
           cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<EOF
-          # Fake OpenImageIOConfig.cmake for iOS cross-compile
           set(OpenImageIO_FOUND TRUE)
           set(OPENIMAGEIO_FOUND TRUE)
           set(OPENIMAGEIO_INCLUDE_DIR "${OIIO_INC_DIR}")
@@ -133,21 +132,18 @@ jobs:
           cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
           echo "✅ Created OpenImageIOConfig.cmake at $OIIO_DIR"
 
-      # ======================== 新增：Eigen3 配置 ========================
       - name: Create fake Eigen3Config.cmake
         run: |
           cd blender
-          # 查找 Eigen 头文件目录
           EIGEN_INC_DIR=$(find "$PWD/lib/ios_arm64" -path "*/eigen3/Eigen" -type d -printf "%h\n" 2>/dev/null | head -1)
           if [ -z "$EIGEN_INC_DIR" ]; then
             EIGEN_INC_DIR=$(find "$PWD/lib/ios_arm64" -path "*/Eigen" -type d -printf "%h\n" 2>/dev/null | head -1)
           fi
           if [ -z "$EIGEN_INC_DIR" ]; then
-            # 再尝试直接找 Eigen 目录
             EIGEN_INC_DIR=$(find "$PWD/lib/ios_arm64" -type d -name "Eigen" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
           fi
           if [ -z "$EIGEN_INC_DIR" ]; then
-            echo "⚠️  Eigen headers not found in lib/ios_arm64, fallback to system /usr/include/eigen3"
+            echo "⚠️  Eigen headers not found in lib/ios_arm64, fallback to /usr/include/eigen3"
             EIGEN_INC_DIR="/usr/include/eigen3"
           fi
           echo "Eigen include dir: $EIGEN_INC_DIR"
@@ -164,6 +160,48 @@ jobs:
           EOF
           echo "✅ Created Eigen3Config.cmake at $EIGEN_CMAKE_DIR"
           echo "EIGEN3_DIR=$EIGEN_CMAKE_DIR" >> $GITHUB_ENV
+
+      # ======================== 新增：Ceres 配置 ========================
+      - name: Create fake CeresConfig.cmake
+        run: |
+          cd blender
+          # 查找 Ceres 头文件（通常在 lib/ios_arm64/ceres/include/ceres 或 lib/ios_arm64/include/ceres）
+          CERES_INC_DIR=$(find "$PWD/lib/ios_arm64" -path "*/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
+          if [ -z "$CERES_INC_DIR" ]; then
+            CERES_INC_DIR=$(find "$PWD/lib/ios_arm64" -path "*/include/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
+          fi
+          if [ -z "$CERES_INC_DIR" ]; then
+            CERES_INC_DIR=$(find "$PWD/lib/ios_arm64" -type d -name "ceres" -exec test -f {}/ceres.h \; -print 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+          fi
+          if [ -z "$CERES_INC_DIR" ]; then
+            echo "⚠️  Ceres headers not found, falling back to default lib/ios_arm64/ceres/include"
+            CERES_INC_DIR="$PWD/lib/ios_arm64/ceres/include"
+          fi
+          echo "Ceres include dir: $CERES_INC_DIR"
+          # 查找 Ceres 库（libceres.a）
+          CERES_LIB_FILE=$(find "$PWD/lib/ios_arm64" -name "libceres.a" 2>/dev/null | head -1)
+          if [ -z "$CERES_LIB_FILE" ]; then
+            echo "⚠️  libceres.a not found, fallback to default path"
+            CERES_LIB_FILE="$PWD/lib/ios_arm64/ceres/lib/libceres.a"
+          fi
+          echo "Ceres library: $CERES_LIB_FILE"
+          CERES_CMAKE_DIR="$PWD/lib/ios_arm64/ceres-config"
+          mkdir -p "$CERES_CMAKE_DIR"
+          cat > "$CERES_CMAKE_DIR/CeresConfig.cmake" <<EOF
+          set(Ceres_FOUND TRUE)
+          set(CERES_INCLUDE_DIR "${CERES_INC_DIR}")
+          set(CERES_INCLUDE_DIRS "${CERES_INC_DIR}")
+          set(Ceres_INCLUDE_DIR "${CERES_INC_DIR}")
+          set(Ceres_INCLUDE_DIRS "${CERES_INC_DIR}")
+          set(CERES_LIBRARY "${CERES_LIB_FILE}")
+          set(CERES_LIBRARIES "${CERES_LIB_FILE}")
+          set(Ceres_LIBRARY "${CERES_LIB_FILE}")
+          set(Ceres_LIBRARIES "${CERES_LIB_FILE}")
+          set(CERES_VERSION_STRING "2.0.0")
+          set(Ceres_VERSION "2.0.0")
+          EOF
+          echo "✅ Created CeresConfig.cmake at $CERES_CMAKE_DIR"
+          echo "CERES_DIR=$CERES_CMAKE_DIR" >> $GITHUB_ENV
 
       # ============================================================
 
@@ -347,7 +385,8 @@ jobs:
             -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
             -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}" \
             -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio" \
-            -DEigen3_DIR="$EIGEN3_DIR"
+            -DEigen3_DIR="$EIGEN3_DIR" \
+            -DCeres_DIR="$CERES_DIR"
 
       - name: Build Blender.app for iOS
         run: |
