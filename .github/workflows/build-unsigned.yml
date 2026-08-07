@@ -115,7 +115,7 @@ jobs:
           cd blender
           LIB_BASE="$PWD/lib/ios_arm64"
 
-          # ===== OpenImageIO =====
+          # OpenImageIO
           OIIO_DIR="$LIB_BASE/openimageio"
           mkdir -p "$OIIO_DIR"
           cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<EOF
@@ -146,7 +146,7 @@ jobs:
           EOF
           cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
 
-          # ===== Eigen3 =====
+          # Eigen3
           EIGEN_INC=$(find "$LIB_BASE" -path "*/eigen3/Eigen" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$EIGEN_INC" ] && EIGEN_INC=$(find "$LIB_BASE" -name "Eigen" -type d 2>/dev/null | head -1 | xargs dirname)
           [ -z "$EIGEN_INC" ] && EIGEN_INC="/usr/include/eigen3"
@@ -160,7 +160,6 @@ jobs:
           set(Eigen3_INCLUDE_DIRS "${EIGEN_INC}")
           set(EIGEN3_VERSION_STRING "3.4.0")
           set(Eigen3_VERSION "3.4.0")
-          # 创建 IMPORTED 目标供 Blender 使用
           if(NOT TARGET Eigen3::Eigen)
             add_library(Eigen3::Eigen UNKNOWN IMPORTED)
             set_target_properties(Eigen3::Eigen PROPERTIES
@@ -175,7 +174,7 @@ jobs:
           endif()
           EOF
 
-          # ===== Ceres =====
+          # Ceres
           CERES_INC=$(find "$LIB_BASE" -path "*/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$CERES_INC" ] && CERES_INC="$LIB_BASE/ceres/include"
           CERES_LIB=$(find "$LIB_BASE" -name "libceres.a" 2>/dev/null | head -1)
@@ -196,7 +195,7 @@ jobs:
           set(Ceres_VERSION "2.0.0")
           EOF
 
-          # ===== Boost (header-only) =====
+          # Boost
           BOOST_INC=$(find "$LIB_BASE" -path "*/boost/version.hpp" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$BOOST_INC" ] && BOOST_INC="$LIB_BASE/boost/include"
           BOOST_CMAKE_DIR="$LIB_BASE/boost-config"
@@ -212,7 +211,7 @@ jobs:
           EOF
           cp "$BOOST_CMAKE_DIR/BoostConfig.cmake" "$BOOST_CMAKE_DIR/boost-config.cmake"
 
-          # ===== TBB =====
+          # TBB
           TBB_INC=$(find "$LIB_BASE" -path "*/tbb/tbb.h" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$TBB_INC" ] && TBB_INC="$LIB_BASE/tbb/include"
           TBB_LIB=$(find "$LIB_BASE" -name "libtbb.a" 2>/dev/null | head -1)
@@ -248,7 +247,7 @@ jobs:
           endif()
           EOF
 
-          # ===== OpenEXR =====
+          # OpenEXR
           OPENEXR_DIR="$LIB_BASE/openexr"
           OPENEXR_INC="$OPENEXR_DIR/include/OpenEXR"
           OPENEXR_LIB_FILE="$OPENEXR_DIR/lib/libOpenEXR.dylib"
@@ -260,7 +259,6 @@ jobs:
           set(OPENEXR_LIBRARIES "${OPENEXR_LIB_FILE}")
           set(OPENEXR_VERSION_STRING "3.1.0")
           set(OpenEXR_VERSION "3.1.0")
-          # 创建 IMPORTED 目标
           if(NOT TARGET OpenEXR::OpenEXR)
             add_library(OpenEXR::OpenEXR UNKNOWN IMPORTED)
             set_target_properties(OpenEXR::OpenEXR PROPERTIES
@@ -293,7 +291,6 @@ jobs:
             )
           endif()
           EOF
-          # 同时复制到 openexr-config.cmake
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
 
           echo "EIGEN3_DIR=$EIGEN_CMAKE_DIR" >> $GITHUB_ENV
@@ -426,9 +423,6 @@ jobs:
             exit 1
           fi
 
-      # 注意：OpenEXR config 文件现在已经在 Create fake CMake config files 中一起创建了
-      # 所以跳过单独的 OpenEXR config 步骤
-
       - name: Setup Xcode
         run: |
           XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
@@ -481,12 +475,30 @@ jobs:
             blender/build_ios/CMakeFiles/CMakeOutput.log
           retention-days: 7
 
+      # ===== 新增：诊断构建目录 =====
+      - name: List build directory and find project
+        run: |
+          echo "Contents of blender/build_ios:"
+          ls -la blender/build_ios/
+          echo "Looking for .xcodeproj files:"
+          find blender/build_ios -name "*.xcodeproj" -type d
+          # 保存项目路径供后续使用
+          PROJECT_PATH=$(find blender/build_ios -name "*.xcodeproj" -type d | head -1)
+          if [ -z "$PROJECT_PATH" ]; then
+            echo "❌ No Xcode project found!"
+            exit 1
+          fi
+          echo "PROJECT_PATH=$PROJECT_PATH" >> $GITHUB_ENV
+          echo "Found project: $PROJECT_PATH"
+
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
         run: |
           cd blender/build_ios
+          # 使用找到的项目路径（相对路径）
+          PROJECT_FILE=$(basename "$PROJECT_PATH")
           xcodebuild \
-            -project Blender.xcodeproj \
+            -project "$PROJECT_FILE" \
             -target install \
             -sdk iphoneos \
             -configuration Release \
