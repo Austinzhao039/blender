@@ -37,7 +37,6 @@ jobs:
           sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
           git submodule sync --recursive
 
-      # ---------- 修复后的 startup.blend 下载（处理单个文件） ----------
       - name: Download startup.blend from Release (main2)
         run: |
           cd blender
@@ -45,24 +44,21 @@ jobs:
           curl -L -o startup.zip https://github.com/Austinzhao039/blender/releases/download/main2/startup.zip
           unzip -o startup.zip
           rm startup.zip
-          # 如果解压后直接在根目录出现 startup.blend，移动到正确位置
           if [ -f "startup.blend" ]; then
             mv startup.blend release/datafiles/
             echo "✅ moved root startup.blend to release/datafiles/"
           fi
-          # 如果解压后是 datafiles/ 目录，也处理
           if [ -d "datafiles" ] && [ -f "datafiles/startup.blend" ]; then
             mv datafiles/* release/datafiles/ 2>/dev/null || true
             rmdir datafiles 2>/dev/null || true
             echo "✅ moved datafiles/ content to release/datafiles/"
           fi
-          # 最终验证
           if [ ! -f "release/datafiles/startup.blend" ]; then
-            echo "❌ startup.blend still missing, falling back to LFS pull..."
+            echo "⚠️  startup.blend missing, pulling from LFS..."
             git lfs pull --include="release/datafiles/startup.blend"
           fi
           if [ ! -f "release/datafiles/startup.blend" ]; then
-            echo "❌ startup.blend still missing after fallback!"
+            echo "❌ startup.blend still missing!"
             exit 1
           fi
           echo "✅ startup.blend ready"
@@ -113,6 +109,35 @@ jobs:
             exit 1
           fi
           echo "✅ OpenImageIO dynamic libraries ready"
+
+      # ======================== 新增：生成 OpenImageIO 配置文件 ========================
+      - name: Create fake OpenImageIOConfig.cmake
+        run: |
+          cd blender
+          OIIO_DIR="$PWD/lib/ios_arm64/openimageio"
+          OIIO_INC_DIR="$OIIO_DIR/include"
+          OIIO_LIB_FILE="$OIIO_DIR/lib/libOpenImageIO.dylib"
+          cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<EOF
+          # Fake OpenImageIOConfig.cmake for iOS cross-compile
+          set(OpenImageIO_FOUND TRUE)
+          set(OPENIMAGEIO_FOUND TRUE)
+          set(OPENIMAGEIO_INCLUDE_DIR "${OIIO_INC_DIR}")
+          set(OPENIMAGEIO_LIBRARY "${OIIO_LIB_FILE}")
+          set(OPENIMAGEIO_LIBRARIES "${OIIO_LIB_FILE}")
+          set(OPENIMAGEIO_VERSION_STRING "2.5.0")
+          set(OpenImageIO_VERSION "2.5.0")
+          # Required for find_package
+          set(OPENIMAGEIO_INCLUDE_DIRS \${OPENIMAGEIO_INCLUDE_DIR})
+          set(OPENIMAGEIO_LIBRARIES \${OPENIMAGEIO_LIBRARY})
+          # For Blender's FindOpenImageIO.cmake fallback
+          set(OpenImageIO_INCLUDE_DIRS \${OPENIMAGEIO_INCLUDE_DIR})
+          set(OpenImageIO_LIBRARIES \${OPENIMAGEIO_LIBRARY})
+          EOF
+          # Also copy to openimageio-config.cmake for consistency
+          cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
+          echo "✅ Created OpenImageIOConfig.cmake at $OIIO_DIR"
+
+      # ========================================================================
 
       - name: Verify OpenEXR files
         run: |
@@ -242,7 +267,7 @@ jobs:
             exit 1
           fi
 
-      - name: Create missing CMake config files
+      - name: Create missing CMake config files (OpenEXR)
         run: |
           cd blender
           LIB_BASE="$PWD/lib/ios_arm64"
@@ -292,7 +317,8 @@ jobs:
             -Dfmt_DIR="${FMT_CMAKE_DIR}" \
             -DOPENIMAGEIO_ROOT_DIR="$PWD/lib/ios_arm64/openimageio" \
             -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
-            -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}"
+            -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}" \
+            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio"
 
       - name: Build Blender.app for iOS
         run: |
