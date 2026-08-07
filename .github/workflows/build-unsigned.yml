@@ -9,9 +9,6 @@ jobs:
     timeout-minutes: 210
 
     steps:
-      # ============================================================
-      # 0. 安装依赖
-      # ============================================================
       - name: Install dependencies
         run: |
           brew install git-lfs cmake fmt
@@ -29,9 +26,6 @@ jobs:
           echo "FMT_CMAKE_DIR=$FMT_CMAKE_DIR" >> $GITHUB_ENV
           echo "✅ fmt CMake config at $FMT_CMAKE_DIR"
 
-      # ============================================================
-      # 1. 克隆 Blender 源码（跳过 LFS）
-      # ============================================================
       - name: Clone Blender from official source (skip LFS)
         run: |
           GIT_LFS_SKIP_SMUDGE=1 git clone https://projects.blender.org/blender/blender.git -b ios --depth 1
@@ -43,9 +37,7 @@ jobs:
           sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
           git submodule sync --recursive
 
-      # ============================================================
-      # 2. 下载 startup.blend（从 main2 标签）
-      # ============================================================
+      # ---------- 修复后的 startup.blend 下载（处理单个文件） ----------
       - name: Download startup.blend from Release (main2)
         run: |
           cd blender
@@ -53,15 +45,28 @@ jobs:
           curl -L -o startup.zip https://github.com/Austinzhao039/blender/releases/download/main2/startup.zip
           unzip -o startup.zip
           rm startup.zip
+          # 如果解压后直接在根目录出现 startup.blend，移动到正确位置
+          if [ -f "startup.blend" ]; then
+            mv startup.blend release/datafiles/
+            echo "✅ moved root startup.blend to release/datafiles/"
+          fi
+          # 如果解压后是 datafiles/ 目录，也处理
+          if [ -d "datafiles" ] && [ -f "datafiles/startup.blend" ]; then
+            mv datafiles/* release/datafiles/ 2>/dev/null || true
+            rmdir datafiles 2>/dev/null || true
+            echo "✅ moved datafiles/ content to release/datafiles/"
+          fi
+          # 最终验证
           if [ ! -f "release/datafiles/startup.blend" ]; then
-            echo "❌ startup.blend still missing!"
+            echo "❌ startup.blend still missing, falling back to LFS pull..."
+            git lfs pull --include="release/datafiles/startup.blend"
+          fi
+          if [ ! -f "release/datafiles/startup.blend" ]; then
+            echo "❌ startup.blend still missing after fallback!"
             exit 1
           fi
           echo "✅ startup.blend ready"
 
-      # ============================================================
-      # 3. 下载 macOS Python（从 mainly 标签）
-      # ============================================================
       - name: Download macOS Python from Release (mainly)
         run: |
           cd blender
@@ -76,9 +81,6 @@ jobs:
           fi
           echo "✅ macOS Python ready"
 
-      # ============================================================
-      # 4. 缓存 iOS 库
-      # ============================================================
       - name: Cache iOS libraries
         id: cache-ios
         uses: actions/cache@v4
@@ -88,9 +90,6 @@ jobs:
           restore-keys: |
             ios-libs-
 
-      # ============================================================
-      # 5. 克隆 iOS 预编译库（仅拉取 OpenEXR）
-      # ============================================================
       - name: Clone iOS precompiled libraries (cache miss)
         if: steps.cache-ios.outputs.cache-hit != 'true'
         run: |
@@ -102,9 +101,6 @@ jobs:
           cd ../..
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
-      # ============================================================
-      # 6. 下载 OpenImageIO 动态库（从 main 标签）
-      # ============================================================
       - name: Download OpenImageIO from Release (main)
         run: |
           cd blender/lib/ios_arm64/openimageio/lib/
@@ -118,9 +114,6 @@ jobs:
           fi
           echo "✅ OpenImageIO dynamic libraries ready"
 
-      # ============================================================
-      # 7. 验证 OpenEXR
-      # ============================================================
       - name: Verify OpenEXR files
         run: |
           cd blender/lib/ios_arm64
@@ -134,27 +127,18 @@ jobs:
           fi
           echo "✅ OpenEXR is ready"
 
-      # ============================================================
-      # 8. (已跳过) 不运行 make_update.py
-      # ============================================================
+      # 跳过 make_update.py
 
-      # ============================================================
-      # 9. 下载 iOS Python 3.13 动态库（从 BeeWare）
-      # ============================================================
       - name: Download iOS Python 3.13 dynamic library from BeeWare
         run: |
           cd blender
           mkdir -p lib/ios_arm64/python/lib
           mkdir -p lib/ios_arm64/python/include
-
           curl -L -o python-ios.tar.gz \
             https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-iOS-support.b14.tar.gz
-
           mkdir -p python_temp
           tar -xzf python-ios.tar.gz -C python_temp/
-
           XCFRAMEWORK_BASE="python_temp/Python.xcframework/ios-arm64"
-          
           if [ -d "$XCFRAMEWORK_BASE" ]; then
             if [ -f "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" ]; then
               cp "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" lib/ios_arm64/python/lib/
@@ -163,7 +147,6 @@ jobs:
               echo "❌ libpython3.13.dylib not found!"
               exit 1
             fi
-            
             if [ -d "$XCFRAMEWORK_BASE/include/python3.13" ]; then
               cp -r "$XCFRAMEWORK_BASE/include/python3.13/"* lib/ios_arm64/python/include/
               echo "✅ Copied headers"
@@ -175,9 +158,7 @@ jobs:
             echo "❌ XCFramework not found!"
             exit 1
           fi
-
           rm -rf python_temp python-ios.tar.gz
-
           if [ -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
             echo "✅ iOS Python 3.13 dynamic library installed!"
           else
@@ -191,16 +172,11 @@ jobs:
             exit 1
           fi
 
-      # ============================================================
-      # 10. 动态查找库路径
-      # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
         run: |
           cd blender
           LIB_BASE="$PWD/lib/ios_arm64"
-          
-          # ---- Python ----
           PYTHON_LIB="$LIB_BASE/python/lib/libpython3.13.dylib"
           if [ -f "$PYTHON_LIB" ]; then
             PYTHON_LIB_DIR=$(dirname "$PYTHON_LIB")
@@ -219,8 +195,6 @@ jobs:
             echo "❌ Python headers not found!"
             exit 1
           fi
-          
-          # ---- OpenEXR ----
           OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.dylib" -type f | head -1)
           if [ -n "$OPENEXR_LIB" ]; then
             OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
@@ -248,8 +222,6 @@ jobs:
             echo "❌ OpenEXR headers not found!"
             exit 1
           fi
-          
-          # ---- OpenImageIO ----
           OIIO_LIB="$LIB_BASE/openimageio/lib/libOpenImageIO.dylib"
           if [ -f "$OIIO_LIB" ]; then
             OIIO_LIB_DIR=$(dirname "$OIIO_LIB")
@@ -270,14 +242,10 @@ jobs:
             exit 1
           fi
 
-      # ============================================================
-      # 11. 创建 OpenEXR 的 CMake 假配置文件
-      # ============================================================
       - name: Create missing CMake config files
         run: |
           cd blender
           LIB_BASE="$PWD/lib/ios_arm64"
-          
           OPENEXR_DIR="$LIB_BASE/openexr"
           printf '%s\n' \
             "# Fake OpenEXRConfig.cmake" \
@@ -292,9 +260,6 @@ jobs:
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
           echo "✅ Created OpenEXRConfig.cmake"
 
-      # ============================================================
-      # 12. 设置 Xcode 环境
-      # ============================================================
       - name: Setup Xcode
         run: |
           XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
@@ -306,9 +271,6 @@ jobs:
           sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
-      # ============================================================
-      # 13. 生成 Xcode 项目
-      # ============================================================
       - name: Generate Xcode project
         run: |
           cd blender
@@ -332,9 +294,6 @@ jobs:
             -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
             -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}"
 
-      # ============================================================
-      # 14. 编译 Blender.app
-      # ============================================================
       - name: Build Blender.app for iOS
         run: |
           cd blender/build_ios
@@ -351,9 +310,6 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO
 
-      # ============================================================
-      # 15. 打包成未签名 IPA
-      # ============================================================
       - name: Package unsigned IPA
         run: |
           cd blender/build_ios
@@ -370,9 +326,6 @@ jobs:
           cd IPA && zip -r ../Blender.ipa Payload/ && cd ..
           ls -lh Blender.ipa
 
-      # ============================================================
-      # 16. 上传 IPA
-      # ============================================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
@@ -380,9 +333,6 @@ jobs:
           path: blender/build_ios/Blender.ipa
           retention-days: 30
 
-      # ============================================================
-      # 17. 失败时上传日志
-      # ============================================================
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
