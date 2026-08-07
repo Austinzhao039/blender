@@ -110,7 +110,6 @@ jobs:
           fi
           echo "✅ OpenImageIO dynamic libraries ready"
 
-      # ======================== 新增：生成 OpenImageIO 配置文件 ========================
       - name: Create fake OpenImageIOConfig.cmake
         run: |
           cd blender
@@ -126,18 +125,47 @@ jobs:
           set(OPENIMAGEIO_LIBRARIES "${OIIO_LIB_FILE}")
           set(OPENIMAGEIO_VERSION_STRING "2.5.0")
           set(OpenImageIO_VERSION "2.5.0")
-          # Required for find_package
           set(OPENIMAGEIO_INCLUDE_DIRS \${OPENIMAGEIO_INCLUDE_DIR})
           set(OPENIMAGEIO_LIBRARIES \${OPENIMAGEIO_LIBRARY})
-          # For Blender's FindOpenImageIO.cmake fallback
           set(OpenImageIO_INCLUDE_DIRS \${OPENIMAGEIO_INCLUDE_DIR})
           set(OpenImageIO_LIBRARIES \${OPENIMAGEIO_LIBRARY})
           EOF
-          # Also copy to openimageio-config.cmake for consistency
           cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
           echo "✅ Created OpenImageIOConfig.cmake at $OIIO_DIR"
 
-      # ========================================================================
+      # ======================== 新增：Eigen3 配置 ========================
+      - name: Create fake Eigen3Config.cmake
+        run: |
+          cd blender
+          # 查找 Eigen 头文件目录
+          EIGEN_INC_DIR=$(find "$PWD/lib/ios_arm64" -path "*/eigen3/Eigen" -type d -printf "%h\n" 2>/dev/null | head -1)
+          if [ -z "$EIGEN_INC_DIR" ]; then
+            EIGEN_INC_DIR=$(find "$PWD/lib/ios_arm64" -path "*/Eigen" -type d -printf "%h\n" 2>/dev/null | head -1)
+          fi
+          if [ -z "$EIGEN_INC_DIR" ]; then
+            # 再尝试直接找 Eigen 目录
+            EIGEN_INC_DIR=$(find "$PWD/lib/ios_arm64" -type d -name "Eigen" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+          fi
+          if [ -z "$EIGEN_INC_DIR" ]; then
+            echo "⚠️  Eigen headers not found in lib/ios_arm64, fallback to system /usr/include/eigen3"
+            EIGEN_INC_DIR="/usr/include/eigen3"
+          fi
+          echo "Eigen include dir: $EIGEN_INC_DIR"
+          EIGEN_CMAKE_DIR="$PWD/lib/ios_arm64/eigen3-config"
+          mkdir -p "$EIGEN_CMAKE_DIR"
+          cat > "$EIGEN_CMAKE_DIR/Eigen3Config.cmake" <<EOF
+          set(Eigen3_FOUND TRUE)
+          set(EIGEN3_INCLUDE_DIR "${EIGEN_INC_DIR}")
+          set(EIGEN3_INCLUDE_DIRS "${EIGEN_INC_DIR}")
+          set(Eigen3_INCLUDE_DIR "${EIGEN_INC_DIR}")
+          set(Eigen3_INCLUDE_DIRS "${EIGEN_INC_DIR}")
+          set(EIGEN3_VERSION_STRING "3.4.0")
+          set(Eigen3_VERSION "3.4.0")
+          EOF
+          echo "✅ Created Eigen3Config.cmake at $EIGEN_CMAKE_DIR"
+          echo "EIGEN3_DIR=$EIGEN_CMAKE_DIR" >> $GITHUB_ENV
+
+      # ============================================================
 
       - name: Verify OpenEXR files
         run: |
@@ -318,7 +346,8 @@ jobs:
             -DOPENIMAGEIO_ROOT_DIR="$PWD/lib/ios_arm64/openimageio" \
             -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
             -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}" \
-            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio"
+            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio" \
+            -DEigen3_DIR="$EIGEN3_DIR"
 
       - name: Build Blender.app for iOS
         run: |
