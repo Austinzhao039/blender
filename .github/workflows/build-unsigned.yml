@@ -146,7 +146,7 @@ jobs:
           EOF
           cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
 
-          # Eigen3
+          # Eigen3 (增强：确保目标存在并包含路径)
           EIGEN_INC=$(find "$LIB_BASE" -path "*/eigen3/Eigen" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$EIGEN_INC" ] && EIGEN_INC=$(find "$LIB_BASE" -name "Eigen" -type d 2>/dev/null | head -1 | xargs dirname)
           [ -z "$EIGEN_INC" ] && EIGEN_INC="/usr/include/eigen3"
@@ -160,18 +160,25 @@ jobs:
           set(Eigen3_INCLUDE_DIRS "${EIGEN_INC}")
           set(EIGEN3_VERSION_STRING "3.4.0")
           set(Eigen3_VERSION "3.4.0")
+          # 创建 IMPORTED 目标并设置包含路径
           if(NOT TARGET Eigen3::Eigen)
             add_library(Eigen3::Eigen UNKNOWN IMPORTED)
             set_target_properties(Eigen3::Eigen PROPERTIES
               INTERFACE_INCLUDE_DIRECTORIES "\${EIGEN3_INCLUDE_DIR}"
+              INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "\${EIGEN3_INCLUDE_DIR}"
             )
           endif()
+          # 也创建 Eigen3::Eigen3 别名
           if(NOT TARGET Eigen3::Eigen3)
             add_library(Eigen3::Eigen3 UNKNOWN IMPORTED)
             set_target_properties(Eigen3::Eigen3 PROPERTIES
               INTERFACE_INCLUDE_DIRECTORIES "\${EIGEN3_INCLUDE_DIR}"
+              INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "\${EIGEN3_INCLUDE_DIR}"
             )
           endif()
+          # 确保变量也传递
+          set(EIGEN3_INCLUDE_DIRS "${EIGEN_INC}")
+          set(Eigen3_INCLUDE_DIRS "${EIGEN_INC}")
           EOF
 
           # Ceres
@@ -434,6 +441,7 @@ jobs:
           sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
+      # ===== 关键修复：添加 Eigen 头文件路径到全局编译标志 =====
       - name: Generate Xcode project
         id: cmake_config
         run: |
@@ -462,6 +470,7 @@ jobs:
             -DCeres_DIR="$CERES_DIR" \
             -DBoost_DIR="$Boost_DIR" \
             -DTBB_DIR="$TBB_DIR" \
+            -DCMAKE_CXX_FLAGS="-isystem /usr/include/eigen3" \
             2>&1 | tee cmake_output.txt
 
       - name: Upload CMake output (always)
@@ -475,7 +484,6 @@ jobs:
             blender/build_ios/CMakeFiles/CMakeOutput.log
           retention-days: 7
 
-      # ===== 诊断步骤（仅用于调试，后续可用） =====
       - name: List build directory
         run: |
           echo "Contents of blender/build_ios:"
@@ -487,7 +495,6 @@ jobs:
         if: steps.cmake_config.outcome == 'success'
         run: |
           cd blender/build_ios
-          # 直接使用 Blender.xcodeproj（标准名称）
           xcodebuild \
             -project Blender.xcodeproj \
             -target install \
