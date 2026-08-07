@@ -30,13 +30,12 @@ jobs:
           echo "✅ fmt CMake config at $FMT_CMAKE_DIR"
 
       # ============================================================
-      # 1. 克隆 Blender 源码（跳过 LFS 避免速率限制）
+      # 1. 克隆 Blender 源码（跳过 LFS）
       # ============================================================
       - name: Clone Blender from official source (skip LFS)
         run: |
           GIT_LFS_SKIP_SMUDGE=1 git clone https://projects.blender.org/blender/blender.git -b ios --depth 1
           cd blender
-          # 不执行 git lfs pull，避免拉取测试数据
 
       - name: Fix submodule URLs
         run: |
@@ -44,9 +43,6 @@ jobs:
           sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
           git submodule sync --recursive
 
-      # ============================================================
-      # 1.5 验证 blender 目录是否存在（若失败则重试）
-      # ============================================================
       - name: Ensure blender directory exists
         run: |
           if [ ! -d "blender" ]; then
@@ -59,7 +55,7 @@ jobs:
           ls -la blender/
 
       # ============================================================
-      # 2. 下载 startup.blend（从 Release main2）
+      # 2. 下载 startup.blend（main2）
       # ============================================================
       - name: Download startup.blend from Release (main2)
         run: |
@@ -88,7 +84,7 @@ jobs:
           echo "✅ startup.blend ready"
 
       # ============================================================
-      # 3. 下载 macOS Python（from mainly）
+      # 3. 下载 macOS Python（mainly）
       # ============================================================
       - name: Download macOS Python from Release (mainly)
         run: |
@@ -117,7 +113,7 @@ jobs:
             ios-libs-
 
       # ============================================================
-      # 5. 克隆 iOS 预编译库（仅拉取 OpenEXR）
+      # 5. 克隆 iOS 预编译库（仅 OpenEXR）
       # ============================================================
       - name: Clone iOS precompiled libraries (cache miss)
         if: steps.cache-ios.outputs.cache-hit != 'true'
@@ -131,7 +127,7 @@ jobs:
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
       # ============================================================
-      # 6. 下载 OpenImageIO（from main）
+      # 6. 下载 OpenImageIO（main）
       # ============================================================
       - name: Download OpenImageIO from Release (main)
         run: |
@@ -147,7 +143,7 @@ jobs:
           echo "✅ OpenImageIO dynamic libraries ready"
 
       # ============================================================
-      # 7. 创建假的 CMake 配置文件（含 IMPORTED 目标）
+      # 7. 创建假的 CMake 配置文件
       # ============================================================
       - name: Create fake CMake config files
         run: |
@@ -472,7 +468,16 @@ jobs:
           fi
 
       # ============================================================
-      # 11. Setup Xcode
+      # 11. 修复 quadriflow 的 CMake 以包含 Eigen 路径
+      # ============================================================
+      - name: Fix quadriflow CMake to include Eigen
+        run: |
+          cd blender
+          echo 'include_directories(/usr/include/eigen3)' >> extern/quadriflow/CMakeLists.txt
+          echo "✅ Added Eigen include path to extern/quadriflow/CMakeLists.txt"
+
+      # ============================================================
+      # 12. Setup Xcode
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -486,7 +491,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 12. Generate Xcode project (确保 blender 目录存在)
+      # 13. Generate Xcode project
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -524,7 +529,7 @@ jobs:
             2>&1 | tee cmake_output.txt
 
       # ============================================================
-      # 13. Upload CMake output (always)
+      # 14. Upload CMake output (always)
       # ============================================================
       - name: Upload CMake output (always)
         if: always()
@@ -538,7 +543,7 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 14. Build Blender.app
+      # 15. Build Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
@@ -558,7 +563,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 15. Package IPA
+      # 16. Package IPA
       # ============================================================
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
@@ -578,7 +583,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 16. Upload IPA
+      # 17. Upload IPA
       # ============================================================
       - name: Upload IPA
         if: steps.cmake_config.outcome == 'success'
@@ -589,7 +594,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 17. Upload logs on failure
+      # 18. Upload logs on failure
       # ============================================================
       - name: Upload logs on failure
         if: failure()
