@@ -475,30 +475,21 @@ jobs:
             blender/build_ios/CMakeFiles/CMakeOutput.log
           retention-days: 7
 
-      # ===== 新增：诊断构建目录 =====
-      - name: List build directory and find project
+      # ===== 诊断步骤（仅用于调试，后续可用） =====
+      - name: List build directory
         run: |
           echo "Contents of blender/build_ios:"
           ls -la blender/build_ios/
-          echo "Looking for .xcodeproj files:"
-          find blender/build_ios -name "*.xcodeproj" -type d
-          # 保存项目路径供后续使用
-          PROJECT_PATH=$(find blender/build_ios -name "*.xcodeproj" -type d | head -1)
-          if [ -z "$PROJECT_PATH" ]; then
-            echo "❌ No Xcode project found!"
-            exit 1
-          fi
-          echo "PROJECT_PATH=$PROJECT_PATH" >> $GITHUB_ENV
-          echo "Found project: $PROJECT_PATH"
+          echo "Looking for Blender.xcodeproj:"
+          ls -la blender/build_ios/Blender.xcodeproj || echo "⚠️  Blender.xcodeproj not found!"
 
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
         run: |
           cd blender/build_ios
-          # 使用找到的项目路径（相对路径）
-          PROJECT_FILE=$(basename "$PROJECT_PATH")
+          # 直接使用 Blender.xcodeproj（标准名称）
           xcodebuild \
-            -project "$PROJECT_FILE" \
+            -project Blender.xcodeproj \
             -target install \
             -sdk iphoneos \
             -configuration Release \
