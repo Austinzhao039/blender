@@ -130,7 +130,6 @@ jobs:
           set(OPENIMAGEIO_LIBRARIES \${OPENIMAGEIO_LIBRARY})
           set(OpenImageIO_INCLUDE_DIRS \${OPENIMAGEIO_INCLUDE_DIR})
           set(OpenImageIO_LIBRARIES \${OPENIMAGEIO_LIBRARY})
-          # 条件创建目标，避免重复
           if(NOT TARGET OpenImageIO::OpenImageIO)
             add_library(OpenImageIO::OpenImageIO UNKNOWN IMPORTED)
             set_target_properties(OpenImageIO::OpenImageIO PROPERTIES
@@ -161,6 +160,19 @@ jobs:
           set(Eigen3_INCLUDE_DIRS "${EIGEN_INC}")
           set(EIGEN3_VERSION_STRING "3.4.0")
           set(Eigen3_VERSION "3.4.0")
+          # 创建 IMPORTED 目标供 Blender 使用
+          if(NOT TARGET Eigen3::Eigen)
+            add_library(Eigen3::Eigen UNKNOWN IMPORTED)
+            set_target_properties(Eigen3::Eigen PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "\${EIGEN3_INCLUDE_DIR}"
+            )
+          endif()
+          if(NOT TARGET Eigen3::Eigen3)
+            add_library(Eigen3::Eigen3 UNKNOWN IMPORTED)
+            set_target_properties(Eigen3::Eigen3 PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "\${EIGEN3_INCLUDE_DIR}"
+            )
+          endif()
           EOF
 
           # ===== Ceres =====
@@ -215,7 +227,6 @@ jobs:
           set(TBB_LIBRARIES "${TBB_LIB}")
           set(TBB_VERSION_STRING "2021.8.0")
           set(TBB_VERSION "2021.8.0")
-          # 条件创建目标，避免重复
           if(NOT TARGET TBB::tbb)
             add_library(TBB::tbb UNKNOWN IMPORTED)
             set_target_properties(TBB::tbb PROPERTIES
@@ -236,6 +247,54 @@ jobs:
             )
           endif()
           EOF
+
+          # ===== OpenEXR =====
+          OPENEXR_DIR="$LIB_BASE/openexr"
+          OPENEXR_INC="$OPENEXR_DIR/include/OpenEXR"
+          OPENEXR_LIB_FILE="$OPENEXR_DIR/lib/libOpenEXR.dylib"
+          cat > "$OPENEXR_DIR/OpenEXRConfig.cmake" <<EOF
+          set(OpenEXR_FOUND TRUE)
+          set(OPENEXR_FOUND TRUE)
+          set(OPENEXR_INCLUDE_DIR "${OPENEXR_INC}")
+          set(OPENEXR_LIBRARY "${OPENEXR_LIB_FILE}")
+          set(OPENEXR_LIBRARIES "${OPENEXR_LIB_FILE}")
+          set(OPENEXR_VERSION_STRING "3.1.0")
+          set(OpenEXR_VERSION "3.1.0")
+          # 创建 IMPORTED 目标
+          if(NOT TARGET OpenEXR::OpenEXR)
+            add_library(OpenEXR::OpenEXR UNKNOWN IMPORTED)
+            set_target_properties(OpenEXR::OpenEXR PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "\${OPENEXR_INCLUDE_DIR}"
+              IMPORTED_LOCATION "\${OPENEXR_LIBRARY}"
+            )
+          endif()
+          if(NOT TARGET OpenEXR::Iex)
+            add_library(OpenEXR::Iex UNKNOWN IMPORTED)
+            set_target_properties(OpenEXR::Iex PROPERTIES
+              IMPORTED_LOCATION "\${OPENEXR_LIBRARY}"
+            )
+          endif()
+          if(NOT TARGET OpenEXR::IlmThread)
+            add_library(OpenEXR::IlmThread UNKNOWN IMPORTED)
+            set_target_properties(OpenEXR::IlmThread PROPERTIES
+              IMPORTED_LOCATION "\${OPENEXR_LIBRARY}"
+            )
+          endif()
+          if(NOT TARGET OpenEXR::OpenEXRCore)
+            add_library(OpenEXR::OpenEXRCore UNKNOWN IMPORTED)
+            set_target_properties(OpenEXR::OpenEXRCore PROPERTIES
+              IMPORTED_LOCATION "\${OPENEXR_LIBRARY}"
+            )
+          endif()
+          if(NOT TARGET OpenEXR::OpenEXRUtil)
+            add_library(OpenEXR::OpenEXRUtil UNKNOWN IMPORTED)
+            set_target_properties(OpenEXR::OpenEXRUtil PROPERTIES
+              IMPORTED_LOCATION "\${OPENEXR_LIBRARY}"
+            )
+          endif()
+          EOF
+          # 同时复制到 openexr-config.cmake
+          cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
 
           echo "EIGEN3_DIR=$EIGEN_CMAKE_DIR" >> $GITHUB_ENV
           echo "CERES_DIR=$CERES_CMAKE_DIR" >> $GITHUB_ENV
@@ -367,23 +426,8 @@ jobs:
             exit 1
           fi
 
-      - name: Create OpenEXR config file
-        run: |
-          cd blender
-          LIB_BASE="$PWD/lib/ios_arm64"
-          OPENEXR_DIR="$LIB_BASE/openexr"
-          printf '%s\n' \
-            "# Fake OpenEXRConfig.cmake" \
-            "set(OpenEXR_FOUND TRUE)" \
-            "set(OPENEXR_FOUND TRUE)" \
-            "set(OPENEXR_INCLUDE_DIR \"${OPENEXR_INC_DIR}\")" \
-            "set(OPENEXR_LIBRARY \"${OPENEXR_LIB_FILE}\")" \
-            "set(OPENEXR_LIBRARIES \"${OPENEXR_LIB_FILE}\")" \
-            "set(OPENEXR_VERSION_STRING \"3.1.0\")" \
-            "set(OpenEXR_VERSION \"3.1.0\")" \
-            > "$OPENEXR_DIR/OpenEXRConfig.cmake"
-          cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
-          echo "✅ Created OpenEXRConfig.cmake"
+      # 注意：OpenEXR config 文件现在已经在 Create fake CMake config files 中一起创建了
+      # 所以跳过单独的 OpenEXR config 步骤
 
       - name: Setup Xcode
         run: |
