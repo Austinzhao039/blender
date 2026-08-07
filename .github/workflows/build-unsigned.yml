@@ -143,7 +143,7 @@ jobs:
           echo "✅ OpenImageIO dynamic libraries ready"
 
       # ============================================================
-      # 7. 创建假的 CMake 配置文件
+      # 7. 创建假的 CMake 配置文件 + 设置 EIGEN3_ROOT_DIR 环境变量
       # ============================================================
       - name: Create fake CMake config files
         run: |
@@ -181,10 +181,14 @@ jobs:
           EOF
           cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
 
-          # Eigen3
+          # Eigen3 - 计算路径并同时设置为 EIGEN3_ROOT_DIR
           EIGEN_INC=$(find "$LIB_BASE" -path "*/eigen3/Eigen" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$EIGEN_INC" ] && EIGEN_INC=$(find "$LIB_BASE" -name "Eigen" -type d 2>/dev/null | head -1 | xargs dirname)
           [ -z "$EIGEN_INC" ] && EIGEN_INC="/usr/include/eigen3"
+          echo "EIGEN_INC=$EIGEN_INC"  # 调试输出
+          # 关键：将 EIGEN3_ROOT_DIR 写入环境变量，让 FindEigen3.cmake 能找到
+          echo "EIGEN3_ROOT_DIR=$EIGEN_INC" >> $GITHUB_ENV
+
           EIGEN_CMAKE_DIR="$LIB_BASE/eigen3-config"
           mkdir -p "$EIGEN_CMAKE_DIR"
           cat > "$EIGEN_CMAKE_DIR/Eigen3Config.cmake" <<EOF
@@ -333,7 +337,7 @@ jobs:
           echo "Boost_DIR=$BOOST_CMAKE_DIR" >> $GITHUB_ENV
           echo "TBB_DIR=$TBB_CMAKE_DIR" >> $GITHUB_ENV
 
-          echo "✅ All fake config files created."
+          echo "✅ All fake config files created. EIGEN3_ROOT_DIR set to $EIGEN_INC"
 
       # ============================================================
       # 8. 验证 OpenEXR
@@ -468,16 +472,7 @@ jobs:
           fi
 
       # ============================================================
-      # 11. 修复 quadriflow 的 CMake 以包含 Eigen 路径
-      # ============================================================
-      - name: Fix quadriflow CMake to include Eigen
-        run: |
-          cd blender
-          echo 'include_directories(/usr/include/eigen3)' >> extern/quadriflow/CMakeLists.txt
-          echo "✅ Added Eigen include path to extern/quadriflow/CMakeLists.txt"
-
-      # ============================================================
-      # 12. Setup Xcode
+      # 11. Setup Xcode
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -491,7 +486,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 13. Generate Xcode project
+      # 12. Generate Xcode project
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -525,11 +520,10 @@ jobs:
             -DCeres_DIR="$CERES_DIR" \
             -DBoost_DIR="$Boost_DIR" \
             -DTBB_DIR="$TBB_DIR" \
-            -DCMAKE_CXX_FLAGS="-isystem /usr/include/eigen3" \
             2>&1 | tee cmake_output.txt
 
       # ============================================================
-      # 14. Upload CMake output (always)
+      # 13. Upload CMake output (always)
       # ============================================================
       - name: Upload CMake output (always)
         if: always()
@@ -543,7 +537,7 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 15. Build Blender.app
+      # 14. Build Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
@@ -563,7 +557,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 16. Package IPA
+      # 15. Package IPA
       # ============================================================
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
@@ -583,7 +577,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 17. Upload IPA
+      # 16. Upload IPA
       # ============================================================
       - name: Upload IPA
         if: steps.cmake_config.outcome == 'success'
@@ -594,7 +588,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 18. Upload logs on failure
+      # 17. Upload logs on failure
       # ============================================================
       - name: Upload logs on failure
         if: failure()
