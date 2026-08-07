@@ -437,16 +437,17 @@ jobs:
             exit 1
           fi
 
-      # ===== 核心修复：修改 quadriflow 的 CMakeLists.txt =====
+      # ===== 核心修复：使用可靠方式修改 quadriflow CMakeLists.txt =====
       - name: Patch quadriflow CMake to find Eigen
         run: |
           cd blender
-          # 在文件开头插入 find_package 和 include_directories
-          sed -i '1i\
-          find_package(Eigen3 REQUIRED)\
-          include_directories(${EIGEN3_INCLUDE_DIRS})
-          ' extern/quadriflow/CMakeLists.txt
-          # 验证修改
+          # 使用临时文件插入两行
+          {
+            echo 'find_package(Eigen3 REQUIRED)'
+            echo 'include_directories(${EIGEN3_INCLUDE_DIRS})'
+            cat extern/quadriflow/CMakeLists.txt
+          } > extern/quadriflow/CMakeLists.txt.new
+          mv extern/quadriflow/CMakeLists.txt.new extern/quadriflow/CMakeLists.txt
           echo "Modified extern/quadriflow/CMakeLists.txt:"
           head -10 extern/quadriflow/CMakeLists.txt
           echo "✅ Patched quadriflow CMakeLists.txt"
