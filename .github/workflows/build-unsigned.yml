@@ -161,11 +161,9 @@ jobs:
           echo "✅ Created Eigen3Config.cmake at $EIGEN_CMAKE_DIR"
           echo "EIGEN3_DIR=$EIGEN_CMAKE_DIR" >> $GITHUB_ENV
 
-      # ======================== 新增：Ceres 配置 ========================
       - name: Create fake CeresConfig.cmake
         run: |
           cd blender
-          # 查找 Ceres 头文件（通常在 lib/ios_arm64/ceres/include/ceres 或 lib/ios_arm64/include/ceres）
           CERES_INC_DIR=$(find "$PWD/lib/ios_arm64" -path "*/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
           if [ -z "$CERES_INC_DIR" ]; then
             CERES_INC_DIR=$(find "$PWD/lib/ios_arm64" -path "*/include/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
@@ -174,14 +172,13 @@ jobs:
             CERES_INC_DIR=$(find "$PWD/lib/ios_arm64" -type d -name "ceres" -exec test -f {}/ceres.h \; -print 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
           fi
           if [ -z "$CERES_INC_DIR" ]; then
-            echo "⚠️  Ceres headers not found, falling back to default lib/ios_arm64/ceres/include"
+            echo "⚠️  Ceres headers not found, fallback to lib/ios_arm64/ceres/include"
             CERES_INC_DIR="$PWD/lib/ios_arm64/ceres/include"
           fi
           echo "Ceres include dir: $CERES_INC_DIR"
-          # 查找 Ceres 库（libceres.a）
           CERES_LIB_FILE=$(find "$PWD/lib/ios_arm64" -name "libceres.a" 2>/dev/null | head -1)
           if [ -z "$CERES_LIB_FILE" ]; then
-            echo "⚠️  libceres.a not found, fallback to default path"
+            echo "⚠️  libceres.a not found, fallback to default"
             CERES_LIB_FILE="$PWD/lib/ios_arm64/ceres/lib/libceres.a"
           fi
           echo "Ceres library: $CERES_LIB_FILE"
@@ -203,8 +200,6 @@ jobs:
           echo "✅ Created CeresConfig.cmake at $CERES_CMAKE_DIR"
           echo "CERES_DIR=$CERES_CMAKE_DIR" >> $GITHUB_ENV
 
-      # ============================================================
-
       - name: Verify OpenEXR files
         run: |
           cd blender/lib/ios_arm64
@@ -218,8 +213,7 @@ jobs:
           fi
           echo "✅ OpenEXR is ready"
 
-      # 跳过 make_update.py
-
+      # ===== 修正：下载 iOS Python，保留 python3.13 子目录 =====
       - name: Download iOS Python 3.13 dynamic library from BeeWare
         run: |
           cd blender
@@ -239,10 +233,11 @@ jobs:
               exit 1
             fi
             if [ -d "$XCFRAMEWORK_BASE/include/python3.13" ]; then
-              cp -r "$XCFRAMEWORK_BASE/include/python3.13/"* lib/ios_arm64/python/include/
-              echo "✅ Copied headers"
+              # 保留 python3.13 子目录
+              cp -r "$XCFRAMEWORK_BASE/include/python3.13" lib/ios_arm64/python/include/
+              echo "✅ Copied headers with python3.13 subdir"
             else
-              echo "❌ Headers not found!"
+              echo "❌ Headers directory not found!"
               exit 1
             fi
           else
@@ -256,18 +251,20 @@ jobs:
             echo "❌ iOS Python 3.13 dynamic library not found!"
             exit 1
           fi
-          if [ -f "lib/ios_arm64/python/include/Python.h" ]; then
+          if [ -f "lib/ios_arm64/python/include/python3.13/Python.h" ]; then
             echo "✅ iOS Python headers installed!"
           else
             echo "❌ iOS Python headers not found!"
             exit 1
           fi
 
+      # ===== 修正：动态查找库路径，更新 PYTHON_INC_DIR =====
       - name: Locate library paths dynamically
         id: locate_libs
         run: |
           cd blender
           LIB_BASE="$PWD/lib/ios_arm64"
+          # ---- Python ----
           PYTHON_LIB="$LIB_BASE/python/lib/libpython3.13.dylib"
           if [ -f "$PYTHON_LIB" ]; then
             PYTHON_LIB_DIR=$(dirname "$PYTHON_LIB")
@@ -277,7 +274,8 @@ jobs:
             echo "❌ Python library not found!"
             exit 1
           fi
-          PYTHON_INC="$LIB_BASE/python/include/Python.h"
+          # Python 头文件现在位于 python3.13 子目录
+          PYTHON_INC="$LIB_BASE/python/include/python3.13/Python.h"
           if [ -f "$PYTHON_INC" ]; then
             PYTHON_INC_DIR=$(dirname "$PYTHON_INC")
             echo "PYTHON_INC_DIR=$PYTHON_INC_DIR" >> $GITHUB_ENV
@@ -286,6 +284,7 @@ jobs:
             echo "❌ Python headers not found!"
             exit 1
           fi
+          # ---- OpenEXR ----
           OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.dylib" -type f | head -1)
           if [ -n "$OPENEXR_LIB" ]; then
             OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
@@ -313,6 +312,7 @@ jobs:
             echo "❌ OpenEXR headers not found!"
             exit 1
           fi
+          # ---- OpenImageIO ----
           OIIO_LIB="$LIB_BASE/openimageio/lib/libOpenImageIO.dylib"
           if [ -f "$OIIO_LIB" ]; then
             OIIO_LIB_DIR=$(dirname "$OIIO_LIB")
