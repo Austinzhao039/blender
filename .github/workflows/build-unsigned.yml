@@ -115,7 +115,7 @@ jobs:
           cd blender
           LIB_BASE="$PWD/lib/ios_arm64"
 
-          # OpenImageIO
+          # ===== OpenImageIO =====
           OIIO_DIR="$LIB_BASE/openimageio"
           mkdir -p "$OIIO_DIR"
           cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<EOF
@@ -130,20 +130,24 @@ jobs:
           set(OPENIMAGEIO_LIBRARIES \${OPENIMAGEIO_LIBRARY})
           set(OpenImageIO_INCLUDE_DIRS \${OPENIMAGEIO_INCLUDE_DIR})
           set(OpenImageIO_LIBRARIES \${OPENIMAGEIO_LIBRARY})
-          # 创建 IMPORTED 目标
-          add_library(OpenImageIO::OpenImageIO UNKNOWN IMPORTED)
-          set_target_properties(OpenImageIO::OpenImageIO PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES "\${OPENIMAGEIO_INCLUDE_DIR}"
-            IMPORTED_LOCATION "\${OPENIMAGEIO_LIBRARY}"
-          )
-          add_library(OpenImageIO::oiiotool UNKNOWN IMPORTED)
-          set_target_properties(OpenImageIO::oiiotool PROPERTIES
-            IMPORTED_LOCATION "\${OPENIMAGEIO_LIBRARY}"
-          )
+          # 条件创建目标，避免重复
+          if(NOT TARGET OpenImageIO::OpenImageIO)
+            add_library(OpenImageIO::OpenImageIO UNKNOWN IMPORTED)
+            set_target_properties(OpenImageIO::OpenImageIO PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "\${OPENIMAGEIO_INCLUDE_DIR}"
+              IMPORTED_LOCATION "\${OPENIMAGEIO_LIBRARY}"
+            )
+          endif()
+          if(NOT TARGET OpenImageIO::oiiotool)
+            add_library(OpenImageIO::oiiotool UNKNOWN IMPORTED)
+            set_target_properties(OpenImageIO::oiiotool PROPERTIES
+              IMPORTED_LOCATION "\${OPENIMAGEIO_LIBRARY}"
+            )
+          endif()
           EOF
           cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
 
-          # Eigen3
+          # ===== Eigen3 =====
           EIGEN_INC=$(find "$LIB_BASE" -path "*/eigen3/Eigen" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$EIGEN_INC" ] && EIGEN_INC=$(find "$LIB_BASE" -name "Eigen" -type d 2>/dev/null | head -1 | xargs dirname)
           [ -z "$EIGEN_INC" ] && EIGEN_INC="/usr/include/eigen3"
@@ -159,7 +163,7 @@ jobs:
           set(Eigen3_VERSION "3.4.0")
           EOF
 
-          # Ceres
+          # ===== Ceres =====
           CERES_INC=$(find "$LIB_BASE" -path "*/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$CERES_INC" ] && CERES_INC="$LIB_BASE/ceres/include"
           CERES_LIB=$(find "$LIB_BASE" -name "libceres.a" 2>/dev/null | head -1)
@@ -180,7 +184,7 @@ jobs:
           set(Ceres_VERSION "2.0.0")
           EOF
 
-          # Boost
+          # ===== Boost (header-only) =====
           BOOST_INC=$(find "$LIB_BASE" -path "*/boost/version.hpp" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$BOOST_INC" ] && BOOST_INC="$LIB_BASE/boost/include"
           BOOST_CMAKE_DIR="$LIB_BASE/boost-config"
@@ -196,7 +200,7 @@ jobs:
           EOF
           cp "$BOOST_CMAKE_DIR/BoostConfig.cmake" "$BOOST_CMAKE_DIR/boost-config.cmake"
 
-          # TBB
+          # ===== TBB =====
           TBB_INC=$(find "$LIB_BASE" -path "*/tbb/tbb.h" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$TBB_INC" ] && TBB_INC="$LIB_BASE/tbb/include"
           TBB_LIB=$(find "$LIB_BASE" -name "libtbb.a" 2>/dev/null | head -1)
@@ -211,20 +215,26 @@ jobs:
           set(TBB_LIBRARIES "${TBB_LIB}")
           set(TBB_VERSION_STRING "2021.8.0")
           set(TBB_VERSION "2021.8.0")
-          # 创建 IMPORTED 目标
-          add_library(TBB::tbb UNKNOWN IMPORTED)
-          set_target_properties(TBB::tbb PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES "\${TBB_INCLUDE_DIR}"
-            IMPORTED_LOCATION "\${TBB_LIBRARY}"
-          )
-          add_library(TBB::tbbmalloc UNKNOWN IMPORTED)
-          set_target_properties(TBB::tbbmalloc PROPERTIES
-            IMPORTED_LOCATION "\${TBB_LIBRARY}"
-          )
-          add_library(TBB::tbbmalloc_proxy UNKNOWN IMPORTED)
-          set_target_properties(TBB::tbbmalloc_proxy PROPERTIES
-            IMPORTED_LOCATION "\${TBB_LIBRARY}"
-          )
+          # 条件创建目标，避免重复
+          if(NOT TARGET TBB::tbb)
+            add_library(TBB::tbb UNKNOWN IMPORTED)
+            set_target_properties(TBB::tbb PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "\${TBB_INCLUDE_DIR}"
+              IMPORTED_LOCATION "\${TBB_LIBRARY}"
+            )
+          endif()
+          if(NOT TARGET TBB::tbbmalloc)
+            add_library(TBB::tbbmalloc UNKNOWN IMPORTED)
+            set_target_properties(TBB::tbbmalloc PROPERTIES
+              IMPORTED_LOCATION "\${TBB_LIBRARY}"
+            )
+          endif()
+          if(NOT TARGET TBB::tbbmalloc_proxy)
+            add_library(TBB::tbbmalloc_proxy UNKNOWN IMPORTED)
+            set_target_properties(TBB::tbbmalloc_proxy PROPERTIES
+              IMPORTED_LOCATION "\${TBB_LIBRARY}"
+            )
+          endif()
           EOF
 
           echo "EIGEN3_DIR=$EIGEN_CMAKE_DIR" >> $GITHUB_ENV
