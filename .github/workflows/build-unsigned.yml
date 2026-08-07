@@ -110,13 +110,12 @@ jobs:
           fi
           echo "✅ OpenImageIO dynamic libraries ready"
 
-      # ---- 假配置文件生成（OpenImageIO, Eigen3, Ceres, Boost, TBB） ----
       - name: Create fake CMake config files
         run: |
           cd blender
           LIB_BASE="$PWD/lib/ios_arm64"
 
-          # 1. OpenImageIO
+          # OpenImageIO
           OIIO_DIR="$LIB_BASE/openimageio"
           mkdir -p "$OIIO_DIR"
           cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<EOF
@@ -134,7 +133,7 @@ jobs:
           EOF
           cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
 
-          # 2. Eigen3
+          # Eigen3
           EIGEN_INC=$(find "$LIB_BASE" -path "*/eigen3/Eigen" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$EIGEN_INC" ] && EIGEN_INC=$(find "$LIB_BASE" -name "Eigen" -type d 2>/dev/null | head -1 | xargs dirname)
           [ -z "$EIGEN_INC" ] && EIGEN_INC="/usr/include/eigen3"
@@ -150,7 +149,7 @@ jobs:
           set(Eigen3_VERSION "3.4.0")
           EOF
 
-          # 3. Ceres
+          # Ceres
           CERES_INC=$(find "$LIB_BASE" -path "*/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$CERES_INC" ] && CERES_INC="$LIB_BASE/ceres/include"
           CERES_LIB=$(find "$LIB_BASE" -name "libceres.a" 2>/dev/null | head -1)
@@ -171,7 +170,7 @@ jobs:
           set(Ceres_VERSION "2.0.0")
           EOF
 
-          # 4. Boost (header-only maybe)
+          # Boost (header-only)
           BOOST_INC=$(find "$LIB_BASE" -path "*/boost/version.hpp" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$BOOST_INC" ] && BOOST_INC="$LIB_BASE/boost/include"
           BOOST_CMAKE_DIR="$LIB_BASE/boost-config"
@@ -182,11 +181,12 @@ jobs:
           set(Boost_INCLUDE_DIRS "${BOOST_INC}")
           set(Boost_VERSION_STRING "1.80.0")
           set(Boost_VERSION "1.80.0")
+          set(Boost_LIBRARY_DIRS "")
+          set(Boost_LIBRARIES "")
           EOF
-          # 也创建一个 BoostConfig.cmake 用于兼容
           cp "$BOOST_CMAKE_DIR/BoostConfig.cmake" "$BOOST_CMAKE_DIR/boost-config.cmake"
 
-          # 5. TBB (OneTBB)
+          # TBB
           TBB_INC=$(find "$LIB_BASE" -path "*/tbb/tbb.h" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$TBB_INC" ] && TBB_INC="$LIB_BASE/tbb/include"
           TBB_LIB=$(find "$LIB_BASE" -name "libtbb.a" 2>/dev/null | head -1)
@@ -203,7 +203,6 @@ jobs:
           set(TBB_VERSION "2021.8.0")
           EOF
 
-          # 保存路径到环境变量
           echo "EIGEN3_DIR=$EIGEN_CMAKE_DIR" >> $GITHUB_ENV
           echo "CERES_DIR=$CERES_CMAKE_DIR" >> $GITHUB_ENV
           echo "Boost_DIR=$BOOST_CMAKE_DIR" >> $GITHUB_ENV
@@ -390,12 +389,18 @@ jobs:
             -DEigen3_DIR="$EIGEN3_DIR" \
             -DCeres_DIR="$CERES_DIR" \
             -DBoost_DIR="$Boost_DIR" \
-            -DTBB_DIR="$TBB_DIR"
-        continue-on-error: true
+            -DTBB_DIR="$TBB_DIR" \
+            2>&1 | tee cmake_output.txt
+          if [ $? -ne 0 ]; then
+            echo "CMake configuration failed. See cmake_output.txt for details."
+            exit 1
+          fi
 
       - name: Print CMake error logs if failed
         if: steps.cmake_config.outcome == 'failure'
         run: |
+          echo "==================== CMake stdout/stderr ===================="
+          cat blender/cmake_output.txt 2>/dev/null || echo "No cmake_output.txt"
           echo "==================== CMakeError.log ===================="
           cat blender/build_ios/CMakeFiles/CMakeError.log 2>/dev/null || echo "No CMakeError.log"
           echo "==================== CMakeOutput.log ===================="
