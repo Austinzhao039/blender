@@ -10,16 +10,418 @@ jobs:
 
     steps:
       # ============================================================
-      # 前面的步骤与 #119 完全相同（安装依赖、克隆、下载库、创建假配置等）
-      # 省略重复内容，实际使用时请从 #119 复制完整内容。
-      # 这里只展示从 Generate Xcode project 开始的改动部分。
+      # 0. 安装依赖
       # ============================================================
+      - name: Install dependencies
+        run: |
+          brew install git-lfs cmake fmt
+          git lfs install
+          if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
+            echo "❌ fmt not installed correctly!"
+            exit 1
+          fi
+          echo "✅ fmt installed at /opt/homebrew/lib/libfmt.a"
+          FMT_CMAKE_DIR=$(find /opt/homebrew -name "fmt-config.cmake" 2>/dev/null | head -1 | xargs dirname)
+          if [ -z "$FMT_CMAKE_DIR" ]; then
+            echo "❌ fmt CMake config not found!"
+            exit 1
+          fi
+          echo "FMT_CMAKE_DIR=$FMT_CMAKE_DIR" >> $GITHUB_ENV
+          echo "✅ fmt CMake config at $FMT_CMAKE_DIR"
 
+      # ============================================================
+      # 1. 克隆 Blender 源码（跳过 LFS）
+      # ============================================================
+      - name: Clone Blender from official source (skip LFS)
+        run: |
+          rm -rf blender
+          GIT_LFS_SKIP_SMUDGE=1 git clone https://projects.blender.org/blender/blender.git -b ios --depth 1
+          cd blender
+
+      - name: Fix submodule URLs
+        run: |
+          cd blender
+          sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
+          git submodule sync --recursive
+
+      # ============================================================
+      # 2. 下载 startup.blend（main2）
+      # ============================================================
+      - name: Download startup.blend from Release (main2)
+        run: |
+          cd blender
+          mkdir -p release/datafiles
+          curl -L -o startup.zip https://github.com/Austinzhao039/blender/releases/download/main2/startup.zip
+          unzip -o startup.zip
+          rm startup.zip
+          if [ -f "startup.blend" ]; then
+            mv startup.blend release/datafiles/
+          fi
+          if [ -d "datafiles" ] && [ -f "datafiles/startup.blend" ]; then
+            mv datafiles/* release/datafiles/ 2>/dev/null || true
+            rmdir datafiles 2>/dev/null || true
+          fi
+          if [ ! -f "release/datafiles/startup.blend" ]; then
+            git lfs pull --include="release/datafiles/startup.blend"
+          fi
+          if [ ! -f "release/datafiles/startup.blend" ]; then
+            echo "❌ startup.blend still missing!"
+            exit 1
+          fi
+          echo "✅ startup.blend ready"
+
+      # ============================================================
+      # 3. 下载 macOS Python（mainly）
+      # ============================================================
+      - name: Download macOS Python from Release (mainly)
+        run: |
+          cd blender
+          mkdir -p lib/macos_arm64/python/bin
+          curl -L -o macos-python.zip https://github.com/Austinzhao039/blender/releases/download/mainly/macos-python.zip
+          unzip -o macos-python.zip
+          rm macos-python.zip
+          chmod +x lib/macos_arm64/python/bin/python3.13
+          if [ ! -f "lib/macos_arm64/python/bin/python3.13" ]; then
+            echo "❌ macOS Python still missing!"
+            exit 1
+          fi
+          echo "✅ macOS Python ready"
+
+      # ============================================================
+      # 4. 缓存 iOS 库
+      # ============================================================
+      - name: Cache iOS libraries
+        id: cache-ios
+        uses: actions/cache@v4
+        with:
+          path: blender/lib/ios_arm64
+          key: ios-libs-${{ hashFiles('blender/.gitmodules') }}
+          restore-keys: |
+            ios-libs-
+
+      # ============================================================
+      # 5. 克隆 iOS 预编译库（仅 OpenEXR）
+      # ============================================================
+      - name: Clone iOS precompiled libraries (cache miss)
+        if: steps.cache-ios.outputs.cache-hit != 'true'
+        run: |
+          cd blender
+          rm -rf lib/ios_arm64
+          git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
+          cd lib/ios_arm64
+          git lfs pull --include="openexr/**"
+          cd ../..
+          echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
+
+      # ============================================================
+      # 6. 下载 OpenImageIO（main）
+      # ============================================================
+      - name: Download OpenImageIO from Release (main)
+        run: |
+          cd blender/lib/ios_arm64/openimageio/lib/
+          curl -L -o openimageio-libs.zip https://github.com/Austinzhao039/blender/releases/download/main/openimageio-libs.zip
+          unzip -o openimageio-libs.zip
+          rm openimageio-libs.zip
+          ls -lh libOpenImageIO*.dylib
+          if [ ! -f libOpenImageIO.dylib ] || [ $(stat -f%z libOpenImageIO.dylib) -lt 1000000 ]; then
+            echo "❌ libOpenImageIO.dylib missing or too small!"
+            exit 1
+          fi
+          echo "✅ OpenImageIO dynamic libraries ready"
+
+      # ============================================================
+      # 7. 🚀 核心修复：复制 Eigen 头文件到 quadriflow 源码目录
+      # ============================================================
+      - name: Copy Eigen headers to quadriflow source
+        run: |
+          cd blender
+          # 从主仓库的 extern/Eigen3 复制 Eigen 头文件
+          if [ -d "extern/Eigen3/Eigen" ]; then
+            echo "📁 Found Eigen in extern/Eigen3"
+            mkdir -p extern/quadriflow/src/Eigen
+            cp -r extern/Eigen3/Eigen/* extern/quadriflow/src/Eigen/
+          else
+            # 如果 extern/Eigen3 不存在，从系统路径复制（备选）
+            echo "⚠️  extern/Eigen3 not found, using system Eigen"
+            sudo mkdir -p extern/quadriflow/src/Eigen
+            sudo cp -r /usr/include/eigen3/Eigen/* extern/quadriflow/src/Eigen/
+          fi
+          # 验证
+          if [ -f "extern/quadriflow/src/Eigen/Core" ]; then
+            echo "✅ Eigen headers copied to extern/quadriflow/src/Eigen/"
+          else
+            echo "❌ Eigen headers copy failed!"
+            exit 1
+          fi
+
+      # ============================================================
+      # 8. 创建假的 CMake 配置文件
+      # ============================================================
+      - name: Create fake CMake config files
+        run: |
+          cd blender
+          LIB_BASE="$PWD/lib/ios_arm64"
+
+          # OpenImageIO
+          OIIO_DIR="$LIB_BASE/openimageio"
+          mkdir -p "$OIIO_DIR"
+          cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<'EOF'
+          set(OpenImageIO_FOUND TRUE)
+          set(OPENIMAGEIO_FOUND TRUE)
+          set(OPENIMAGEIO_INCLUDE_DIR "${OIIO_DIR}/include")
+          set(OPENIMAGEIO_LIBRARY "${OIIO_DIR}/lib/libOpenImageIO.dylib")
+          set(OPENIMAGEIO_LIBRARIES ${OPENIMAGEIO_LIBRARY})
+          set(OPENIMAGEIO_VERSION_STRING "2.5.0")
+          set(OpenImageIO_VERSION "2.5.0")
+          if(NOT TARGET OpenImageIO::OpenImageIO)
+            add_library(OpenImageIO::OpenImageIO UNKNOWN IMPORTED)
+            set_target_properties(OpenImageIO::OpenImageIO PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${OPENIMAGEIO_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${OPENIMAGEIO_LIBRARY}"
+            )
+          endif()
+          EOF
+          cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
+
+          # OpenEXR
+          OPENEXR_DIR="$LIB_BASE/openexr"
+          OPENEXR_INC="$OPENEXR_DIR/include/OpenEXR"
+          OPENEXR_LIB_FILE="$OPENEXR_DIR/lib/libOpenEXR.dylib"
+          cat > "$OPENEXR_DIR/OpenEXRConfig.cmake" <<'EOF'
+          set(OpenEXR_FOUND TRUE)
+          set(OPENEXR_FOUND TRUE)
+          set(OPENEXR_INCLUDE_DIR "${OPENEXR_INC}")
+          set(OPENEXR_LIBRARY "${OPENEXR_LIB_FILE}")
+          set(OPENEXR_LIBRARIES "${OPENEXR_LIB_FILE}")
+          set(OPENEXR_VERSION_STRING "3.1.0")
+          set(OpenEXR_VERSION "3.1.0")
+          if(NOT TARGET OpenEXR::OpenEXR)
+            add_library(OpenEXR::OpenEXR UNKNOWN IMPORTED)
+            set_target_properties(OpenEXR::OpenEXR PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${OPENEXR_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${OPENEXR_LIBRARY}"
+            )
+          endif()
+          EOF
+          cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
+
+          # Ceres
+          CERES_INC=$(find "$LIB_BASE" -path "*/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
+          [ -z "$CERES_INC" ] && CERES_INC="$LIB_BASE/ceres/include"
+          CERES_LIB=$(find "$LIB_BASE" -name "libceres.a" 2>/dev/null | head -1)
+          [ -z "$CERES_LIB" ] && CERES_LIB="$LIB_BASE/ceres/lib/libceres.a"
+          CERES_CMAKE_DIR="$LIB_BASE/ceres-config"
+          mkdir -p "$CERES_CMAKE_DIR"
+          cat > "$CERES_CMAKE_DIR/CeresConfig.cmake" <<'EOF'
+          set(Ceres_FOUND TRUE)
+          set(CERES_INCLUDE_DIR "${CERES_INC}")
+          set(CERES_INCLUDE_DIRS "${CERES_INC}")
+          set(Ceres_INCLUDE_DIR "${CERES_INC}")
+          set(Ceres_INCLUDE_DIRS "${CERES_INC}")
+          set(CERES_LIBRARY "${CERES_LIB}")
+          set(CERES_LIBRARIES "${CERES_LIB}")
+          set(Ceres_LIBRARY "${CERES_LIB}")
+          set(Ceres_LIBRARIES "${CERES_LIB}")
+          set(CERES_VERSION_STRING "2.0.0")
+          set(Ceres_VERSION "2.0.0")
+          EOF
+
+          # Boost
+          BOOST_INC=$(find "$LIB_BASE" -path "*/boost/version.hpp" -printf "%h\n" 2>/dev/null | head -1)
+          [ -z "$BOOST_INC" ] && BOOST_INC="$LIB_BASE/boost/include"
+          BOOST_CMAKE_DIR="$LIB_BASE/boost-config"
+          mkdir -p "$BOOST_CMAKE_DIR"
+          cat > "$BOOST_CMAKE_DIR/BoostConfig.cmake" <<'EOF'
+          set(Boost_FOUND TRUE)
+          set(Boost_INCLUDE_DIR "${BOOST_INC}")
+          set(Boost_INCLUDE_DIRS "${BOOST_INC}")
+          set(Boost_VERSION_STRING "1.80.0")
+          set(Boost_VERSION "1.80.0")
+          set(Boost_LIBRARY_DIRS "")
+          set(Boost_LIBRARIES "")
+          EOF
+          cp "$BOOST_CMAKE_DIR/BoostConfig.cmake" "$BOOST_CMAKE_DIR/boost-config.cmake"
+
+          # TBB
+          TBB_INC=$(find "$LIB_BASE" -path "*/tbb/tbb.h" -printf "%h\n" 2>/dev/null | head -1)
+          [ -z "$TBB_INC" ] && TBB_INC="$LIB_BASE/tbb/include"
+          TBB_LIB=$(find "$LIB_BASE" -name "libtbb.a" 2>/dev/null | head -1)
+          [ -z "$TBB_LIB" ] && TBB_LIB="$LIB_BASE/tbb/lib/libtbb.a"
+          TBB_CMAKE_DIR="$LIB_BASE/tbb-config"
+          mkdir -p "$TBB_CMAKE_DIR"
+          cat > "$TBB_CMAKE_DIR/TBBConfig.cmake" <<'EOF'
+          set(TBB_FOUND TRUE)
+          set(TBB_INCLUDE_DIR "${TBB_INC}")
+          set(TBB_INCLUDE_DIRS "${TBB_INC}")
+          set(TBB_LIBRARY "${TBB_LIB}")
+          set(TBB_LIBRARIES "${TBB_LIB}")
+          set(TBB_VERSION_STRING "2021.8.0")
+          set(TBB_VERSION "2021.8.0")
+          if(NOT TARGET TBB::tbb)
+            add_library(TBB::tbb UNKNOWN IMPORTED)
+            set_target_properties(TBB::tbb PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${TBB_LIBRARY}"
+            )
+          endif()
+          EOF
+
+          echo "CERES_DIR=$CERES_CMAKE_DIR" >> $GITHUB_ENV
+          echo "Boost_DIR=$BOOST_CMAKE_DIR" >> $GITHUB_ENV
+          echo "TBB_DIR=$TBB_CMAKE_DIR" >> $GITHUB_ENV
+          echo "✅ All fake config files created."
+
+      # ============================================================
+      # 9. 验证 OpenEXR
+      # ============================================================
+      - name: Verify OpenEXR files
+        run: |
+          cd blender/lib/ios_arm64
+          if [ ! -f "openexr/lib/libOpenEXR.dylib" ] && [ ! -f "openexr/lib/libOpenEXR.a" ]; then
+            git lfs pull --include="openexr/**"
+          fi
+          if [ ! -f "openexr/lib/libOpenEXR.dylib" ] && [ ! -f "openexr/lib/libOpenEXR.a" ]; then
+            echo "❌ OpenEXR library still missing!"
+            exit 1
+          fi
+          echo "✅ OpenEXR is ready"
+
+      # ============================================================
+      # 10. 下载 iOS Python
+      # ============================================================
+      - name: Download iOS Python 3.13 dynamic library from BeeWare
+        run: |
+          cd blender
+          mkdir -p lib/ios_arm64/python/lib
+          mkdir -p lib/ios_arm64/python/include
+          curl -L -o python-ios.tar.gz \
+            https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-iOS-support.b14.tar.gz
+          mkdir -p python_temp
+          tar -xzf python-ios.tar.gz -C python_temp/
+          XCFRAMEWORK_BASE="python_temp/Python.xcframework/ios-arm64"
+          if [ -d "$XCFRAMEWORK_BASE" ]; then
+            if [ -f "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" ]; then
+              cp "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" lib/ios_arm64/python/lib/
+            else
+              echo "❌ libpython3.13.dylib not found!"
+              exit 1
+            fi
+            if [ -d "$XCFRAMEWORK_BASE/include/python3.13" ]; then
+              cp -r "$XCFRAMEWORK_BASE/include/python3.13" lib/ios_arm64/python/include/
+            else
+              echo "❌ Headers directory not found!"
+              exit 1
+            fi
+          else
+            echo "❌ XCFramework not found!"
+            exit 1
+          fi
+          rm -rf python_temp python-ios.tar.gz
+          if [ ! -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
+            echo "❌ iOS Python dynamic library not found!"
+            exit 1
+          fi
+          if [ ! -f "lib/ios_arm64/python/include/python3.13/Python.h" ]; then
+            echo "❌ iOS Python headers not found!"
+            exit 1
+          fi
+          echo "✅ iOS Python installed"
+
+      # ============================================================
+      # 11. 动态查找路径
+      # ============================================================
+      - name: Locate library paths dynamically
+        id: locate_libs
+        run: |
+          cd blender
+          LIB_BASE="$PWD/lib/ios_arm64"
+          PYTHON_LIB="$LIB_BASE/python/lib/libpython3.13.dylib"
+          if [ -f "$PYTHON_LIB" ]; then
+            PYTHON_LIB_DIR=$(dirname "$PYTHON_LIB")
+            echo "PYTHON_LIB_DIR=$PYTHON_LIB_DIR" >> $GITHUB_ENV
+            echo "✅ Python library: $PYTHON_LIB"
+          else
+            echo "❌ Python library not found!"
+            exit 1
+          fi
+          PYTHON_INC="$LIB_BASE/python/include/python3.13/Python.h"
+          if [ -f "$PYTHON_INC" ]; then
+            PYTHON_INC_DIR=$(dirname "$PYTHON_INC")
+            echo "PYTHON_INC_DIR=$PYTHON_INC_DIR" >> $GITHUB_ENV
+            echo "✅ Python headers: $PYTHON_INC"
+          else
+            echo "❌ Python headers not found!"
+            exit 1
+          fi
+          OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.dylib" -type f | head -1)
+          if [ -n "$OPENEXR_LIB" ]; then
+            OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
+            echo "OPENEXR_LIB_DIR=$OPENEXR_LIB_DIR" >> $GITHUB_ENV
+            echo "OPENEXR_LIB_FILE=$OPENEXR_LIB" >> $GITHUB_ENV
+            echo "✅ OpenEXR library: $OPENEXR_LIB"
+          else
+            OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.a" -type f | head -1)
+            if [ -n "$OPENEXR_LIB" ]; then
+              OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
+              echo "OPENEXR_LIB_DIR=$OPENEXR_LIB_DIR" >> $GITHUB_ENV
+              echo "OPENEXR_LIB_FILE=$OPENEXR_LIB" >> $GITHUB_ENV
+              echo "✅ OpenEXR library (static): $OPENEXR_LIB"
+            else
+              echo "❌ OpenEXR library not found!"
+              exit 1
+            fi
+          fi
+          OPENEXR_INC="$LIB_BASE/openexr/include/OpenEXR/OpenEXRConfig.h"
+          if [ -f "$OPENEXR_INC" ]; then
+            OPENEXR_INC_DIR=$(dirname "$OPENEXR_INC")
+            echo "OPENEXR_INC_DIR=$OPENEXR_INC_DIR" >> $GITHUB_ENV
+            echo "✅ OpenEXR headers: $OPENEXR_INC"
+          else
+            echo "❌ OpenEXR headers not found!"
+            exit 1
+          fi
+          OIIO_LIB="$LIB_BASE/openimageio/lib/libOpenImageIO.dylib"
+          if [ -f "$OIIO_LIB" ]; then
+            OIIO_LIB_DIR=$(dirname "$OIIO_LIB")
+            echo "OIIO_LIB_DIR=$OIIO_LIB_DIR" >> $GITHUB_ENV
+            echo "OIIO_LIB_FILE=$OIIO_LIB" >> $GITHUB_ENV
+            echo "✅ OpenImageIO library: $OIIO_LIB"
+          else
+            echo "❌ OpenImageIO library not found!"
+            exit 1
+          fi
+          OIIO_INC="$LIB_BASE/openimageio/include/OpenImageIO"
+          if [ -d "$OIIO_INC" ]; then
+            OIIO_INC_DIR=$(dirname "$OIIO_INC")
+            echo "OIIO_INC_DIR=$OIIO_INC_DIR" >> $GITHUB_ENV
+            echo "✅ OpenImageIO headers: $OIIO_INC"
+          else
+            echo "❌ OpenImageIO headers not found!"
+            exit 1
+          fi
+
+      # ============================================================
+      # 12. Setup Xcode
+      # ============================================================
+      - name: Setup Xcode
+        run: |
+          XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
+          if [ -z "$XCODE_APP" ]; then
+            echo "No Xcode found!"
+            exit 1
+          fi
+          echo "Using Xcode: $XCODE_APP"
+          sudo xcode-select -s "/Applications/$XCODE_APP"
+          xcodebuild -version
+
+      # ============================================================
+      # 13. 生成 Xcode 项目
+      # ============================================================
       - name: Generate Xcode project
         id: cmake_config
         run: |
           if [ ! -d "blender" ]; then
-            echo "❌ blender directory missing! Please check clone step."
+            echo "❌ blender directory missing!"
             exit 1
           fi
           cd blender
@@ -43,7 +445,6 @@ jobs:
             -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
             -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}" \
             -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio" \
-            -DEigen3_DIR="$EIGEN3_DIR" \
             -DCeres_DIR="$CERES_DIR" \
             -DBoost_DIR="$Boost_DIR" \
             -DTBB_DIR="$TBB_DIR" \
@@ -61,7 +462,7 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 关键改动：Build 步骤添加 HEADER_SEARCH_PATHS
+      # 14. 编译
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
@@ -78,9 +479,11 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             ARCHS=arm64 \
-            ONLY_ACTIVE_ARCH=NO \
-            HEADER_SEARCH_PATHS="/usr/include/eigen3"
+            ONLY_ACTIVE_ARCH=NO
 
+      # ============================================================
+      # 15. 打包 IPA
+      # ============================================================
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
         run: |
@@ -98,6 +501,9 @@ jobs:
           cd IPA && zip -r ../Blender.ipa Payload/ && cd ..
           ls -lh Blender.ipa
 
+      # ============================================================
+      # 16. 上传 IPA
+      # ============================================================
       - name: Upload IPA
         if: steps.cmake_config.outcome == 'success'
         uses: actions/upload-artifact@v4
@@ -106,6 +512,9 @@ jobs:
           path: blender/build_ios/Blender.ipa
           retention-days: 30
 
+      # ============================================================
+      # 17. 失败时上传日志
+      # ============================================================
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
