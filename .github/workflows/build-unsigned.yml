@@ -437,19 +437,20 @@ jobs:
             exit 1
           fi
 
-      # ===== 核心修复：使用可靠方式修改 quadriflow CMakeLists.txt =====
-      - name: Patch quadriflow CMake to find Eigen
+      # ============================================================
+      # 核心修复：直接添加 Eigen 包含路径，无需 find_package
+      # ============================================================
+      - name: Patch quadriflow CMake to include Eigen directly
         run: |
           cd blender
-          # 使用临时文件插入两行
+          # 使用环境变量 EIGEN3_ROOT_DIR
           {
-            echo 'find_package(Eigen3 REQUIRED)'
-            echo 'include_directories(${EIGEN3_INCLUDE_DIRS})'
+            echo 'include_directories($ENV{EIGEN3_ROOT_DIR})'
             cat extern/quadriflow/CMakeLists.txt
           } > extern/quadriflow/CMakeLists.txt.new
           mv extern/quadriflow/CMakeLists.txt.new extern/quadriflow/CMakeLists.txt
-          echo "Modified extern/quadriflow/CMakeLists.txt:"
-          head -10 extern/quadriflow/CMakeLists.txt
+          echo "Modified extern/quadriflow/CMakeLists.txt (first 5 lines):"
+          head -5 extern/quadriflow/CMakeLists.txt
           echo "✅ Patched quadriflow CMakeLists.txt"
 
       - name: Setup Xcode
