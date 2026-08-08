@@ -53,7 +53,7 @@ jobs:
           echo "✅ blender directory exists"
 
       # ============================================================
-      # 2. 下载 startup.blend（从你的 Release）
+      # 2. 下载 startup.blend（从你的 Release main2）
       # ============================================================
       - name: Download startup.blend from Release (main2)
         run: |
@@ -80,7 +80,7 @@ jobs:
           echo "✅ startup.blend ready"
 
       # ============================================================
-      # 3. 下载 macOS Python（从你的 Release）
+      # 3. 下载 macOS Python（从你的 Release mainly）
       # ============================================================
       - name: Download macOS Python from Release (mainly)
         run: |
@@ -123,7 +123,7 @@ jobs:
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
       # ============================================================
-      # 6. 下载 OpenImageIO（从你的 Release）
+      # 6. 下载 OpenImageIO（从你的 Release main）
       # ============================================================
       - name: Download OpenImageIO from Release (main)
         run: |
@@ -139,7 +139,7 @@ jobs:
           echo "✅ OpenImageIO dynamic libraries ready"
 
       # ============================================================
-      # 7. 🚀 核心修复：从 Eigen 官方下载头文件到 quadriflow
+      # 7. 🚀 核心修复：从 Eigen 官方下载头文件到 quadriflow 源码目录
       # ============================================================
       - name: Download Eigen headers to quadriflow source
         run: |
@@ -418,7 +418,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 13. 🚀 生成 Xcode 项目（添加 -T buildsystem=1 避免新构建系统兼容性问题）
+      # 13. 生成 Xcode 项目（不使用 -T buildsystem=1，避免兼容性问题）
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -430,7 +430,6 @@ jobs:
           cd blender
           rm -rf build_ios
           cmake -G Xcode -S . -B build_ios \
-            -T buildsystem=1 \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -454,6 +453,11 @@ jobs:
             -DBoost_DIR="$Boost_DIR" \
             -DTBB_DIR="$TBB_DIR" \
             2>&1 | tee cmake_output.txt
+          # 检查 CMake 是否成功
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "❌ CMake configuration failed!"
+            exit 1
+          fi
 
       - name: Upload CMake output (always)
         if: always()
@@ -467,7 +471,22 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 14. 🚀 先构建交叉编译工具链（避免后续因脚本未执行而失败）
+      # 14. 检查 Xcode 项目是否生成（新增诊断步骤）
+      # ============================================================
+      - name: Verify Xcode project exists
+        run: |
+          if [ ! -d "blender/build_ios/Blender.xcodeproj" ]; then
+            echo "❌ Blender.xcodeproj not found!"
+            echo "Contents of build_ios:"
+            ls -la blender/build_ios/ || echo "build_ios directory not found!"
+            echo "CMake output (last 100 lines):"
+            tail -100 blender/cmake_output.txt
+            exit 1
+          fi
+          echo "✅ Blender.xcodeproj found"
+
+      # ============================================================
+      # 15. 构建交叉编译工具链（避免后续脚本未执行）
       # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
@@ -484,7 +503,7 @@ jobs:
             ARCHS=arm64
 
       # ============================================================
-      # 15. 编译主应用 Blender.app
+      # 16. 编译主应用
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
@@ -504,7 +523,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 16. 打包成未签名 IPA
+      # 17. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
@@ -524,7 +543,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 17. 上传 IPA
+      # 18. 上传 IPA
       # ============================================================
       - name: Upload IPA
         if: steps.cmake_config.outcome == 'success'
@@ -535,7 +554,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 18. 失败时上传日志
+      # 19. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
