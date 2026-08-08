@@ -30,7 +30,7 @@ jobs:
           echo "✅ fmt CMake config at $FMT_CMAKE_DIR"
 
       # ============================================================
-      # 1. 克隆 Blender 源码（跳过 LFS，避免速率限制）
+      # 1. 克隆 Blender 源码（跳过 LFS）
       # ============================================================
       - name: Clone Blender from official source (skip LFS)
         run: |
@@ -53,7 +53,7 @@ jobs:
           echo "✅ blender directory exists"
 
       # ============================================================
-      # 2. 下载 startup.blend（从你的 Release main2）
+      # 2. 下载 startup.blend（main2）
       # ============================================================
       - name: Download startup.blend from Release (main2)
         run: |
@@ -70,7 +70,6 @@ jobs:
             rmdir datafiles 2>/dev/null || true
           fi
           if [ ! -f "release/datafiles/startup.blend" ]; then
-            echo "⚠️  startup.blend missing, pulling from LFS..."
             git lfs pull --include="release/datafiles/startup.blend"
           fi
           if [ ! -f "release/datafiles/startup.blend" ]; then
@@ -80,7 +79,7 @@ jobs:
           echo "✅ startup.blend ready"
 
       # ============================================================
-      # 3. 下载 macOS Python（从你的 Release mainly）
+      # 3. 下载 macOS Python（mainly）
       # ============================================================
       - name: Download macOS Python from Release (mainly)
         run: |
@@ -97,7 +96,7 @@ jobs:
           echo "✅ macOS Python ready"
 
       # ============================================================
-      # 4. 缓存 iOS 库（加速后续构建）
+      # 4. 缓存 iOS 库
       # ============================================================
       - name: Cache iOS libraries
         id: cache-ios
@@ -109,7 +108,7 @@ jobs:
             ios-libs-
 
       # ============================================================
-      # 5. 克隆 iOS 预编译库（仅拉取 OpenEXR）
+      # 5. 克隆 iOS 预编译库（仅 OpenEXR）
       # ============================================================
       - name: Clone iOS precompiled libraries (cache miss)
         if: steps.cache-ios.outputs.cache-hit != 'true'
@@ -123,7 +122,7 @@ jobs:
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
       # ============================================================
-      # 6. 下载 OpenImageIO（从你的 Release main）
+      # 6. 下载 OpenImageIO（main）
       # ============================================================
       - name: Download OpenImageIO from Release (main)
         run: |
@@ -139,7 +138,7 @@ jobs:
           echo "✅ OpenImageIO dynamic libraries ready"
 
       # ============================================================
-      # 7. 🚀 核心修复：从 Eigen 官方下载头文件到 quadriflow 源码目录
+      # 7. 🚀 下载 Eigen 头文件到 quadriflow 源码目录（同时为 CMake 准备路径）
       # ============================================================
       - name: Download Eigen headers to quadriflow source
         run: |
@@ -156,16 +155,42 @@ jobs:
             echo "❌ Eigen headers copy failed!"
             exit 1
           fi
+          # 导出 Eigen 头文件路径供后续 CMake 使用
+          EIGEN_INCLUDE_PATH="$PWD/extern/quadriflow/src"
+          echo "EIGEN_INCLUDE_PATH=$EIGEN_INCLUDE_PATH" >> $GITHUB_ENV
+          echo "✅ EIGEN_INCLUDE_PATH set to $EIGEN_INCLUDE_PATH"
 
       # ============================================================
-      # 8. 创建假的 CMake 配置文件（OpenEXR, OpenImageIO, Ceres, Boost, TBB）
+      # 8. 创建假的 CMake 配置文件（包括 Eigen3）
       # ============================================================
       - name: Create fake CMake config files
         run: |
           cd blender
           LIB_BASE="$PWD/lib/ios_arm64"
+          EIGEN_CMAKE_DIR="$LIB_BASE/eigen3-config"
+          mkdir -p "$EIGEN_CMAKE_DIR"
 
-          # OpenImageIO
+          # ---------- Eigen3 配置（必须放在第一位） ----------
+          cat > "$EIGEN_CMAKE_DIR/Eigen3Config.cmake" <<EOF
+          set(Eigen3_FOUND TRUE)
+          set(EIGEN3_FOUND TRUE)
+          set(EIGEN3_INCLUDE_DIR "${EIGEN_INCLUDE_PATH}")
+          set(EIGEN3_INCLUDE_DIRS "${EIGEN_INCLUDE_PATH}")
+          set(Eigen3_INCLUDE_DIR "${EIGEN_INCLUDE_PATH}")
+          set(Eigen3_INCLUDE_DIRS "${EIGEN_INCLUDE_PATH}")
+          set(EIGEN3_VERSION_STRING "3.4.0")
+          set(Eigen3_VERSION "3.4.0")
+          # 创建 IMPORTED 目标（虽然 Eigen 是头文件库，但为了满足 find_package）
+          if(NOT TARGET Eigen3::Eigen)
+            add_library(Eigen3::Eigen INTERFACE IMPORTED)
+            set_target_properties(Eigen3::Eigen PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "\${EIGEN3_INCLUDE_DIR}"
+            )
+          endif()
+          EOF
+          echo "Eigen3_DIR=$EIGEN_CMAKE_DIR" >> $GITHUB_ENV
+
+          # ---------- OpenImageIO ----------
           OIIO_DIR="$LIB_BASE/openimageio"
           mkdir -p "$OIIO_DIR"
           cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<'EOF'
@@ -186,7 +211,7 @@ jobs:
           EOF
           cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
 
-          # OpenEXR
+          # ---------- OpenEXR ----------
           OPENEXR_DIR="$LIB_BASE/openexr"
           OPENEXR_INC="$OPENEXR_DIR/include/OpenEXR"
           OPENEXR_LIB_FILE="$OPENEXR_DIR/lib/libOpenEXR.dylib"
@@ -208,7 +233,7 @@ jobs:
           EOF
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
 
-          # Ceres
+          # ---------- Ceres ----------
           CERES_INC=$(find "$LIB_BASE" -path "*/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$CERES_INC" ] && CERES_INC="$LIB_BASE/ceres/include"
           CERES_LIB=$(find "$LIB_BASE" -name "libceres.a" 2>/dev/null | head -1)
@@ -229,7 +254,7 @@ jobs:
           set(Ceres_VERSION "2.0.0")
           EOF
 
-          # Boost
+          # ---------- Boost ----------
           BOOST_INC=$(find "$LIB_BASE" -path "*/boost/version.hpp" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$BOOST_INC" ] && BOOST_INC="$LIB_BASE/boost/include"
           BOOST_CMAKE_DIR="$LIB_BASE/boost-config"
@@ -245,7 +270,7 @@ jobs:
           EOF
           cp "$BOOST_CMAKE_DIR/BoostConfig.cmake" "$BOOST_CMAKE_DIR/boost-config.cmake"
 
-          # TBB
+          # ---------- TBB ----------
           TBB_INC=$(find "$LIB_BASE" -path "*/tbb/tbb.h" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$TBB_INC" ] && TBB_INC="$LIB_BASE/tbb/include"
           TBB_LIB=$(find "$LIB_BASE" -name "libtbb.a" 2>/dev/null | head -1)
@@ -418,7 +443,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 13. 生成 Xcode 项目（不使用 -T buildsystem=1，避免兼容性问题）
+      # 13. 🚀 生成 Xcode 项目（传递 Eigen3_DIR 等）
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -449,11 +474,11 @@ jobs:
             -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
             -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}" \
             -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio" \
+            -DEigen3_DIR="$Eigen3_DIR" \
             -DCeres_DIR="$CERES_DIR" \
             -DBoost_DIR="$Boost_DIR" \
             -DTBB_DIR="$TBB_DIR" \
             2>&1 | tee cmake_output.txt
-          # 检查 CMake 是否成功
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo "❌ CMake configuration failed!"
             exit 1
@@ -471,7 +496,7 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 14. 检查 Xcode 项目是否生成（新增诊断步骤）
+      # 14. 检查 Xcode 项目是否生成
       # ============================================================
       - name: Verify Xcode project exists
         run: |
@@ -486,7 +511,7 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 15. 构建交叉编译工具链（避免后续脚本未执行）
+      # 15. 构建交叉编译工具链
       # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
@@ -523,7 +548,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 17. 打包成未签名 IPA
+      # 17. 打包 IPA
       # ============================================================
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
