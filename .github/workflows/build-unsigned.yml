@@ -438,14 +438,14 @@ jobs:
           fi
 
       # ============================================================
-      # 核心修复：直接添加 Eigen 包含路径，无需 find_package
+      # 核心修复：直接设置 CMAKE_CXX_FLAGS 添加 Eigen 路径
       # ============================================================
-      - name: Patch quadriflow CMake to include Eigen directly
+      - name: Patch quadriflow CMake to add Eigen flags
         run: |
           cd blender
-          # 使用环境变量 EIGEN3_ROOT_DIR
+          # 在文件开头插入 CMAKE_CXX_FLAGS 设置
           {
-            echo 'include_directories($ENV{EIGEN3_ROOT_DIR})'
+            echo 'set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -isystem /usr/include/eigen3")'
             cat extern/quadriflow/CMakeLists.txt
           } > extern/quadriflow/CMakeLists.txt.new
           mv extern/quadriflow/CMakeLists.txt.new extern/quadriflow/CMakeLists.txt
