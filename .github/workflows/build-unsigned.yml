@@ -30,7 +30,7 @@ jobs:
           echo "✅ fmt CMake config at $FMT_CMAKE_DIR"
 
       # ============================================================
-      # 1. 克隆 Blender 源码（跳过 LFS）
+      # 1. 克隆 Blender 源码（跳过 LFS，避免速率限制）
       # ============================================================
       - name: Clone Blender from official source (skip LFS)
         run: |
@@ -44,8 +44,16 @@ jobs:
           sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
           git submodule sync --recursive
 
+      - name: Verify blender directory exists
+        run: |
+          if [ ! -d "blender" ]; then
+            echo "❌ blender directory missing!"
+            exit 1
+          fi
+          echo "✅ blender directory exists"
+
       # ============================================================
-      # 2. 下载 startup.blend（main2）
+      # 2. 下载 startup.blend（从你的 Release）
       # ============================================================
       - name: Download startup.blend from Release (main2)
         run: |
@@ -62,6 +70,7 @@ jobs:
             rmdir datafiles 2>/dev/null || true
           fi
           if [ ! -f "release/datafiles/startup.blend" ]; then
+            echo "⚠️  startup.blend missing, pulling from LFS..."
             git lfs pull --include="release/datafiles/startup.blend"
           fi
           if [ ! -f "release/datafiles/startup.blend" ]; then
@@ -71,7 +80,7 @@ jobs:
           echo "✅ startup.blend ready"
 
       # ============================================================
-      # 3. 下载 macOS Python（mainly）
+      # 3. 下载 macOS Python（从你的 Release）
       # ============================================================
       - name: Download macOS Python from Release (mainly)
         run: |
@@ -88,7 +97,7 @@ jobs:
           echo "✅ macOS Python ready"
 
       # ============================================================
-      # 4. 缓存 iOS 库
+      # 4. 缓存 iOS 库（加速后续构建）
       # ============================================================
       - name: Cache iOS libraries
         id: cache-ios
@@ -100,7 +109,7 @@ jobs:
             ios-libs-
 
       # ============================================================
-      # 5. 克隆 iOS 预编译库（仅 OpenEXR）
+      # 5. 克隆 iOS 预编译库（仅拉取 OpenEXR）
       # ============================================================
       - name: Clone iOS precompiled libraries (cache miss)
         if: steps.cache-ios.outputs.cache-hit != 'true'
@@ -114,7 +123,7 @@ jobs:
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
       # ============================================================
-      # 6. 下载 OpenImageIO（main）
+      # 6. 下载 OpenImageIO（从你的 Release）
       # ============================================================
       - name: Download OpenImageIO from Release (main)
         run: |
@@ -130,23 +139,17 @@ jobs:
           echo "✅ OpenImageIO dynamic libraries ready"
 
       # ============================================================
-      # 7. 🚀 核心修复：复制 Eigen 头文件到 quadriflow 源码目录
+      # 7. 🚀 核心修复：从 Eigen 官方下载头文件到 quadriflow
       # ============================================================
-      - name: Copy Eigen headers to quadriflow source
+      - name: Download Eigen headers to quadriflow source
         run: |
           cd blender
-          # 从主仓库的 extern/Eigen3 复制 Eigen 头文件
-          if [ -d "extern/Eigen3/Eigen" ]; then
-            echo "📁 Found Eigen in extern/Eigen3"
-            mkdir -p extern/quadriflow/src/Eigen
-            cp -r extern/Eigen3/Eigen/* extern/quadriflow/src/Eigen/
-          else
-            # 如果 extern/Eigen3 不存在，从系统路径复制（备选）
-            echo "⚠️  extern/Eigen3 not found, using system Eigen"
-            sudo mkdir -p extern/quadriflow/src/Eigen
-            sudo cp -r /usr/include/eigen3/Eigen/* extern/quadriflow/src/Eigen/
-          fi
-          # 验证
+          echo "📥 Downloading Eigen 3.4.0 from official repository..."
+          curl -L -o eigen.tar.gz https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+          tar -xzf eigen.tar.gz
+          mkdir -p extern/quadriflow/src/Eigen
+          cp -r eigen-3.4.0/Eigen/* extern/quadriflow/src/Eigen/
+          rm -rf eigen-3.4.0 eigen.tar.gz
           if [ -f "extern/quadriflow/src/Eigen/Core" ]; then
             echo "✅ Eigen headers copied to extern/quadriflow/src/Eigen/"
           else
@@ -155,7 +158,7 @@ jobs:
           fi
 
       # ============================================================
-      # 8. 创建假的 CMake 配置文件
+      # 8. 创建假的 CMake 配置文件（OpenEXR, OpenImageIO, Ceres, Boost, TBB）
       # ============================================================
       - name: Create fake CMake config files
         run: |
@@ -401,7 +404,7 @@ jobs:
           fi
 
       # ============================================================
-      # 12. Setup Xcode
+      # 12. 设置 Xcode
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -415,7 +418,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 13. 生成 Xcode 项目
+      # 13. 🚀 生成 Xcode 项目（添加 -T buildsystem=1 避免新构建系统兼容性问题）
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -427,6 +430,7 @@ jobs:
           cd blender
           rm -rf build_ios
           cmake -G Xcode -S . -B build_ios \
+            -T buildsystem=1 \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -436,6 +440,7 @@ jobs:
             -DWITH_DOCS=OFF \
             -DWITH_RUBBERBAND=OFF \
             -DWITH_OPENIMAGEIO=ON \
+            -DWITH_OPENMP=OFF \
             -DPYTHON_LIBRARY="${PYTHON_LIB_DIR}/libpython3.13.dylib" \
             -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
@@ -462,7 +467,24 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 14. 编译
+      # 14. 🚀 先构建交叉编译工具链（避免后续因脚本未执行而失败）
+      # ============================================================
+      - name: Build cross compile tools first
+        if: steps.cmake_config.outcome == 'success'
+        run: |
+          cd blender/build_ios
+          xcodebuild \
+            -project Blender.xcodeproj \
+            -target blender_cross_tools_compile \
+            -sdk iphoneos \
+            -configuration Release \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64
+
+      # ============================================================
+      # 15. 编译主应用 Blender.app
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
@@ -482,7 +504,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 15. 打包 IPA
+      # 16. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
@@ -502,7 +524,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 16. 上传 IPA
+      # 17. 上传 IPA
       # ============================================================
       - name: Upload IPA
         if: steps.cmake_config.outcome == 'success'
@@ -513,7 +535,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 17. 失败时上传日志
+      # 18. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
