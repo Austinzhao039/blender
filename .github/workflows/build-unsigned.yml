@@ -160,7 +160,21 @@ jobs:
           echo "✅ EIGEN_INCLUDE_PATH set to $EIGEN_INCLUDE_PATH"
 
       # ============================================================
-      # 8. 创建假的 CMake 配置文件（包括 Eigen3、OpenImageIO 等）
+      # 8. 🚀 修复 list(INSERT) 错误（精确匹配）
+      # ============================================================
+      - name: Fix list(INSERT) error in source/creator/CMakeLists.txt
+        run: |
+          cd blender
+          echo "Before fix:"
+          grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "No matches found"
+          # 精确匹配并注释掉两行
+          sed -i '/list(INSERT LIB 0 ${TBB_LIBRARIES})/ s/^/# /' source/creator/CMakeLists.txt
+          sed -i '/list(INSERT LIB 0 bf_blenkernel)/ s/^/# /' source/creator/CMakeLists.txt
+          echo "After fix:"
+          grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "All list(INSERT lines commented"
+
+      # ============================================================
+      # 9. 创建假的 CMake 配置文件
       # ============================================================
       - name: Create fake CMake config files
         run: |
@@ -188,7 +202,7 @@ jobs:
           EOF
           echo "Eigen3_DIR=$EIGEN_CMAKE_DIR" >> $GITHUB_ENV
 
-          # ---------- OpenImageIO（已添加 oiiotool 目标） ----------
+          # ---------- OpenImageIO ----------
           OIIO_DIR="$LIB_BASE/openimageio"
           mkdir -p "$OIIO_DIR"
           cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<'EOF'
@@ -206,7 +220,6 @@ jobs:
               IMPORTED_LOCATION "${OPENIMAGEIO_LIBRARY}"
             )
           endif()
-          # ----- 新增：oiiotool 可执行目标 -----
           if(NOT TARGET OpenImageIO::oiiotool)
             add_executable(OpenImageIO::oiiotool IMPORTED)
             set_target_properties(OpenImageIO::oiiotool PROPERTIES
@@ -305,7 +318,7 @@ jobs:
           echo "✅ All fake config files created."
 
       # ============================================================
-      # 9. 验证 OpenEXR
+      # 10. 验证 OpenEXR
       # ============================================================
       - name: Verify OpenEXR files
         run: |
@@ -320,7 +333,7 @@ jobs:
           echo "✅ OpenEXR is ready"
 
       # ============================================================
-      # 10. 下载 iOS Python
+      # 11. 下载 iOS Python
       # ============================================================
       - name: Download iOS Python 3.13 dynamic library from BeeWare
         run: |
@@ -361,7 +374,7 @@ jobs:
           echo "✅ iOS Python installed"
 
       # ============================================================
-      # 11. 动态查找路径
+      # 12. 动态查找路径
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
@@ -434,7 +447,7 @@ jobs:
           fi
 
       # ============================================================
-      # 12. 设置 Xcode
+      # 13. 设置 Xcode
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -448,7 +461,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 13. 生成 Xcode 项目
+      # 14. 生成 Xcode 项目
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -501,7 +514,7 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 14. 验证 Xcode 项目是否生成
+      # 15. 验证 Xcode 项目是否生成
       # ============================================================
       - name: Verify Xcode project exists
         run: |
@@ -516,7 +529,7 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 15. 🚀 新增：先构建交叉编译工具链（借鉴参考工作流）
+      # 16. 构建交叉编译工具链
       # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
@@ -533,7 +546,7 @@ jobs:
             ARCHS=arm64
 
       # ============================================================
-      # 16. 编译主应用
+      # 17. 编译主应用
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
@@ -553,7 +566,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO
 
       # ============================================================
-      # 17. 打包成未签名 IPA
+      # 18. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
@@ -573,7 +586,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 18. 上传 IPA
+      # 19. 上传 IPA
       # ============================================================
       - name: Upload IPA
         if: steps.cmake_config.outcome == 'success'
@@ -584,7 +597,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 19. 失败时上传日志
+      # 20. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
