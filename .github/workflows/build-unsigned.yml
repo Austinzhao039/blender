@@ -30,7 +30,7 @@ jobs:
           echo "✅ fmt CMake config at $FMT_CMAKE_DIR"
 
       # ============================================================
-      # 1. 克隆 Blender 源码（跳过 LFS，避免速率限制）
+      # 1. 克隆 Blender 源码（跳过 LFS）
       # ============================================================
       - name: Clone Blender from official source (skip LFS)
         run: |
@@ -53,7 +53,7 @@ jobs:
           echo "✅ blender directory exists"
 
       # ============================================================
-      # 2. 下载 startup.blend（从你的 Release main2）
+      # 2. 下载 startup.blend（main2）
       # ============================================================
       - name: Download startup.blend from Release (main2)
         run: |
@@ -79,7 +79,7 @@ jobs:
           echo "✅ startup.blend ready"
 
       # ============================================================
-      # 3. 下载 macOS Python（从你的 Release mainly）
+      # 3. 下载 macOS Python（mainly）
       # ============================================================
       - name: Download macOS Python from Release (mainly)
         run: |
@@ -96,7 +96,7 @@ jobs:
           echo "✅ macOS Python ready"
 
       # ============================================================
-      # 4. 缓存 iOS 库（加速后续构建）
+      # 4. 缓存 iOS 库
       # ============================================================
       - name: Cache iOS libraries
         id: cache-ios
@@ -108,7 +108,7 @@ jobs:
             ios-libs-
 
       # ============================================================
-      # 5. 克隆 iOS 预编译库（仅拉取 OpenEXR）
+      # 5. 克隆 iOS 预编译库（仅 OpenEXR）
       # ============================================================
       - name: Clone iOS precompiled libraries (cache miss)
         if: steps.cache-ios.outputs.cache-hit != 'true'
@@ -122,7 +122,7 @@ jobs:
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
       # ============================================================
-      # 6. 下载 OpenImageIO（从你的 Release main）
+      # 6. 下载 OpenImageIO（main）
       # ============================================================
       - name: Download OpenImageIO from Release (main)
         run: |
@@ -138,7 +138,7 @@ jobs:
           echo "✅ OpenImageIO dynamic libraries ready"
 
       # ============================================================
-      # 7. 🚀 核心修复：下载 Eigen 头文件到 quadriflow 源码目录
+      # 7. 🚀 下载 Eigen 头文件到 quadriflow 源码目录
       # ============================================================
       - name: Download Eigen headers to quadriflow source
         run: |
@@ -188,7 +188,7 @@ jobs:
           EOF
           echo "Eigen3_DIR=$EIGEN_CMAKE_DIR" >> $GITHUB_ENV
 
-          # ---------- OpenImageIO ----------
+          # ---------- OpenImageIO（已添加 oiiotool 目标） ----------
           OIIO_DIR="$LIB_BASE/openimageio"
           mkdir -p "$OIIO_DIR"
           cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<'EOF'
@@ -206,6 +206,7 @@ jobs:
               IMPORTED_LOCATION "${OPENIMAGEIO_LIBRARY}"
             )
           endif()
+          # ----- 新增：oiiotool 可执行目标 -----
           if(NOT TARGET OpenImageIO::oiiotool)
             add_executable(OpenImageIO::oiiotool IMPORTED)
             set_target_properties(OpenImageIO::oiiotool PROPERTIES
@@ -296,18 +297,6 @@ jobs:
               IMPORTED_LOCATION "${TBB_LIBRARY}"
             )
           endif()
-          if(NOT TARGET TBB::tbbmalloc)
-            add_library(TBB::tbbmalloc UNKNOWN IMPORTED)
-            set_target_properties(TBB::tbbmalloc PROPERTIES
-              IMPORTED_LOCATION "${TBB_LIBRARY}"
-            )
-          endif()
-          if(NOT TARGET TBB::tbbmalloc_proxy)
-            add_library(TBB::tbbmalloc_proxy UNKNOWN IMPORTED)
-            set_target_properties(TBB::tbbmalloc_proxy PROPERTIES
-              IMPORTED_LOCATION "${TBB_LIBRARY}"
-            )
-          endif()
           EOF
 
           echo "CERES_DIR=$CERES_CMAKE_DIR" >> $GITHUB_ENV
@@ -372,7 +361,7 @@ jobs:
           echo "✅ iOS Python installed"
 
       # ============================================================
-      # 11. 动态查找路径（Python, OpenEXR, OpenImageIO）
+      # 11. 动态查找路径
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
@@ -527,7 +516,7 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 15. 🚀 先构建交叉编译工具链（借鉴参考工作流）
+      # 15. 🚀 新增：先构建交叉编译工具链（借鉴参考工作流）
       # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
