@@ -39,8 +39,8 @@ if(WITH_TBB)
   # that it is initialized before MKL and static library initialization order issues are avoided.
   #
   # This isn't fully robust but seems to work.
-  #list(INSERT LIB 0 ${TBB_LIBRARIES})
-  #list(INSERT LIB 0 bf_blenkernel)
+  # list(INSERT LIB 0 ${TBB_LIBRARIES})
+  # list(INSERT LIB 0 bf_blenkernel)
 endif()
 
 if(WIN32)
