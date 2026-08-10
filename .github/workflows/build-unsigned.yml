@@ -160,17 +160,17 @@ jobs:
           echo "✅ EIGEN_INCLUDE_PATH set to $EIGEN_INCLUDE_PATH"
 
       # ============================================================
-      # 8. 🚀 修复 list(INSERT) 错误（精确匹配）
+      # 8. 🚀 修复 list(INSERT) 错误（删除整行，更可靠）
       # ============================================================
       - name: Fix list(INSERT) error in source/creator/CMakeLists.txt
         run: |
           cd blender
           echo "Before fix:"
           grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "No matches found"
-          # 精确匹配并注释掉两行
-          
+          # 删除所有包含 list(INSERT 的行（不管缩进）
+          sed -i '/list(INSERT/d' source/creator/CMakeLists.txt
           echo "After fix:"
-          grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "All list(INSERT lines commented"
+          grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "All list(INSERT lines removed"
 
       # ============================================================
       # 9. 创建假的 CMake 配置文件
