@@ -160,15 +160,15 @@ jobs:
           echo "✅ EIGEN_INCLUDE_PATH set to $EIGEN_INCLUDE_PATH"
 
       # ============================================================
-      # 8. 🚀 修复 list(INSERT) 错误（删除整行，更可靠）
+      # 8. 🚀 修复 list(INSERT) 错误（使用 macOS 兼容的 sed）
       # ============================================================
       - name: Fix list(INSERT) error in source/creator/CMakeLists.txt
         run: |
           cd blender
           echo "Before fix:"
           grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "No matches found"
-          # 删除所有包含 list(INSERT 的行（不管缩进）
-          sed -i '/list(INSERT/d' source/creator/CMakeLists.txt
+          # macOS 的 sed -i 需要备份后缀，这里用空字符串
+          sed -i '' '/list(INSERT/d' source/creator/CMakeLists.txt
           echo "After fix:"
           grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "All list(INSERT lines removed"
 
