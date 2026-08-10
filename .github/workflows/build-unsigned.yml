@@ -168,8 +168,7 @@ jobs:
           echo "Before fix:"
           grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "No matches found"
           # 精确匹配并注释掉两行
-          sed -i '/list(INSERT LIB 0 ${TBB_LIBRARIES})/ s/^/# /' source/creator/CMakeLists.txt
-          sed -i '/list(INSERT LIB 0 bf_blenkernel)/ s/^/# /' source/creator/CMakeLists.txt
+          
           echo "After fix:"
           grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "All list(INSERT lines commented"
 
