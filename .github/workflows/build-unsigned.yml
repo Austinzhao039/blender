@@ -527,28 +527,31 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 🆕 15.5 修补 platform_apple.cmake 强制设置 HOME 和 Python 路径
+      # 🆕 15.5 修补 CMakeLists.txt 强制设置 HOME 和 Python 路径
       # ============================================================
-      - name: Patch platform_apple.cmake to set HOME and Python
+      - name: Patch CMakeLists.txt to force Python paths and HOME
         run: |
           cd blender
-          # 创建补丁内容（在文件开头插入）
-          cat > /tmp/patch_platform.txt << 'EOF'
-          # Force HOME for brew
+          # 获取 Python 路径（从环境变量）
+          PY_LIB_DIR="$PYTHON_LIB_DIR"
+          PY_INC_DIR="$PYTHON_INC_DIR"
+          # 创建要插入的内容
+          cat > /tmp/patch_cmakelists.txt << EOF
+          # --- PATCH: Force HOME and Python paths ---
           set(ENV{HOME} "/Users/runner")
-          # Override Python detection to avoid calling brew
-          if(DEFINED ENV{PYTHON_LIB_DIR})
-            set(PYTHON_LIBRARY "$ENV{PYTHON_LIB_DIR}/libpython3.13.dylib")
-            set(PYTHON_INCLUDE_DIR "$ENV{PYTHON_INC_DIR}")
-            set(PYTHON_INCLUDE_CONFIG_DIR "$ENV{PYTHON_INC_DIR}")
-            set(PYTHON_LIBPATH "$ENV{PYTHON_LIB_DIR}")
-          endif()
+          set(PYTHON_LIBRARY "${PY_LIB_DIR}/libpython3.13.dylib" CACHE PATH "" FORCE)
+          set(PYTHON_INCLUDE_DIR "${PY_INC_DIR}" CACHE PATH "" FORCE)
+          set(PYTHON_INCLUDE_CONFIG_DIR "${PY_INC_DIR}" CACHE PATH "" FORCE)
+          set(PYTHON_LIBPATH "${PY_LIB_DIR}" CACHE PATH "" FORCE)
+          set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
+          set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
+          # --- End of patch ---
           EOF
-          # 在文件开头插入补丁（保留原内容）
-          sed -i '' "1 r /tmp/patch_platform.txt" build_files/cmake/platform/platform_apple.cmake
-          echo "✅ Patched platform_apple.cmake"
-          # 验证修改（打印前几行）
-          head -20 build_files/cmake/platform/platform_apple.cmake
+          # 在 CMakeLists.txt 开头插入
+          sed -i '' "1 r /tmp/patch_cmakelists.txt" CMakeLists.txt
+          echo "✅ Patched CMakeLists.txt with Python paths and HOME"
+          # 打印前几行验证
+          head -20 CMakeLists.txt
 
       # ============================================================
       # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
