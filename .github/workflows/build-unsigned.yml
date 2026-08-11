@@ -527,14 +527,13 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 16. 🚀 构建交叉编译工具链（修复 HOME 环境变量）
+      # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
       # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
         run: |
-          export HOME="$HOME"
           cd blender/build_ios
-          xcodebuild \
+          HOME="$HOME" xcodebuild \
             -project Blender.xcodeproj \
             -target blender_cross_tools_compile \
             -sdk iphoneos \
@@ -545,14 +544,13 @@ jobs:
             ARCHS=arm64
 
       # ============================================================
-      # 17. 编译主应用
+      # 17. 编译主应用（显式传递 HOME）
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
         run: |
-          export HOME="$HOME"
           cd blender/build_ios
-          xcodebuild \
+          HOME="$HOME" xcodebuild \
             -project Blender.xcodeproj \
             -target install \
             -sdk iphoneos \
