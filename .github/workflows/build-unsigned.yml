@@ -160,20 +160,19 @@ jobs:
           echo "✅ EIGEN_INCLUDE_PATH set to $EIGEN_INCLUDE_PATH"
 
       # ============================================================
-      # 8. 🚀 修复 list(INSERT) 错误（使用 macOS 兼容的 sed）
+      # 8. 🚀 修复 list(INSERT) 错误（删除整行）
       # ============================================================
       - name: Fix list(INSERT) error in source/creator/CMakeLists.txt
         run: |
           cd blender
           echo "Before fix:"
           grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "No matches found"
-          # macOS 的 sed -i 需要备份后缀，这里用空字符串
           sed -i '' '/list(INSERT/d' source/creator/CMakeLists.txt
           echo "After fix:"
           grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "All list(INSERT lines removed"
 
       # ============================================================
-      # 9. 创建假的 CMake 配置文件
+      # 9. 🚀 创建假的 CMake 配置文件（使用硬编码路径）
       # ============================================================
       - name: Create fake CMake config files
         run: |
@@ -228,7 +227,7 @@ jobs:
           EOF
           cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
 
-          # ---------- OpenEXR ----------
+          # ---------- OpenEXR （直接硬编码路径） ----------
           OPENEXR_DIR="$LIB_BASE/openexr"
           OPENEXR_INC="$OPENEXR_DIR/include/OpenEXR"
           OPENEXR_LIB_FILE="$OPENEXR_DIR/lib/libOpenEXR.dylib"
@@ -287,7 +286,7 @@ jobs:
           EOF
           cp "$BOOST_CMAKE_DIR/BoostConfig.cmake" "$BOOST_CMAKE_DIR/boost-config.cmake"
 
-          # ---------- TBB ----------
+          # ---------- TBB （直接硬编码路径） ----------
           TBB_INC=$(find "$LIB_BASE" -path "*/tbb/tbb.h" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$TBB_INC" ] && TBB_INC="$LIB_BASE/tbb/include"
           TBB_LIB=$(find "$LIB_BASE" -name "libtbb.a" 2>/dev/null | head -1)
@@ -373,7 +372,7 @@ jobs:
           echo "✅ iOS Python installed"
 
       # ============================================================
-      # 12. 动态查找路径
+      # 12. 动态查找路径（仅用于导出变量，不再依赖它生成假配置）
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
