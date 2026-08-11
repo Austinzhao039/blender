@@ -459,7 +459,17 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 生成 Xcode 项目
+      # 👉 新增：修补 CMakeLists.txt，强制注入 HOME（方案二）
+      # ============================================================
+      - name: Patch CMakeLists.txt to force HOME env
+        run: |
+          cd blender
+          # 在 CMakeLists.txt 第一行插入 set(ENV{HOME} "/Users/runner")
+          sed -i '' '1s/^/set(ENV{HOME} "\/Users\/runner")\n/' CMakeLists.txt
+          echo "✅ CMakeLists.txt patched with HOME setting"
+
+      # ============================================================
+      # 14. 生成 Xcode 项目（👉 修复：显式导出 HOME 并补充 PYTHON_VERSION）
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -470,6 +480,10 @@ jobs:
           fi
           cd blender
           rm -rf build_ios
+
+          # 👉 显式导出 HOME（方案一加强）
+          export HOME="/Users/runner"
+
           cmake -G Xcode -S . -B build_ios \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
@@ -481,8 +495,10 @@ jobs:
             -DWITH_RUBBERBAND=OFF \
             -DWITH_OPENIMAGEIO=ON \
             -DWITH_OPENMP=OFF \
+            -DPYTHON_VERSION=3.13 \                                # 👈 新增
             -DPYTHON_LIBRARY="${PYTHON_LIB_DIR}/libpython3.13.dylib" \
             -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
+            -DPYTHON_INCLUDE_CONFIG_DIR="${PYTHON_INC_DIR}" \      # 👈 新增
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
             -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
             -Dfmt_DIR="${FMT_CMAKE_DIR}" \
@@ -495,6 +511,7 @@ jobs:
             -DBoost_DIR="$Boost_DIR" \
             -DTBB_DIR="$TBB_DIR" \
             2>&1 | tee cmake_output.txt
+
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo "❌ CMake configuration failed!"
             exit 1
@@ -527,13 +544,14 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
+      # 16. 🚀 构建交叉编译工具链（👉 保留 HOME 传递，但已不需要因为 CMake 已 fix）
       # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
         run: |
           cd blender/build_ios
-          HOME="$HOME" xcodebuild \
+          export HOME="/Users/runner"   # 👈 额外确保
+          xcodebuild \
             -project Blender.xcodeproj \
             -target blender_cross_tools_compile \
             -sdk iphoneos \
@@ -541,16 +559,18 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            ARCHS=arm64
+            ARCHS=arm64 \
+            HOME="$HOME"
 
       # ============================================================
-      # 17. 编译主应用（显式传递 HOME）
+      # 17. 编译主应用（👉 同理）
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
         run: |
           cd blender/build_ios
-          HOME="$HOME" xcodebuild \
+          export HOME="/Users/runner"
+          xcodebuild \
             -project Blender.xcodeproj \
             -target install \
             -sdk iphoneos \
@@ -561,7 +581,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             ARCHS=arm64 \
-            ONLY_ACTIVE_ARCH=NO
+            ONLY_ACTIVE_ARCH=NO \
+            HOME="$HOME"
 
       # ============================================================
       # 18. 打包成未签名 IPA
