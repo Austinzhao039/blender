@@ -172,7 +172,7 @@ jobs:
           grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "All list(INSERT lines removed"
 
       # ============================================================
-      # 9. 🚀 创建假的 CMake 配置文件（展开 shell 变量）
+      # 9. 🚀 创建假的 CMake 配置文件（展开变量）
       # ============================================================
       - name: Create fake CMake config files
         run: |
@@ -372,7 +372,7 @@ jobs:
           echo "✅ iOS Python installed"
 
       # ============================================================
-      # 12. 动态查找路径（用于导出变量）
+      # 12. 动态查找路径（导出变量）
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
@@ -527,11 +527,12 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 16. 构建交叉编译工具链
+      # 16. 🚀 构建交叉编译工具链（修复 HOME 环境变量）
       # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
         run: |
+          export HOME="$HOME"
           cd blender/build_ios
           xcodebuild \
             -project Blender.xcodeproj \
@@ -549,6 +550,7 @@ jobs:
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
         run: |
+          export HOME="$HOME"
           cd blender/build_ios
           xcodebuild \
             -project Blender.xcodeproj \
