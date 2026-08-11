@@ -172,7 +172,7 @@ jobs:
           grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "All list(INSERT lines removed"
 
       # ============================================================
-      # 9. 🚀 创建假的 CMake 配置文件（使用硬编码路径）
+      # 9. 🚀 创建假的 CMake 配置文件（展开 shell 变量）
       # ============================================================
       - name: Create fake CMake config files
         run: |
@@ -194,7 +194,7 @@ jobs:
           if(NOT TARGET Eigen3::Eigen)
             add_library(Eigen3::Eigen INTERFACE IMPORTED)
             set_target_properties(Eigen3::Eigen PROPERTIES
-              INTERFACE_INCLUDE_DIRECTORIES "\${EIGEN3_INCLUDE_DIR}"
+              INTERFACE_INCLUDE_DIRECTORIES "${EIGEN_INCLUDE_PATH}"
             )
           endif()
           EOF
@@ -203,7 +203,7 @@ jobs:
           # ---------- OpenImageIO ----------
           OIIO_DIR="$LIB_BASE/openimageio"
           mkdir -p "$OIIO_DIR"
-          cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<'EOF'
+          cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<EOF
           set(OpenImageIO_FOUND TRUE)
           set(OPENIMAGEIO_FOUND TRUE)
           set(OPENIMAGEIO_INCLUDE_DIR "${OIIO_DIR}/include")
@@ -227,11 +227,11 @@ jobs:
           EOF
           cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
 
-          # ---------- OpenEXR （直接硬编码路径） ----------
+          # ---------- OpenEXR ----------
           OPENEXR_DIR="$LIB_BASE/openexr"
           OPENEXR_INC="$OPENEXR_DIR/include/OpenEXR"
           OPENEXR_LIB_FILE="$OPENEXR_DIR/lib/libOpenEXR.dylib"
-          cat > "$OPENEXR_DIR/OpenEXRConfig.cmake" <<'EOF'
+          cat > "$OPENEXR_DIR/OpenEXRConfig.cmake" <<EOF
           set(OpenEXR_FOUND TRUE)
           set(OPENEXR_FOUND TRUE)
           set(OPENEXR_INCLUDE_DIR "${OPENEXR_INC}")
@@ -256,7 +256,7 @@ jobs:
           [ -z "$CERES_LIB" ] && CERES_LIB="$LIB_BASE/ceres/lib/libceres.a"
           CERES_CMAKE_DIR="$LIB_BASE/ceres-config"
           mkdir -p "$CERES_CMAKE_DIR"
-          cat > "$CERES_CMAKE_DIR/CeresConfig.cmake" <<'EOF'
+          cat > "$CERES_CMAKE_DIR/CeresConfig.cmake" <<EOF
           set(Ceres_FOUND TRUE)
           set(CERES_INCLUDE_DIR "${CERES_INC}")
           set(CERES_INCLUDE_DIRS "${CERES_INC}")
@@ -275,7 +275,7 @@ jobs:
           [ -z "$BOOST_INC" ] && BOOST_INC="$LIB_BASE/boost/include"
           BOOST_CMAKE_DIR="$LIB_BASE/boost-config"
           mkdir -p "$BOOST_CMAKE_DIR"
-          cat > "$BOOST_CMAKE_DIR/BoostConfig.cmake" <<'EOF'
+          cat > "$BOOST_CMAKE_DIR/BoostConfig.cmake" <<EOF
           set(Boost_FOUND TRUE)
           set(Boost_INCLUDE_DIR "${BOOST_INC}")
           set(Boost_INCLUDE_DIRS "${BOOST_INC}")
@@ -286,14 +286,14 @@ jobs:
           EOF
           cp "$BOOST_CMAKE_DIR/BoostConfig.cmake" "$BOOST_CMAKE_DIR/boost-config.cmake"
 
-          # ---------- TBB （直接硬编码路径） ----------
+          # ---------- TBB ----------
           TBB_INC=$(find "$LIB_BASE" -path "*/tbb/tbb.h" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$TBB_INC" ] && TBB_INC="$LIB_BASE/tbb/include"
           TBB_LIB=$(find "$LIB_BASE" -name "libtbb.a" 2>/dev/null | head -1)
           [ -z "$TBB_LIB" ] && TBB_LIB="$LIB_BASE/tbb/lib/libtbb.a"
           TBB_CMAKE_DIR="$LIB_BASE/tbb-config"
           mkdir -p "$TBB_CMAKE_DIR"
-          cat > "$TBB_CMAKE_DIR/TBBConfig.cmake" <<'EOF'
+          cat > "$TBB_CMAKE_DIR/TBBConfig.cmake" <<EOF
           set(TBB_FOUND TRUE)
           set(TBB_INCLUDE_DIR "${TBB_INC}")
           set(TBB_INCLUDE_DIRS "${TBB_INC}")
@@ -372,7 +372,7 @@ jobs:
           echo "✅ iOS Python installed"
 
       # ============================================================
-      # 12. 动态查找路径（仅用于导出变量，不再依赖它生成假配置）
+      # 12. 动态查找路径（用于导出变量）
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
