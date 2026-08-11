@@ -527,7 +527,19 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 16. 🚀 构建交叉编译工具链（✅ 已修复 HOME 传递）
+      # 🆕 15.5 修补 platform_apple.cmake，强制设置 HOME（新增步骤）
+      # ============================================================
+      - name: Patch platform_apple.cmake to set HOME
+        run: |
+          cd blender
+          # 在文件开头插入 set(ENV{HOME} "/Users/runner")
+          sed -i '' '1i\
+          set(ENV{HOME} "/Users/runner")
+          ' build_files/cmake/platform/platform_apple.cmake
+          echo "✅ Patched platform_apple.cmake with HOME setting"
+
+      # ============================================================
+      # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
       # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
@@ -546,7 +558,7 @@ jobs:
             HOME="$HOME"
 
       # ============================================================
-      # 17. 编译主应用（✅ 已修复 HOME 传递）
+      # 17. 编译主应用（显式传递 HOME）
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
