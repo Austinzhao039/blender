@@ -527,16 +527,28 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 🆕 15.5 修补 platform_apple.cmake，强制设置 HOME（新增步骤）
+      # 🆕 15.5 修补 platform_apple.cmake 强制设置 HOME 和 Python 路径
       # ============================================================
-      - name: Patch platform_apple.cmake to set HOME
+      - name: Patch platform_apple.cmake to set HOME and Python
         run: |
           cd blender
-          # 在文件开头插入 set(ENV{HOME} "/Users/runner")
-          sed -i '' '1i\
+          # 创建补丁内容（在文件开头插入）
+          cat > /tmp/patch_platform.txt << 'EOF'
+          # Force HOME for brew
           set(ENV{HOME} "/Users/runner")
-          ' build_files/cmake/platform/platform_apple.cmake
-          echo "✅ Patched platform_apple.cmake with HOME setting"
+          # Override Python detection to avoid calling brew
+          if(DEFINED ENV{PYTHON_LIB_DIR})
+            set(PYTHON_LIBRARY "$ENV{PYTHON_LIB_DIR}/libpython3.13.dylib")
+            set(PYTHON_INCLUDE_DIR "$ENV{PYTHON_INC_DIR}")
+            set(PYTHON_INCLUDE_CONFIG_DIR "$ENV{PYTHON_INC_DIR}")
+            set(PYTHON_LIBPATH "$ENV{PYTHON_LIB_DIR}")
+          endif()
+          EOF
+          # 在文件开头插入补丁（保留原内容）
+          sed -i '' "1 r /tmp/patch_platform.txt" build_files/cmake/platform/platform_apple.cmake
+          echo "✅ Patched platform_apple.cmake"
+          # 验证修改（打印前几行）
+          head -20 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
       # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
