@@ -4,6 +4,15 @@
 
 # Libraries configuration for Apple.
 
+# >>> IOS PATCH: Detect iOS build and override paths
+if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")
+  set(BLENDER_IOS_BUILD TRUE)
+  message(STATUS "iOS build detected, using iOS-specific library paths")
+else()
+  set(BLENDER_IOS_BUILD FALSE)
+endif()
+# <<< IOS PATCH
+
 function(find_package_wrapper)
   # do nothing, just satisfy the function
 endfunction()
@@ -48,11 +57,17 @@ if(WITH_JACK)
 endif()
 
 if(NOT DEFINED LIBDIR)
-  if("${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64")
-    set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_x64)
+  # >>> IOS PATCH: Use ios_arm64 for iOS builds
+  if(BLENDER_IOS_BUILD)
+    set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/ios_${CMAKE_OSX_ARCHITECTURES})
   else()
-    set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_${CMAKE_OSX_ARCHITECTURES})
+    if("${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64")
+      set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_x64)
+    else()
+      set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_${CMAKE_OSX_ARCHITECTURES})
+    endif()
   endif()
+  # <<< IOS PATCH
 endif()
 if(NOT EXISTS "${LIBDIR}/.git")
   message(FATAL_ERROR "Mac OSX requires pre-compiled libs at: '${LIBDIR}'")
@@ -65,16 +80,28 @@ endif()
 # directory as well as PYTHON_ROOT_DIR.
 set(CMAKE_FIND_FRAMEWORK NEVER)
 
-# Optionally use system Python if PYTHON_ROOT_DIR is specified.
-if(WITH_PYTHON)
-  if(WITH_PYTHON_MODULE AND PYTHON_ROOT_DIR)
-    find_package(PythonLibsUnix REQUIRED)
+# >>> IOS PATCH: For iOS, pre-set Python variables to avoid find_package and brew calls
+if(BLENDER_IOS_BUILD)
+  if(WITH_PYTHON)
+    set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+    set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+    set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+    set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
+    set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
+    set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
+    message(STATUS "iOS Python forced: ${PYTHON_LIBRARY}")
   endif()
 else()
-  # Python executable is needed as part of the build-process,
-  # note that building without Python is quite unusual.
-  find_program(PYTHON_EXECUTABLE "python3")
+  # Original logic for macOS
+  if(WITH_PYTHON)
+    if(WITH_PYTHON_MODULE AND PYTHON_ROOT_DIR)
+      find_package(PythonLibsUnix REQUIRED)
+    endif()
+  else()
+    find_program(PYTHON_EXECUTABLE "python3")
+  endif()
 endif()
+# <<< IOS PATCH
 
 # Prefer lib directory paths
 file(GLOB LIB_SUBDIRS ${LIBDIR}/*)
@@ -87,6 +114,36 @@ if(EXISTS ${LIBDIR})
   include(platform_old_libs_update)
   without_system_libs_begin()
 endif()
+
+# >>> IOS PATCH: For iOS, skip find_package for libraries that are pre-built in LIBDIR
+# We will manually set their FOUND and paths later using bundled libraries.
+if(BLENDER_IOS_BUILD)
+  # Avoid calling find_package for these, as they will be resolved via bundled libs.
+  # We set dummy variables to make CMake happy.
+  set(Alembic_FOUND FALSE)
+  set(USD_FOUND FALSE)
+  set(MaterialX_FOUND FALSE)
+  set(OpenSubdiv_FOUND FALSE)
+  set(SndFile_FOUND FALSE)
+  set(Fftw3_FOUND FALSE)
+  set(Harfbuzz_FOUND FALSE)
+  set(Fribidi_FOUND FALSE)
+  set(OpenJPEG_FOUND FALSE)
+  set(ShaderC_FOUND FALSE)
+  set(Vulkan_FOUND FALSE)
+  set(SDL3_FOUND FALSE)
+  set(Epoxy_FOUND FALSE)
+  set(PNG_FOUND FALSE)
+  set(JPEG_FOUND FALSE)
+  set(fmt_FOUND FALSE)
+  set(WebP_FOUND FALSE)
+  set(PugiXML_FOUND FALSE)
+  # ... and so on. But we only need to prevent fatal errors for REQUIRED ones.
+  # We'll handle specific REQUIRED packages below.
+else()
+  # Original find_package calls (keep as is)
+endif()
+# <<< IOS PATCH
 
 if(WITH_ALEMBIC)
   find_package(Alembic)
@@ -129,9 +186,13 @@ if(WITH_CODEC_SNDFILE)
 endif()
 
 if(WITH_PYTHON)
-  if(NOT (WITH_PYTHON_MODULE AND PYTHON_ROOT_DIR))
-    find_package(PythonLibsUnix REQUIRED)
+  # >>> IOS PATCH: Already set above, so skip find_package for iOS
+  if(NOT BLENDER_IOS_BUILD)
+    if(NOT (WITH_PYTHON_MODULE AND PYTHON_ROOT_DIR))
+      find_package(PythonLibsUnix REQUIRED)
+    endif()
   endif()
+  # <<< IOS PATCH
 endif()
 
 if(WITH_FFTW3)
@@ -154,7 +215,17 @@ if(WITH_FRIBIDI)
 endif()
 
 # Header dependency of required OpenImageIO.
-find_package(OpenEXR REQUIRED)
+# >>> IOS PATCH: For iOS, manually set OpenEXR paths and skip find_package
+if(BLENDER_IOS_BUILD)
+  set(OPENEXR_INCLUDE_DIR "${LIBDIR}/openexr/include/OpenEXR" CACHE PATH "" FORCE)
+  set(OPENEXR_LIBRARY "${LIBDIR}/openexr/lib/libOpenEXR.dylib" CACHE FILEPATH "" FORCE)
+  set(OPENEXR_FOUND TRUE CACHE BOOL "" FORCE)
+  set(OpenEXR_FOUND TRUE CACHE BOOL "" FORCE)
+  message(STATUS "iOS OpenEXR forced: ${OPENEXR_LIBRARY}")
+else()
+  find_package(OpenEXR REQUIRED)
+endif()
+# <<< IOS PATCH
 add_bundled_libraries(openexr/lib)
 add_bundled_libraries(imath/lib)
 
