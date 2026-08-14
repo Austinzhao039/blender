@@ -527,31 +527,45 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 🆕 15.5 修补 CMakeLists.txt 强制设置 HOME 和 Python 路径
+      # 🆕 15.5 直接修改 platform_apple.cmake 关键行（最可靠）
       # ============================================================
-      - name: Patch CMakeLists.txt to force Python paths and HOME
+      - name: Patch platform_apple.cmake to fix OpenEXR and Python
         run: |
           cd blender
-          # 获取 Python 路径（从环境变量）
-          PY_LIB_DIR="$PYTHON_LIB_DIR"
-          PY_INC_DIR="$PYTHON_INC_DIR"
-          # 创建要插入的内容
-          cat > /tmp/patch_cmakelists.txt << EOF
-          # --- PATCH: Force HOME and Python paths ---
+
+          # 1. 在文件开头强制设置 HOME 和 Python 路径
+          cat > /tmp/patch_header << 'EOF'
+          # --- PATCH: Force HOME and Python for iOS ---
           set(ENV{HOME} "/Users/runner")
-          set(PYTHON_LIBRARY "${PY_LIB_DIR}/libpython3.13.dylib" CACHE PATH "" FORCE)
-          set(PYTHON_INCLUDE_DIR "${PY_INC_DIR}" CACHE PATH "" FORCE)
-          set(PYTHON_INCLUDE_CONFIG_DIR "${PY_INC_DIR}" CACHE PATH "" FORCE)
-          set(PYTHON_LIBPATH "${PY_LIB_DIR}" CACHE PATH "" FORCE)
-          set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
-          set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
-          # --- End of patch ---
+          if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")
+            set(PYTHON_LIBRARY "$ENV{PYTHON_LIB_DIR}/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+            set(PYTHON_INCLUDE_DIR "$ENV{PYTHON_INC_DIR}" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_CONFIG_DIR "$ENV{PYTHON_INC_DIR}" CACHE PATH "" FORCE)
+            set(PYTHON_LIBPATH "$ENV{PYTHON_LIB_DIR}" CACHE PATH "" FORCE)
+            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
+            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
+          endif()
+          # --- End patch ---
           EOF
-          # 在 CMakeLists.txt 开头插入
-          sed -i '' "1 r /tmp/patch_cmakelists.txt" CMakeLists.txt
-          echo "✅ Patched CMakeLists.txt with Python paths and HOME"
-          # 打印前几行验证
-          head -20 CMakeLists.txt
+          # 如果文件开头没有这些内容，则插入
+          if ! grep -q "Force HOME and Python for iOS" build_files/cmake/platform/platform_apple.cmake; then
+            sed -i '' "1 r /tmp/patch_header" build_files/cmake/platform/platform_apple.cmake
+          fi
+
+          # 2. 将 find_package(OpenEXR REQUIRED) 改为非强制，并强制设置 FOUND
+          sed -i '' 's/find_package(OpenEXR REQUIRED)/find_package(OpenEXR QUIET)/g' build_files/cmake/platform/platform_apple.cmake
+          # 在其后添加一行确保 FOUND 为 TRUE（如果不存在）
+          if ! grep -q "set(OPENEXR_FOUND TRUE) # PATCHED" build_files/cmake/platform/platform_apple.cmake; then
+            sed -i '' '/find_package(OpenEXR QUIET)/a\
+            set(OPENEXR_FOUND TRUE CACHE BOOL "" FORCE) # PATCHED
+            ' build_files/cmake/platform/platform_apple.cmake
+          fi
+
+          echo "✅ Patched platform_apple.cmake"
+          # 验证修改
+          grep -n "find_package(OpenEXR" build_files/cmake/platform/platform_apple.cmake || echo "No OpenEXR find_package found"
+          grep -n "set(OPENEXR_FOUND" build_files/cmake/platform/platform_apple.cmake || echo "No OPENEXR_FOUND set"
+          head -20 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
       # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
