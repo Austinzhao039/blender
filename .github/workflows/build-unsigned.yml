@@ -459,7 +459,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 覆盖 platform_apple.cmake 为修改版（无条件强制路径）
+      # 14. 覆盖 platform_apple.cmake（处理 OpenAL 及所有依赖）
       # ============================================================
       - name: Override platform_apple.cmake with patched version
         run: |
@@ -507,6 +507,16 @@ jobs:
           set(OpenEXR_FOUND TRUE CACHE BOOL "" FORCE)
           message(STATUS "OpenEXR forced to: ${OPENEXR_LIBRARY}")
 
+          # Force OpenAL - set to OFF to avoid find_package failure
+          set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
+          set(OPENAL_FOUND TRUE CACHE BOOL "" FORCE)
+          set(OPENAL_LIBRARY "" CACHE FILEPATH "" FORCE)
+          set(OPENAL_INCLUDE_DIR "" CACHE PATH "" FORCE)
+          message(STATUS "OpenAL disabled for iOS build")
+
+          # Force JACK - set to OFF
+          set(WITH_JACK OFF CACHE BOOL "" FORCE)
+
           # Avoid searching for headers
           set(CMAKE_FIND_FRAMEWORK NEVER)
 
@@ -536,21 +546,18 @@ jobs:
           find_package(BZip2 REQUIRED)
           list(APPEND ZLIB_LIBRARIES ${BZIP2_LIBRARIES})
 
-          if(WITH_OPENAL)
-            find_package(OpenAL REQUIRED)
-          endif()
+          # OpenAL is already forced OFF, skip find_package
+          # if(WITH_OPENAL)
+          #   find_package(OpenAL REQUIRED)
+          # endif()
 
-          if(WITH_JACK)
-            find_library(JACK_FRAMEWORK
-              NAMES jackmp
-            )
-
-            if(JACK_FRAMEWORK)
-              set(JACK_INCLUDE_DIRS ${JACK_FRAMEWORK}/headers)
-            else()
-              set_and_warn_library_found("JACK" JACK_FRAMEWORK WITH_JACK)
-            endif()
-          endif()
+          # JACK is already forced OFF, skip find_package
+          # if(WITH_JACK)
+          #   find_library(JACK_FRAMEWORK
+          #     NAMES jackmp
+          #   )
+          #   ...
+          # endif()
 
           # Prefer lib directory paths
           file(GLOB LIB_SUBDIRS ${LIBDIR}/*)
@@ -684,10 +691,6 @@ jobs:
               # OpenImageDenoise uses BNNS from the Accelerate framework.
               string(APPEND PLATFORM_LINKFLAGS " -framework Accelerate")
             endif()
-          endif()
-
-          if(WITH_JACK)
-            string(APPEND PLATFORM_LINKFLAGS " -F/Library/Frameworks -weak_framework jackmp")
           endif()
 
           if(WITH_VULKAN_BACKEND)
@@ -979,8 +982,8 @@ jobs:
           # Same as `CFBundleIdentifier` in Info.plist.
           set(CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.blenderfoundation.blender")
           EOF
-          echo "✅ Overwritten platform_apple.cmake with unconditional patch"
-          head -30 build_files/cmake/platform/platform_apple.cmake
+          echo "✅ Overwritten platform_apple.cmake with OpenAL fix"
+          head -35 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
       # 15. 生成 Xcode 项目
