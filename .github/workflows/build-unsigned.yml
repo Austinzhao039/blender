@@ -459,7 +459,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 覆盖 platform_apple.cmake 为修改版（最终方案）
+      # 14. 覆盖 platform_apple.cmake 为修改版（无条件强制路径）
       # ============================================================
       - name: Override platform_apple.cmake with patched version
         run: |
@@ -471,15 +471,47 @@ jobs:
 
           # Libraries configuration for Apple.
 
-          # >>> IOS PATCH: Detect iOS build and override paths
-          if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")
-            set(BLENDER_IOS_BUILD TRUE)
-            message(STATUS "iOS build detected, using iOS-specific library paths")
-          else()
-            set(BLENDER_IOS_BUILD FALSE)
+          # ------------------------------------------------------------------------
+          # FORCE PATHS FOR IOS AND HOST TOOLS - DO NOT USE brew
+          # Override LIBDIR to use iOS libraries unconditionally
+          if(NOT DEFINED LIBDIR)
+            if("${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64")
+              set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_x64)
+            else()
+              # Use ios_arm64 for both iOS and macOS host tools (arm64 macs)
+              set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/ios_arm64)
+            endif()
           endif()
-          # <<< IOS PATCH
+          if(NOT EXISTS "${LIBDIR}/.git")
+            message(FATAL_ERROR "Mac requires pre-compiled libs at: '${LIBDIR}'")
+          endif()
+          if(FIRST_RUN)
+            message(STATUS "Using pre-compiled LIBDIR: ${LIBDIR}")
+          endif()
 
+          # Force Python paths regardless of build type
+          if(WITH_PYTHON)
+            set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+            set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
+            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
+            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
+            message(STATUS "Python forced to: ${PYTHON_LIBRARY}")
+          endif()
+
+          # Force OpenEXR paths
+          set(OPENEXR_INCLUDE_DIR "${LIBDIR}/openexr/include/OpenEXR" CACHE PATH "" FORCE)
+          set(OPENEXR_LIBRARY "${LIBDIR}/openexr/lib/libOpenEXR.dylib" CACHE FILEPATH "" FORCE)
+          set(OPENEXR_FOUND TRUE CACHE BOOL "" FORCE)
+          set(OpenEXR_FOUND TRUE CACHE BOOL "" FORCE)
+          message(STATUS "OpenEXR forced to: ${OPENEXR_LIBRARY}")
+
+          # Avoid searching for headers
+          set(CMAKE_FIND_FRAMEWORK NEVER)
+
+          # ------------------------------------------------------------------------
+          # Original functions and remaining logic (keep unchanged)
           function(find_package_wrapper)
             # do nothing, just satisfy the function
           endfunction()
@@ -497,9 +529,6 @@ jobs:
               endif()
             endif()
           endfunction()
-
-          # ------------------------------------------------------------------------
-          # Find system provided libraries.
 
           # Find system ZLIB
           set(ZLIB_ROOT /usr)
@@ -522,53 +551,6 @@ jobs:
               set_and_warn_library_found("JACK" JACK_FRAMEWORK WITH_JACK)
             endif()
           endif()
-
-          if(NOT DEFINED LIBDIR)
-            # >>> IOS PATCH: Use ios_arm64 for iOS builds
-            if(BLENDER_IOS_BUILD)
-              set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/ios_${CMAKE_OSX_ARCHITECTURES})
-            else()
-              if("${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64")
-                set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_x64)
-              else()
-                set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_${CMAKE_OSX_ARCHITECTURES})
-              endif()
-            endif()
-            # <<< IOS PATCH
-          endif()
-          if(NOT EXISTS "${LIBDIR}/.git")
-            message(FATAL_ERROR "Mac OSX requires pre-compiled libs at: '${LIBDIR}'")
-          endif()
-          if(FIRST_RUN)
-            message(STATUS "Using pre-compiled LIBDIR: ${LIBDIR}")
-          endif()
-
-          # Avoid searching for headers since this would otherwise override our lib
-          # directory as well as PYTHON_ROOT_DIR.
-          set(CMAKE_FIND_FRAMEWORK NEVER)
-
-          # >>> IOS PATCH: For iOS, pre-set Python variables to avoid find_package and brew calls
-          if(BLENDER_IOS_BUILD)
-            if(WITH_PYTHON)
-              set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
-              set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-              set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-              set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
-              set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
-              set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
-              message(STATUS "iOS Python forced: ${PYTHON_LIBRARY}")
-            endif()
-          else()
-            # Original logic for macOS
-            if(WITH_PYTHON)
-              if(WITH_PYTHON_MODULE AND PYTHON_ROOT_DIR)
-                find_package(PythonLibsUnix REQUIRED)
-              endif()
-            else()
-              find_program(PYTHON_EXECUTABLE "python3")
-            endif()
-          endif()
-          # <<< IOS PATCH
 
           # Prefer lib directory paths
           file(GLOB LIB_SUBDIRS ${LIBDIR}/*)
@@ -622,14 +604,12 @@ jobs:
             unset(_sndfile_VORBISENC_LIBRARY)
           endif()
 
+          # Python already forced above, skip find_package
           if(WITH_PYTHON)
-            # >>> IOS PATCH: Already set above, so skip find_package for iOS
-            if(NOT BLENDER_IOS_BUILD)
-              if(NOT (WITH_PYTHON_MODULE AND PYTHON_ROOT_DIR))
-                find_package(PythonLibsUnix REQUIRED)
-              endif()
+            # No need to call find_package(PythonLibsUnix) because we already set variables
+            if(NOT DEFINED PYTHON_EXECUTABLE)
+              find_program(PYTHON_EXECUTABLE "python3")
             endif()
-            # <<< IOS PATCH
           endif()
 
           if(WITH_FFTW3)
@@ -651,28 +631,8 @@ jobs:
             find_package(Fribidi)
           endif()
 
-          # Header dependency of required OpenImageIO.
-          # >>> IOS PATCH: For iOS, manually set OpenEXR paths and skip find_package.
-          # For macOS host tools, avoid REQUIRED to prevent failure when config files missing.
-          if(BLENDER_IOS_BUILD)
-            set(OPENEXR_INCLUDE_DIR "${LIBDIR}/openexr/include/OpenEXR" CACHE PATH "" FORCE)
-            set(OPENEXR_LIBRARY "${LIBDIR}/openexr/lib/libOpenEXR.dylib" CACHE FILEPATH "" FORCE)
-            set(OPENEXR_FOUND TRUE CACHE BOOL "" FORCE)
-            set(OpenEXR_FOUND TRUE CACHE BOOL "" FORCE)
-            message(STATUS "iOS OpenEXR forced: ${OPENEXR_LIBRARY}")
-          else()
-            # For macOS build (including host tools), try to find, but don't fail if not found.
-            find_package(OpenEXR QUIET)
-            if(NOT OPENEXR_FOUND)
-              # Fallback: set manually using LIBDIR (in case precompiled libs exist)
-              set(OPENEXR_INCLUDE_DIR "${LIBDIR}/openexr/include/OpenEXR")
-              set(OPENEXR_LIBRARY "${LIBDIR}/openexr/lib/libOpenEXR.dylib")
-              set(OPENEXR_FOUND TRUE)
-              set(OpenEXR_FOUND TRUE)
-              message(STATUS "OpenEXR manually set to: ${OPENEXR_LIBRARY}")
-            endif()
-          endif()
-          # <<< IOS PATCH
+          # OpenEXR already forced above, skip find_package
+          # Just add bundled libraries
           add_bundled_libraries(openexr/lib)
           add_bundled_libraries(imath/lib)
 
@@ -1019,12 +979,11 @@ jobs:
           # Same as `CFBundleIdentifier` in Info.plist.
           set(CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.blenderfoundation.blender")
           EOF
-          echo "✅ Overwritten platform_apple.cmake with patched version"
-          # 验证文件已写入
+          echo "✅ Overwritten platform_apple.cmake with unconditional patch"
           head -30 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
-      # 15. 生成 Xcode 项目（现在使用修改后的 platform_apple.cmake）
+      # 15. 生成 Xcode 项目
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
