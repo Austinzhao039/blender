@@ -459,75 +459,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 生成 Xcode 项目（⚠️ 不要改动此步骤）
-      # ============================================================
-      - name: Generate Xcode project
-        id: cmake_config
-        run: |
-          if [ ! -d "blender" ]; then
-            echo "❌ blender directory missing!"
-            exit 1
-          fi
-          cd blender
-          rm -rf build_ios
-          cmake -G Xcode -S . -B build_ios \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DWITH_GTESTS=OFF \
-            -DWITH_TESTS=OFF \
-            -DWITH_DOCS=OFF \
-            -DWITH_RUBBERBAND=OFF \
-            -DWITH_OPENIMAGEIO=ON \
-            -DWITH_OPENMP=OFF \
-            -DPYTHON_LIBRARY="${PYTHON_LIB_DIR}/libpython3.13.dylib" \
-            -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
-            -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
-            -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
-            -Dfmt_DIR="${FMT_CMAKE_DIR}" \
-            -DOPENIMAGEIO_ROOT_DIR="$PWD/lib/ios_arm64/openimageio" \
-            -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
-            -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}" \
-            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio" \
-            -DEigen3_DIR="$Eigen3_DIR" \
-            -DCeres_DIR="$CERES_DIR" \
-            -DBoost_DIR="$Boost_DIR" \
-            -DTBB_DIR="$TBB_DIR" \
-            2>&1 | tee cmake_output.txt
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "❌ CMake configuration failed!"
-            exit 1
-          fi
-
-      - name: Upload CMake output (always)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cmake-output
-          path: |
-            blender/cmake_output.txt
-            blender/build_ios/CMakeFiles/CMakeError.log
-            blender/build_ios/CMakeFiles/CMakeOutput.log
-          retention-days: 7
-
-      # ============================================================
-      # 15. 验证 Xcode 项目是否生成
-      # ============================================================
-      - name: Verify Xcode project exists
-        run: |
-          if [ ! -d "blender/build_ios/Blender.xcodeproj" ]; then
-            echo "❌ Blender.xcodeproj not found!"
-            echo "Contents of build_ios:"
-            ls -la blender/build_ios/ || echo "build_ios directory not found!"
-            echo "CMake output (last 100 lines):"
-            tail -100 blender/cmake_output.txt
-            exit 1
-          fi
-          echo "✅ Blender.xcodeproj found"
-
-      # ============================================================
-      # 🆕 15.5 直接覆盖 platform_apple.cmake 为修改版
+      # 🆕 14. 覆盖 platform_apple.cmake 为修改版（在生成项目之前）
       # ============================================================
       - name: Override platform_apple.cmake with patched version
         run: |
@@ -1092,7 +1024,75 @@ jobs:
           head -30 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
-      # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
+      # 15. 生成 Xcode 项目（现在使用修改后的 platform_apple.cmake）
+      # ============================================================
+      - name: Generate Xcode project
+        id: cmake_config
+        run: |
+          if [ ! -d "blender" ]; then
+            echo "❌ blender directory missing!"
+            exit 1
+          fi
+          cd blender
+          rm -rf build_ios
+          cmake -G Xcode -S . -B build_ios \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DWITH_GTESTS=OFF \
+            -DWITH_TESTS=OFF \
+            -DWITH_DOCS=OFF \
+            -DWITH_RUBBERBAND=OFF \
+            -DWITH_OPENIMAGEIO=ON \
+            -DWITH_OPENMP=OFF \
+            -DPYTHON_LIBRARY="${PYTHON_LIB_DIR}/libpython3.13.dylib" \
+            -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
+            -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
+            -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
+            -Dfmt_DIR="${FMT_CMAKE_DIR}" \
+            -DOPENIMAGEIO_ROOT_DIR="$PWD/lib/ios_arm64/openimageio" \
+            -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
+            -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}" \
+            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio" \
+            -DEigen3_DIR="$Eigen3_DIR" \
+            -DCeres_DIR="$CERES_DIR" \
+            -DBoost_DIR="$Boost_DIR" \
+            -DTBB_DIR="$TBB_DIR" \
+            2>&1 | tee cmake_output.txt
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "❌ CMake configuration failed!"
+            exit 1
+          fi
+
+      - name: Upload CMake output (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmake-output
+          path: |
+            blender/cmake_output.txt
+            blender/build_ios/CMakeFiles/CMakeError.log
+            blender/build_ios/CMakeFiles/CMakeOutput.log
+          retention-days: 7
+
+      # ============================================================
+      # 16. 验证 Xcode 项目是否生成
+      # ============================================================
+      - name: Verify Xcode project exists
+        run: |
+          if [ ! -d "blender/build_ios/Blender.xcodeproj" ]; then
+            echo "❌ Blender.xcodeproj not found!"
+            echo "Contents of build_ios:"
+            ls -la blender/build_ios/ || echo "build_ios directory not found!"
+            echo "CMake output (last 100 lines):"
+            tail -100 blender/cmake_output.txt
+            exit 1
+          fi
+          echo "✅ Blender.xcodeproj found"
+
+      # ============================================================
+      # 17. 🚀 构建交叉编译工具链（显式传递 HOME）
       # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
@@ -1111,7 +1111,7 @@ jobs:
             HOME="$HOME"
 
       # ============================================================
-      # 17. 编译主应用（显式传递 HOME）
+      # 18. 编译主应用（显式传递 HOME）
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
@@ -1133,7 +1133,7 @@ jobs:
             HOME="$HOME"
 
       # ============================================================
-      # 18. 打包成未签名 IPA
+      # 19. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
@@ -1153,7 +1153,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 19. 上传 IPA
+      # 20. 上传 IPA
       # ============================================================
       - name: Upload IPA
         if: steps.cmake_config.outcome == 'success'
@@ -1164,7 +1164,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 20. 失败时上传日志
+      # 21. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
