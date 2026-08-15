@@ -459,7 +459,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 覆盖 platform_apple.cmake（处理 OpenAL 及所有依赖）
+      # 14. 覆盖 platform_apple.cmake（处理 OpenAL, JACK, Epoxy）
       # ============================================================
       - name: Override platform_apple.cmake with patched version
         run: |
@@ -517,6 +517,21 @@ jobs:
           # Force JACK - set to OFF
           set(WITH_JACK OFF CACHE BOOL "" FORCE)
 
+          # Force Epoxy paths
+          set(EPOXY_ROOT_DIR "${LIBDIR}/epoxy" CACHE PATH "" FORCE)
+          set(EPOXY_LIBRARY "${LIBDIR}/epoxy/lib/libepoxy.a" CACHE FILEPATH "" FORCE)
+          set(EPOXY_INCLUDE_DIR "${LIBDIR}/epoxy/include" CACHE PATH "" FORCE)
+          set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)
+          set(EPOXY_FOUND TRUE CACHE BOOL "" FORCE)
+          if(NOT TARGET Epoxy::Epoxy)
+            add_library(Epoxy::Epoxy UNKNOWN IMPORTED)
+            set_target_properties(Epoxy::Epoxy PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${EPOXY_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${EPOXY_LIBRARY}"
+            )
+          endif()
+          message(STATUS "Epoxy forced to: ${EPOXY_LIBRARY}")
+
           # Avoid searching for headers
           set(CMAKE_FIND_FRAMEWORK NEVER)
 
@@ -546,18 +561,7 @@ jobs:
           find_package(BZip2 REQUIRED)
           list(APPEND ZLIB_LIBRARIES ${BZIP2_LIBRARIES})
 
-          # OpenAL is already forced OFF, skip find_package
-          # if(WITH_OPENAL)
-          #   find_package(OpenAL REQUIRED)
-          # endif()
-
-          # JACK is already forced OFF, skip find_package
-          # if(WITH_JACK)
-          #   find_library(JACK_FRAMEWORK
-          #     NAMES jackmp
-          #   )
-          #   ...
-          # endif()
+          # OpenAL and JACK are forced OFF, skip find_package
 
           # Prefer lib directory paths
           file(GLOB LIB_SUBDIRS ${LIBDIR}/*)
@@ -703,8 +707,9 @@ jobs:
           endif()
           add_bundled_libraries(sdl/lib)
 
-          set(EPOXY_ROOT_DIR ${LIBDIR}/epoxy)
-          find_package(Epoxy REQUIRED)
+          # Epoxy already forced above, skip find_package
+          # set(EPOXY_ROOT_DIR ${LIBDIR}/epoxy)
+          # find_package(Epoxy REQUIRED)
 
           set(PNG_ROOT ${LIBDIR}/png)
           find_package(PNG REQUIRED)
@@ -982,8 +987,8 @@ jobs:
           # Same as `CFBundleIdentifier` in Info.plist.
           set(CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.blenderfoundation.blender")
           EOF
-          echo "✅ Overwritten platform_apple.cmake with OpenAL fix"
-          head -35 build_files/cmake/platform/platform_apple.cmake
+          echo "✅ Overwritten platform_apple.cmake with OpenAL, JACK, Epoxy fixes"
+          head -40 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
       # 15. 生成 Xcode 项目
