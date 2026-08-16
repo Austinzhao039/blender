@@ -548,6 +548,34 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
+      # 🆕 15.5 修补 platform_apple.cmake 强制 Python 和 HOME（仅 macOS 主机工具）
+      # ============================================================
+      - name: Patch platform_apple.cmake for macOS host tools
+        run: |
+          cd blender
+          # 删除旧的补丁块（如果存在）
+          sed -i '' '/### IOS PATCH START/,/### IOS PATCH END/d' build_files/cmake/platform/platform_apple.cmake
+          # 插入新补丁到文件开头
+          cat > /tmp/patch_cmake << 'EOF'
+          ### IOS PATCH START
+          set(ENV{HOME} "/Users/runner")
+          if(NOT CMAKE_OSX_SYSROOT MATCHES "iphoneos")
+            # macOS 主机工具：强制 Python 3.13 路径
+            set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_arm64)
+            set(PYTHON_VERSION 3.13 CACHE STRING "" FORCE)
+            set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+            set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
+            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
+            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
+          endif()
+          ### IOS PATCH END
+          EOF
+          sed -i '' "1 r /tmp/patch_cmake" build_files/cmake/platform/platform_apple.cmake
+          echo "✅ Patched platform_apple.cmake for macOS host tools"
+
+      # ============================================================
       # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
       # ============================================================
       - name: Build cross compile tools first
