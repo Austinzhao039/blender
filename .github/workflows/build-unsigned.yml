@@ -10,11 +10,11 @@ jobs:
 
     steps:
       # ============================================================
-      # 0. 安装依赖（包含 openal-soft）
+      # 0. 安装依赖（只保留最基础的）
       # ============================================================
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake fmt pugixml embree ffmpeg openjpeg opencolorio openvdb potrace libharu manifold openal-soft
+          brew install git-lfs cmake fmt
           git lfs install
           if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
             echo "❌ fmt not installed correctly!"
@@ -477,169 +477,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 精准修补 platform_apple.cmake（iOS 强制，macOS 仅 Python）
-      # ============================================================
-      - name: Patch platform_apple.cmake precisely
-        run: |
-          cd blender
-
-          # 删除旧的补丁块（如果存在）
-          sed -i '' '/### IOS PATCH START/,/### IOS PATCH END/d' build_files/cmake/platform/platform_apple.cmake
-
-          # 在文件开头插入新的补丁块
-          cat > /tmp/patch_cmake << 'EOF'
-          ### IOS PATCH START
-          # Force HOME unconditionally
-          set(ENV{HOME} "/Users/runner")
-
-          if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")
-            # iOS 构建：强制使用 ios_arm64 预编译库
-            set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/ios_arm64)
-            # 强制 Python
-            set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
-            set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
-            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
-            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
-            # 所有 iOS 所需的 target
-            set(OPENEXR_INCLUDE_DIR "${LIBDIR}/openexr/include/OpenEXR" CACHE PATH "" FORCE)
-            set(OPENEXR_LIBRARY "${LIBDIR}/openexr/lib/libOpenEXR.dylib" CACHE FILEPATH "" FORCE)
-            set(OPENEXR_FOUND TRUE CACHE BOOL "" FORCE)
-            set(OpenEXR_FOUND TRUE CACHE BOOL "" FORCE)
-            if(NOT TARGET OpenEXR::OpenEXR)
-              add_library(OpenEXR::OpenEXR UNKNOWN IMPORTED)
-              set_target_properties(OpenEXR::OpenEXR PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "${OPENEXR_INCLUDE_DIR}"
-                IMPORTED_LOCATION "${OPENEXR_LIBRARY}"
-              )
-            endif()
-            set(OPENIMAGEIO_INCLUDE_DIR "${LIBDIR}/openimageio/include" CACHE PATH "" FORCE)
-            set(OPENIMAGEIO_LIBRARY "${LIBDIR}/openimageio/lib/libOpenImageIO.dylib" CACHE FILEPATH "" FORCE)
-            set(OPENIMAGEIO_FOUND TRUE CACHE BOOL "" FORCE)
-            set(OpenImageIO_FOUND TRUE CACHE BOOL "" FORCE)
-            if(NOT TARGET OpenImageIO::OpenImageIO)
-              add_library(OpenImageIO::OpenImageIO UNKNOWN IMPORTED)
-              set_target_properties(OpenImageIO::OpenImageIO PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "${OPENIMAGEIO_INCLUDE_DIR}"
-                IMPORTED_LOCATION "${OPENIMAGEIO_LIBRARY}"
-              )
-            endif()
-            if(NOT TARGET OpenImageIO::oiiotool)
-              add_executable(OpenImageIO::oiiotool IMPORTED)
-              set_target_properties(OpenImageIO::oiiotool PROPERTIES
-                IMPORTED_LOCATION "/usr/bin/false"
-              )
-            endif()
-            set(TBB_INCLUDE_DIR "${LIBDIR}/tbb/include" CACHE PATH "" FORCE)
-            set(TBB_LIBRARY "${LIBDIR}/tbb/lib/libtbb.dylib" CACHE FILEPATH "" FORCE)
-            set(TBBMALLOC_LIBRARY "${LIBDIR}/tbb/lib/libtbbmalloc.dylib" CACHE FILEPATH "" FORCE)
-            set(TBBMALLOC_PROXY_LIBRARY "${LIBDIR}/tbb/lib/libtbbmalloc_proxy.dylib" CACHE FILEPATH "" FORCE)
-            set(TBB_FOUND TRUE CACHE BOOL "" FORCE)
-            if(NOT TARGET TBB::tbb)
-              add_library(TBB::tbb UNKNOWN IMPORTED)
-              set_target_properties(TBB::tbb PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
-                IMPORTED_LOCATION "${TBB_LIBRARY}"
-              )
-            endif()
-            if(NOT TARGET TBB::tbbmalloc)
-              add_library(TBB::tbbmalloc UNKNOWN IMPORTED)
-              set_target_properties(TBB::tbbmalloc PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
-                IMPORTED_LOCATION "${TBBMALLOC_LIBRARY}"
-              )
-            endif()
-            if(NOT TARGET TBB::tbbmalloc_proxy)
-              add_library(TBB::tbbmalloc_proxy UNKNOWN IMPORTED)
-              set_target_properties(TBB::tbbmalloc_proxy PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
-                IMPORTED_LOCATION "${TBBMALLOC_PROXY_LIBRARY}"
-              )
-            endif()
-            set(EPOXY_ROOT_DIR "${LIBDIR}/epoxy" CACHE PATH "" FORCE)
-            set(EPOXY_LIBRARY "${LIBDIR}/epoxy/lib/libepoxy.a" CACHE FILEPATH "" FORCE)
-            set(EPOXY_INCLUDE_DIR "${LIBDIR}/epoxy/include" CACHE PATH "" FORCE)
-            set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)
-            if(NOT TARGET Epoxy::Epoxy)
-              add_library(Epoxy::Epoxy UNKNOWN IMPORTED)
-              set_target_properties(Epoxy::Epoxy PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "${EPOXY_INCLUDE_DIR}"
-                IMPORTED_LOCATION "${EPOXY_LIBRARY}"
-              )
-            endif()
-            set(OPENCOLORIO_ROOT_DIR "${LIBDIR}/opencolorio" CACHE PATH "" FORCE)
-            set(OPENCOLORIO_INCLUDE_DIR "${OPENCOLORIO_ROOT_DIR}/include" CACHE PATH "" FORCE)
-            set(OPENCOLORIO_LIBRARY "${OPENCOLORIO_ROOT_DIR}/lib/libOpenColorIO.dylib" CACHE FILEPATH "" FORCE)
-            set(OpenColorIO_FOUND TRUE CACHE BOOL "" FORCE)
-            set(OPENCOLORIO_FOUND TRUE CACHE BOOL "" FORCE)
-            if(NOT TARGET OpenColorIO::OpenColorIO)
-              add_library(OpenColorIO::OpenColorIO UNKNOWN IMPORTED)
-              set_target_properties(OpenColorIO::OpenColorIO PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "${OPENCOLORIO_INCLUDE_DIR}"
-                IMPORTED_LOCATION "${OPENCOLORIO_LIBRARY}"
-              )
-            endif()
-            set(EIGEN3_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/extern/quadriflow/src" CACHE PATH "" FORCE)
-            if(NOT TARGET Eigen3::Eigen)
-              add_library(Eigen3::Eigen INTERFACE IMPORTED)
-              set_target_properties(Eigen3::Eigen PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}"
-              )
-            endif()
-            set(SSE2NEON_INCLUDE_DIR "${LIBDIR}/sse2neon" CACHE PATH "" FORCE)
-            set(SSE2NEON_FOUND TRUE CACHE BOOL "" FORCE)
-            set(OPENVDB_INCLUDE_DIR "${LIBDIR}/openvdb/include" CACHE PATH "" FORCE)
-            set(OPENVDB_LIBRARY "${LIBDIR}/openvdb/lib/libopenvdb.dylib" CACHE FILEPATH "" FORCE)
-            set(OPENVDB_FOUND TRUE CACHE BOOL "" FORCE)
-            set(NANOVDB_INCLUDE_DIR "${LIBDIR}/openvdb/include" CACHE PATH "" FORCE)
-            set(NANOVDB_FOUND TRUE CACHE BOOL "" FORCE)
-            set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
-            set(WITH_JACK OFF CACHE BOOL "" FORCE)
-            set(CMAKE_FIND_FRAMEWORK NEVER)
-            message(STATUS "IOS PATCH: iOS forced libraries")
-          else()
-            # macOS 主机工具：只强制 Python
-            set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_arm64)
-            set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
-            set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
-            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
-            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
-            # 确保 macOS 主机工具也关闭 OpenAL
-            set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
-            set(WITH_JACK OFF CACHE BOOL "" FORCE)
-            message(STATUS "IOS PATCH: macOS host tools - only Python forced, OpenAL disabled")
-          endif()
-          ### IOS PATCH END
-          EOF
-          # 插入到文件开头
-          sed -i '' "1 r /tmp/patch_cmake" build_files/cmake/platform/platform_apple.cmake
-
-          # 注释所有可能冲突的 find_package（对 macOS 无害，对 iOS 必要）
-          sed -i '' '/find_package(OpenColorIO/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(OpenEXR/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(OpenImageIO/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(Epoxy/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(TBB/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(Eigen3/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(sse2neon/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(OpenVDB/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(NanoVDB/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(Embree/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(OpenImageDenoise/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(OSL/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(Potrace/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(Haru/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(manifold/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' '/find_package(OpenAL/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-
-          echo "✅ platform_apple.cmake patched (iOS only)"
-          head -80 build_files/cmake/platform/platform_apple.cmake
-
-      # ============================================================
-      # 15. 生成 Xcode 项目（强制关闭 OpenAL 等）
+      # 14. 生成 Xcode 项目（添加 -DWITH_OPENAL=OFF）
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -694,7 +532,7 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 16. 验证 Xcode 项目是否生成
+      # 15. 验证 Xcode 项目是否生成
       # ============================================================
       - name: Verify Xcode project exists
         run: |
@@ -709,7 +547,7 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 17. 🚀 构建交叉编译工具链（显式传递 HOME）
+      # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
       # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
@@ -728,7 +566,7 @@ jobs:
             HOME="$HOME"
 
       # ============================================================
-      # 18. 编译主应用（显式传递 HOME）
+      # 17. 编译主应用（显式传递 HOME）
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
@@ -750,7 +588,7 @@ jobs:
             HOME="$HOME"
 
       # ============================================================
-      # 19. 打包成未签名 IPA
+      # 18. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
@@ -770,7 +608,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 20. 上传 IPA
+      # 19. 上传 IPA
       # ============================================================
       - name: Upload IPA
         if: steps.cmake_config.outcome == 'success'
@@ -781,7 +619,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 21. 失败时上传日志
+      # 20. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
