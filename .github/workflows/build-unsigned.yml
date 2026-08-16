@@ -548,7 +548,7 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 🆕 15.5 修补 platform_apple.cmake 强制 Python 和 HOME（仅 macOS 主机工具）
+      # 🆕 15.5 修补 platform_apple.cmake（使用 iOS 头文件 + macOS 库）
       # ============================================================
       - name: Patch platform_apple.cmake for macOS host tools
         run: |
@@ -560,12 +560,12 @@ jobs:
           ### IOS PATCH START
           set(ENV{HOME} "/Users/runner")
           if(NOT CMAKE_OSX_SYSROOT MATCHES "iphoneos")
-            # macOS 主机工具：强制 Python 3.13 路径
+            # macOS 主机工具：使用 iOS 头文件（平台无关）+ macOS 库
             set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_arm64)
             set(PYTHON_VERSION 3.13 CACHE STRING "" FORCE)
             set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
-            set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_DIR "$ENV{PYTHON_INC_DIR}" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_CONFIG_DIR "$ENV{PYTHON_INC_DIR}" CACHE PATH "" FORCE)
             set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
             set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
             set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
@@ -573,7 +573,7 @@ jobs:
           ### IOS PATCH END
           EOF
           sed -i '' "1 r /tmp/patch_cmake" build_files/cmake/platform/platform_apple.cmake
-          echo "✅ Patched platform_apple.cmake for macOS host tools"
+          echo "✅ Patched platform_apple.cmake with iOS headers + macOS library"
 
       # ============================================================
       # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
