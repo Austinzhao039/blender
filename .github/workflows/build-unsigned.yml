@@ -10,11 +10,11 @@ jobs:
 
     steps:
       # ============================================================
-      # 0. 安装依赖（移除 osl，homebrew 中不存在）
+      # 0. 安装依赖（haru 改为 libharu）
       # ============================================================
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake fmt pugixml embree ffmpeg openjpeg opencolorio openvdb potrace haru manifold
+          brew install git-lfs cmake fmt pugixml embree ffmpeg openjpeg opencolorio openvdb potrace libharu manifold
           git lfs install
           if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
             echo "❌ fmt not installed correctly!"
