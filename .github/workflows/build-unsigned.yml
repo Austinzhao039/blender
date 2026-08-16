@@ -477,7 +477,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 精准修补 platform_apple.cmake（只添加缺失的 oiiotool）
+      # 14. 精准修补 platform_apple.cmake（补全所有 target，并注释 Epoxy find_package）
       # ============================================================
       - name: Patch platform_apple.cmake precisely
         run: |
@@ -597,9 +597,10 @@ jobs:
           ' build_files/cmake/platform/platform_apple.cmake
           fi
 
-          # 不再注释任何 find_package，保持原样，让已有的配置继续工作
+          # 2. 只注释 find_package(Epoxy REQUIRED)，其他 find_package 保持不变
+          sed -i '' 's/find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
 
-          echo "✅ platform_apple.cmake patched with oiiotool added"
+          echo "✅ platform_apple.cmake patched with oiiotool and Epoxy find_package commented"
           head -80 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
