@@ -477,7 +477,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 精准修补 platform_apple.cmake（补充 Potrace）
+      # 14. 精准修补 platform_apple.cmake（补充 Haru）
       # ============================================================
       - name: Patch platform_apple.cmake precisely
         run: |
@@ -639,6 +639,11 @@ jobs:
           set(POTRACE_LIBRARY "${LIBDIR}/potrace/lib/libpotrace.a" CACHE FILEPATH "" FORCE)
           set(POTRACE_FOUND TRUE CACHE BOOL "" FORCE)
 
+          # Haru
+          set(HARU_INCLUDE_DIR "${LIBDIR}/haru/include" CACHE PATH "" FORCE)
+          set(HARU_LIBRARY "${LIBDIR}/haru/lib/libhpdfs.a" CACHE FILEPATH "" FORCE)
+          set(HARU_FOUND TRUE CACHE BOOL "" FORCE)
+
           # 禁用 OpenAL 和 JACK
           set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
           set(WITH_JACK OFF CACHE BOOL "" FORCE)
@@ -664,8 +669,9 @@ jobs:
           sed -i '' '/find_package(OpenImageDenoise/s/^/# /' build_files/cmake/platform/platform_apple.cmake
           sed -i '' '/find_package(OSL/s/^/# /' build_files/cmake/platform/platform_apple.cmake
           sed -i '' '/find_package(Potrace/s/^/# /' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' '/find_package(Haru/s/^/# /' build_files/cmake/platform/platform_apple.cmake
 
-          echo "✅ platform_apple.cmake patched with Potrace"
+          echo "✅ platform_apple.cmake patched with Haru"
           head -80 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
