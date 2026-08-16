@@ -10,7 +10,7 @@ jobs:
 
     steps:
       # ============================================================
-      # 0. 安装依赖（只保留最基础的）
+      # 0. 安装依赖
       # ============================================================
       - name: Install dependencies
         run: |
@@ -477,7 +477,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 生成 Xcode 项目（添加 -DWITH_OPENAL=OFF）
+      # 14. 生成 Xcode 项目（添加 PYTHON_ROOT_DIR）
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -501,6 +501,7 @@ jobs:
             -DWITH_OPENMP=OFF \
             -DWITH_OPENAL=OFF \
             -DWITH_JACK=OFF \
+            -DPYTHON_ROOT_DIR="$PWD/lib/ios_arm64/python" \
             -DPYTHON_LIBRARY="${PYTHON_LIB_DIR}/libpython3.13.dylib" \
             -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
