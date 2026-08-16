@@ -10,11 +10,11 @@ jobs:
 
     steps:
       # ============================================================
-      # 0. 安装依赖（增加 homebrew 库，覆盖 macOS 主机工具所需）
+      # 0. 安装依赖（移除 osl，homebrew 中不存在）
       # ============================================================
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake fmt pugixml embree ffmpeg openjpeg opencolorio openvdb osl potrace haru manifold
+          brew install git-lfs cmake fmt pugixml embree ffmpeg openjpeg opencolorio openvdb potrace haru manifold
           git lfs install
           if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
             echo "❌ fmt not installed correctly!"
