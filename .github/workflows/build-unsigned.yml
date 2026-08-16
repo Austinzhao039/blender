@@ -477,7 +477,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 精准修补 platform_apple.cmake（为 macOS 也强制设置库路径）
+      # 14. 精准修补 platform_apple.cmake（强制所有库路径并注释 find_package）
       # ============================================================
       - name: Patch platform_apple.cmake precisely
         run: |
@@ -486,7 +486,7 @@ jobs:
           # 删除旧的补丁块（如果存在）
           sed -i '' '/### IOS PATCH START/,/### IOS PATCH END/d' build_files/cmake/platform/platform_apple.cmake
 
-          # 在文件开头插入新的补丁块（双分支，但 macOS 分支也强制设置所有库）
+          # 在文件开头插入新的补丁块
           cat > /tmp/patch_cmake << 'EOF'
           ### IOS PATCH START
           # Force HOME unconditionally
@@ -608,7 +608,15 @@ jobs:
           # 插入到文件开头
           sed -i '' "1 r /tmp/patch_cmake" build_files/cmake/platform/platform_apple.cmake
 
-          echo "✅ platform_apple.cmake patched with forced all libs"
+          # 注释掉关键 find_package 调用
+          sed -i '' 's/find_package(OpenColorIO 2.0.0 REQUIRED CONFIG)/# find_package(OpenColorIO 2.0.0 REQUIRED CONFIG) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' 's/find_package(OpenEXR REQUIRED)/# find_package(OpenEXR REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' 's/find_package(OpenImageIO REQUIRED)/# find_package(OpenImageIO REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' 's/find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' 's/find_package(TBB 2021.13.0 REQUIRED)/# find_package(TBB 2021.13.0 REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' 's/find_package(Eigen3 REQUIRED CONFIG)/# find_package(Eigen3 REQUIRED CONFIG) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
+
+          echo "✅ platform_apple.cmake patched and find_package commented"
           head -80 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
