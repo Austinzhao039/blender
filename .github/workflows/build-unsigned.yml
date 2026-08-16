@@ -477,20 +477,23 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 精准修补 platform_apple.cmake（补全所有 target，并注释 Epoxy find_package）
+      # 14. 精准修补 platform_apple.cmake（区分 iOS 和 macOS 的 LIBDIR）
       # ============================================================
       - name: Patch platform_apple.cmake precisely
         run: |
           cd blender
 
-          # 1. 在文件开头插入强制变量设置和所有 target 定义（包含 oiiotool）
+          # 1. 在文件开头插入强制变量设置和所有 target 定义
           if ! grep -q "### IOS PATCH START" build_files/cmake/platform/platform_apple.cmake; then
             sed -i '' '1i\
           ### IOS PATCH START\
           # Force HOME and paths for iOS\
           set(ENV{HOME} "/Users/runner")\
-          if(NOT DEFINED LIBDIR)\
+          # Set LIBDIR based on target platform\
+          if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")\
             set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/ios_arm64)\
+          else()\
+            set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_arm64)\
           endif()\
           set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)\
           set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)\
@@ -581,7 +584,7 @@ jobs:
             )\
           endif()\
           # Eigen3\
-          set(EIGEN3_INCLUDE_DIR "${LIBDIR}/../extern/quadriflow/src" CACHE PATH "" FORCE)\
+          set(EIGEN3_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/extern/quadriflow/src" CACHE PATH "" FORCE)\
           if(NOT TARGET Eigen3::Eigen)\
             add_library(Eigen3::Eigen INTERFACE IMPORTED)\
             set_target_properties(Eigen3::Eigen PROPERTIES\
@@ -600,7 +603,7 @@ jobs:
           # 2. 只注释 find_package(Epoxy REQUIRED)，其他 find_package 保持不变
           sed -i '' 's/find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
 
-          echo "✅ platform_apple.cmake patched with oiiotool and Epoxy find_package commented"
+          echo "✅ platform_apple.cmake patched with correct LIBDIR logic"
           head -80 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
