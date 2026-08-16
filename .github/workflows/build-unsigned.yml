@@ -459,13 +459,13 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 精准修补 platform_apple.cmake（避免覆盖整个文件）
+      # 14. 精准修补 platform_apple.cmake（包含所有 IMPORTED 目标）
       # ============================================================
       - name: Patch platform_apple.cmake precisely
         run: |
           cd blender
 
-          # 1. 在文件开头插入强制变量设置（仅插入一次）
+          # 1. 在文件开头插入强制变量设置和所有 target 定义
           if ! grep -q "### IOS PATCH START" build_files/cmake/platform/platform_apple.cmake; then
             sed -i '' '1i\
           ### IOS PATCH START\
@@ -480,37 +480,91 @@ jobs:
           set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)\
           set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)\
           set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)\
+          # OpenEXR\
           set(OPENEXR_INCLUDE_DIR "${LIBDIR}/openexr/include/OpenEXR" CACHE PATH "" FORCE)\
           set(OPENEXR_LIBRARY "${LIBDIR}/openexr/lib/libOpenEXR.dylib" CACHE FILEPATH "" FORCE)\
           set(OPENEXR_FOUND TRUE CACHE BOOL "" FORCE)\
           set(OpenEXR_FOUND TRUE CACHE BOOL "" FORCE)\
-          set(WITH_OPENAL OFF CACHE BOOL "" FORCE)\
-          set(WITH_JACK OFF CACHE BOOL "" FORCE)\
+          if(NOT TARGET OpenEXR::OpenEXR)\
+            add_library(OpenEXR::OpenEXR UNKNOWN IMPORTED)\
+            set_target_properties(OpenEXR::OpenEXR PROPERTIES\
+              INTERFACE_INCLUDE_DIRECTORIES "${OPENEXR_INCLUDE_DIR}"\
+              IMPORTED_LOCATION "${OPENEXR_LIBRARY}"\
+            )\
+          endif()\
+          # OpenImageIO\
+          set(OPENIMAGEIO_INCLUDE_DIR "${LIBDIR}/openimageio/include" CACHE PATH "" FORCE)\
+          set(OPENIMAGEIO_LIBRARY "${LIBDIR}/openimageio/lib/libOpenImageIO.dylib" CACHE FILEPATH "" FORCE)\
+          set(OPENIMAGEIO_FOUND TRUE CACHE BOOL "" FORCE)\
+          set(OpenImageIO_FOUND TRUE CACHE BOOL "" FORCE)\
+          if(NOT TARGET OpenImageIO::OpenImageIO)\
+            add_library(OpenImageIO::OpenImageIO UNKNOWN IMPORTED)\
+            set_target_properties(OpenImageIO::OpenImageIO PROPERTIES\
+              INTERFACE_INCLUDE_DIRECTORIES "${OPENIMAGEIO_INCLUDE_DIR}"\
+              IMPORTED_LOCATION "${OPENIMAGEIO_LIBRARY}"\
+            )\
+          endif()\
+          # TBB\
+          set(TBB_INCLUDE_DIR "${LIBDIR}/tbb/include" CACHE PATH "" FORCE)\
+          set(TBB_LIBRARY "${LIBDIR}/tbb/lib/libtbb.dylib" CACHE FILEPATH "" FORCE)\
+          set(TBB_FOUND TRUE CACHE BOOL "" FORCE)\
+          if(NOT TARGET TBB::tbb)\
+            add_library(TBB::tbb UNKNOWN IMPORTED)\
+            set_target_properties(TBB::tbb PROPERTIES\
+              INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"\
+              IMPORTED_LOCATION "${TBB_LIBRARY}"\
+            )\
+          endif()\
+          # Epoxy\
           set(EPOXY_ROOT_DIR "${LIBDIR}/epoxy" CACHE PATH "" FORCE)\
           set(EPOXY_LIBRARY "${LIBDIR}/epoxy/lib/libepoxy.a" CACHE FILEPATH "" FORCE)\
           set(EPOXY_INCLUDE_DIR "${LIBDIR}/epoxy/include" CACHE PATH "" FORCE)\
           set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)\
+          if(NOT TARGET Epoxy::Epoxy)\
+            add_library(Epoxy::Epoxy UNKNOWN IMPORTED)\
+            set_target_properties(Epoxy::Epoxy PROPERTIES\
+              INTERFACE_INCLUDE_DIRECTORIES "${EPOXY_INCLUDE_DIR}"\
+              IMPORTED_LOCATION "${EPOXY_LIBRARY}"\
+            )\
+          endif()\
+          # OpenColorIO\
           set(OPENCOLORIO_ROOT_DIR "${LIBDIR}/opencolorio" CACHE PATH "" FORCE)\
           set(OPENCOLORIO_INCLUDE_DIR "${OPENCOLORIO_ROOT_DIR}/include" CACHE PATH "" FORCE)\
-          set(OPENCOLORIO_LIBRARY "${OPENCOLORIO_ROOT_DIR}/lib/libOpenColorIO.a" CACHE FILEPATH "" FORCE)\
+          set(OPENCOLORIO_LIBRARY "${OPENCOLORIO_ROOT_DIR}/lib/libOpenColorIO.dylib" CACHE FILEPATH "" FORCE)\
           set(OpenColorIO_FOUND TRUE CACHE BOOL "" FORCE)\
           set(OPENCOLORIO_FOUND TRUE CACHE BOOL "" FORCE)\
+          if(NOT TARGET OpenColorIO::OpenColorIO)\
+            add_library(OpenColorIO::OpenColorIO UNKNOWN IMPORTED)\
+            set_target_properties(OpenColorIO::OpenColorIO PROPERTIES\
+              INTERFACE_INCLUDE_DIRECTORIES "${OPENCOLORIO_INCLUDE_DIR}"\
+              IMPORTED_LOCATION "${OPENCOLORIO_LIBRARY}"\
+            )\
+          endif()\
+          # Eigen3\
+          set(EIGEN3_INCLUDE_DIR "${LIBDIR}/../extern/quadriflow/src" CACHE PATH "" FORCE)\
+          if(NOT TARGET Eigen3::Eigen)\
+            add_library(Eigen3::Eigen INTERFACE IMPORTED)\
+            set_target_properties(Eigen3::Eigen PROPERTIES\
+              INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}"\
+            )\
+          endif()\
+          # Disable problematic dependencies\
+          set(WITH_OPENAL OFF CACHE BOOL "" FORCE)\
+          set(WITH_JACK OFF CACHE BOOL "" FORCE)\
           set(CMAKE_FIND_FRAMEWORK NEVER)\
-          message(STATUS "IOS PATCH: forced paths")\
+          message(STATUS "IOS PATCH: forced paths and all targets")\
           ### IOS PATCH END
           ' build_files/cmake/platform/platform_apple.cmake
           fi
 
-          # 2. 删除或注释掉 find_package(OpenColorIO REQUIRED CONFIG)
+          # 2. 注释掉可能引起 find_package 失败的调用
           sed -i '' 's/find_package(OpenColorIO 2.0.0 REQUIRED CONFIG)/# find_package(OpenColorIO 2.0.0 REQUIRED CONFIG) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
-
-          # 3. 删除或注释掉 find_package(OpenAL REQUIRED) 和 find_package(OpenEXR REQUIRED) 等
           sed -i '' 's/find_package(OpenAL REQUIRED)/# find_package(OpenAL REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
           sed -i '' 's/find_package(OpenEXR REQUIRED)/# find_package(OpenEXR REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
           sed -i '' 's/find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
 
-          echo "✅ platform_apple.cmake patched precisely"
-          head -50 build_files/cmake/platform/platform_apple.cmake
+          echo "✅ platform_apple.cmake patched with all targets"
+          head -80 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
       # 15. 生成 Xcode 项目
