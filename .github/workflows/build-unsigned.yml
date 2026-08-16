@@ -289,8 +289,12 @@ jobs:
           # ---------- TBB ----------
           TBB_INC=$(find "$LIB_BASE" -path "*/tbb/tbb.h" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$TBB_INC" ] && TBB_INC="$LIB_BASE/tbb/include"
-          TBB_LIB=$(find "$LIB_BASE" -name "libtbb.a" 2>/dev/null | head -1)
-          [ -z "$TBB_LIB" ] && TBB_LIB="$LIB_BASE/tbb/lib/libtbb.a"
+          TBB_LIB=$(find "$LIB_BASE" -name "libtbb.dylib" 2>/dev/null | head -1)
+          [ -z "$TBB_LIB" ] && TBB_LIB="$LIB_BASE/tbb/lib/libtbb.dylib"
+          TBBMALLOC_LIB=$(find "$LIB_BASE" -name "libtbbmalloc.dylib" 2>/dev/null | head -1)
+          [ -z "$TBBMALLOC_LIB" ] && TBBMALLOC_LIB="$LIB_BASE/tbb/lib/libtbbmalloc.dylib"
+          TBBMALLOC_PROXY_LIB=$(find "$LIB_BASE" -name "libtbbmalloc_proxy.dylib" 2>/dev/null | head -1)
+          [ -z "$TBBMALLOC_PROXY_LIB" ] && TBBMALLOC_PROXY_LIB="$LIB_BASE/tbb/lib/libtbbmalloc_proxy.dylib"
           TBB_CMAKE_DIR="$LIB_BASE/tbb-config"
           mkdir -p "$TBB_CMAKE_DIR"
           cat > "$TBB_CMAKE_DIR/TBBConfig.cmake" <<EOF
@@ -306,6 +310,20 @@ jobs:
             set_target_properties(TBB::tbb PROPERTIES
               INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
               IMPORTED_LOCATION "${TBB_LIBRARY}"
+            )
+          endif()
+          if(NOT TARGET TBB::tbbmalloc)
+            add_library(TBB::tbbmalloc UNKNOWN IMPORTED)
+            set_target_properties(TBB::tbbmalloc PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${TBBMALLOC_LIB}"
+            )
+          endif()
+          if(NOT TARGET TBB::tbbmalloc_proxy)
+            add_library(TBB::tbbmalloc_proxy UNKNOWN IMPORTED)
+            set_target_properties(TBB::tbbmalloc_proxy PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${TBBMALLOC_PROXY_LIB}"
             )
           endif()
           EOF
@@ -459,7 +477,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 精准修补 platform_apple.cmake（包含所有 IMPORTED 目标）
+      # 14. 精准修补 platform_apple.cmake（包含所有 target，并注释冲突的 find_package）
       # ============================================================
       - name: Patch platform_apple.cmake precisely
         run: |
@@ -504,15 +522,31 @@ jobs:
               IMPORTED_LOCATION "${OPENIMAGEIO_LIBRARY}"\
             )\
           endif()\
-          # TBB\
+          # TBB and its components\
           set(TBB_INCLUDE_DIR "${LIBDIR}/tbb/include" CACHE PATH "" FORCE)\
           set(TBB_LIBRARY "${LIBDIR}/tbb/lib/libtbb.dylib" CACHE FILEPATH "" FORCE)\
+          set(TBBMALLOC_LIBRARY "${LIBDIR}/tbb/lib/libtbbmalloc.dylib" CACHE FILEPATH "" FORCE)\
+          set(TBBMALLOC_PROXY_LIBRARY "${LIBDIR}/tbb/lib/libtbbmalloc_proxy.dylib" CACHE FILEPATH "" FORCE)\
           set(TBB_FOUND TRUE CACHE BOOL "" FORCE)\
           if(NOT TARGET TBB::tbb)\
             add_library(TBB::tbb UNKNOWN IMPORTED)\
             set_target_properties(TBB::tbb PROPERTIES\
               INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"\
               IMPORTED_LOCATION "${TBB_LIBRARY}"\
+            )\
+          endif()\
+          if(NOT TARGET TBB::tbbmalloc)\
+            add_library(TBB::tbbmalloc UNKNOWN IMPORTED)\
+            set_target_properties(TBB::tbbmalloc PROPERTIES\
+              INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"\
+              IMPORTED_LOCATION "${TBBMALLOC_LIBRARY}"\
+            )\
+          endif()\
+          if(NOT TARGET TBB::tbbmalloc_proxy)\
+            add_library(TBB::tbbmalloc_proxy UNKNOWN IMPORTED)\
+            set_target_properties(TBB::tbbmalloc_proxy PROPERTIES\
+              INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"\
+              IMPORTED_LOCATION "${TBBMALLOC_PROXY_LIBRARY}"\
             )\
           endif()\
           # Epoxy\
@@ -557,13 +591,16 @@ jobs:
           ' build_files/cmake/platform/platform_apple.cmake
           fi
 
-          # 2. 注释掉可能引起 find_package 失败的调用
+          # 2. 注释掉所有可能引起冲突的 find_package 调用
           sed -i '' 's/find_package(OpenColorIO 2.0.0 REQUIRED CONFIG)/# find_package(OpenColorIO 2.0.0 REQUIRED CONFIG) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
           sed -i '' 's/find_package(OpenAL REQUIRED)/# find_package(OpenAL REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
           sed -i '' 's/find_package(OpenEXR REQUIRED)/# find_package(OpenEXR REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
           sed -i '' 's/find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' 's/find_package(TBB 2021.13.0 REQUIRED)/# find_package(TBB 2021.13.0 REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' 's/find_package(OpenImageIO REQUIRED)/# find_package(OpenImageIO REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' 's/find_package(Eigen3 REQUIRED CONFIG)/# find_package(Eigen3 REQUIRED CONFIG) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
 
-          echo "✅ platform_apple.cmake patched with all targets"
+          echo "✅ platform_apple.cmake patched with all targets and find_package commented"
           head -80 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
