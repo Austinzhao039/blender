@@ -477,7 +477,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 精准修补 platform_apple.cmake（双分支都强制所有库）
+      # 14. 精准修补 platform_apple.cmake（补充 Potrace）
       # ============================================================
       - name: Patch platform_apple.cmake precisely
         run: |
@@ -634,6 +634,11 @@ jobs:
           set(OSL_LIBRARY "${LIBDIR}/osl/lib/liboslexec.dylib" CACHE FILEPATH "" FORCE)
           set(OSL_FOUND TRUE CACHE BOOL "" FORCE)
 
+          # Potrace
+          set(POTRACE_INCLUDE_DIR "${LIBDIR}/potrace/include" CACHE PATH "" FORCE)
+          set(POTRACE_LIBRARY "${LIBDIR}/potrace/lib/libpotrace.a" CACHE FILEPATH "" FORCE)
+          set(POTRACE_FOUND TRUE CACHE BOOL "" FORCE)
+
           # 禁用 OpenAL 和 JACK
           set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
           set(WITH_JACK OFF CACHE BOOL "" FORCE)
@@ -658,8 +663,9 @@ jobs:
           sed -i '' '/find_package(Embree/s/^/# /' build_files/cmake/platform/platform_apple.cmake
           sed -i '' '/find_package(OpenImageDenoise/s/^/# /' build_files/cmake/platform/platform_apple.cmake
           sed -i '' '/find_package(OSL/s/^/# /' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' '/find_package(Potrace/s/^/# /' build_files/cmake/platform/platform_apple.cmake
 
-          echo "✅ platform_apple.cmake patched with full forced libraries"
+          echo "✅ platform_apple.cmake patched with Potrace"
           head -80 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
