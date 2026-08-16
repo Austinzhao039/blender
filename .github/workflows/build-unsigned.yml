@@ -477,7 +477,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 精准修补 platform_apple.cmake（强制所有库路径并注释 find_package）
+      # 14. 精准修补 platform_apple.cmake（补充 sse2neon、OpenVDB、NanoVDB）
       # ============================================================
       - name: Patch platform_apple.cmake precisely
         run: |
@@ -597,7 +597,20 @@ jobs:
             )
           endif()
 
-          # 禁用 OpenAL 和 JACK（避免 find_package 失败）
+          # sse2neon
+          set(SSE2NEON_INCLUDE_DIR "${LIBDIR}/sse2neon" CACHE PATH "" FORCE)
+          set(SSE2NEON_FOUND TRUE CACHE BOOL "" FORCE)
+
+          # OpenVDB
+          set(OPENVDB_INCLUDE_DIR "${LIBDIR}/openvdb/include" CACHE PATH "" FORCE)
+          set(OPENVDB_LIBRARY "${LIBDIR}/openvdb/lib/libopenvdb.dylib" CACHE FILEPATH "" FORCE)
+          set(OPENVDB_FOUND TRUE CACHE BOOL "" FORCE)
+
+          # NanoVDB
+          set(NANOVDB_INCLUDE_DIR "${LIBDIR}/openvdb/include" CACHE PATH "" FORCE)
+          set(NANOVDB_FOUND TRUE CACHE BOOL "" FORCE)
+
+          # 禁用 OpenAL 和 JACK
           set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
           set(WITH_JACK OFF CACHE BOOL "" FORCE)
           set(CMAKE_FIND_FRAMEWORK NEVER)
@@ -608,21 +621,19 @@ jobs:
           # 插入到文件开头
           sed -i '' "1 r /tmp/patch_cmake" build_files/cmake/platform/platform_apple.cmake
 
-          # 使用更通用的 sed 模式注释所有关键 find_package 调用
-          # 注释以 find_package(OpenColorIO 开头的行
+          # 注释所有关键 find_package 调用
           sed -i '' '/find_package(OpenColorIO/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          # 注释以 find_package(OpenEXR 开头的行
           sed -i '' '/find_package(OpenEXR/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          # 注释以 find_package(OpenImageIO 开头的行
           sed -i '' '/find_package(OpenImageIO/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          # 注释以 find_package(Epoxy 开头的行
           sed -i '' '/find_package(Epoxy/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          # 注释以 find_package(TBB 开头的行
           sed -i '' '/find_package(TBB/s/^/# /' build_files/cmake/platform/platform_apple.cmake
-          # 注释以 find_package(Eigen3 开头的行
           sed -i '' '/find_package(Eigen3/s/^/# /' build_files/cmake/platform/platform_apple.cmake
+          # 新增注释 sse2neon 和 OpenVDB
+          sed -i '' '/find_package(sse2neon/s/^/# /' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' '/find_package(OpenVDB/s/^/# /' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' '/find_package(NanoVDB/s/^/# /' build_files/cmake/platform/platform_apple.cmake
 
-          echo "✅ platform_apple.cmake patched and all find_package commented"
+          echo "✅ platform_apple.cmake patched with sse2neon, OpenVDB, NanoVDB"
           head -80 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
