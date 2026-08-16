@@ -608,15 +608,21 @@ jobs:
           # 插入到文件开头
           sed -i '' "1 r /tmp/patch_cmake" build_files/cmake/platform/platform_apple.cmake
 
-          # 注释掉关键 find_package 调用
-          sed -i '' 's/find_package(OpenColorIO 2.0.0 REQUIRED CONFIG)/# find_package(OpenColorIO 2.0.0 REQUIRED CONFIG) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' 's/find_package(OpenEXR REQUIRED)/# find_package(OpenEXR REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' 's/find_package(OpenImageIO REQUIRED)/# find_package(OpenImageIO REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' 's/find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' 's/find_package(TBB 2021.13.0 REQUIRED)/# find_package(TBB 2021.13.0 REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' 's/find_package(Eigen3 REQUIRED CONFIG)/# find_package(Eigen3 REQUIRED CONFIG) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
+          # 使用更通用的 sed 模式注释所有关键 find_package 调用
+          # 注释以 find_package(OpenColorIO 开头的行
+          sed -i '' '/find_package(OpenColorIO/s/^/# /' build_files/cmake/platform/platform_apple.cmake
+          # 注释以 find_package(OpenEXR 开头的行
+          sed -i '' '/find_package(OpenEXR/s/^/# /' build_files/cmake/platform/platform_apple.cmake
+          # 注释以 find_package(OpenImageIO 开头的行
+          sed -i '' '/find_package(OpenImageIO/s/^/# /' build_files/cmake/platform/platform_apple.cmake
+          # 注释以 find_package(Epoxy 开头的行
+          sed -i '' '/find_package(Epoxy/s/^/# /' build_files/cmake/platform/platform_apple.cmake
+          # 注释以 find_package(TBB 开头的行
+          sed -i '' '/find_package(TBB/s/^/# /' build_files/cmake/platform/platform_apple.cmake
+          # 注释以 find_package(Eigen3 开头的行
+          sed -i '' '/find_package(Eigen3/s/^/# /' build_files/cmake/platform/platform_apple.cmake
 
-          echo "✅ platform_apple.cmake patched and find_package commented"
+          echo "✅ platform_apple.cmake patched and all find_package commented"
           head -80 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
