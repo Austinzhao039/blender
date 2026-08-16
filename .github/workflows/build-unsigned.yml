@@ -10,11 +10,11 @@ jobs:
 
     steps:
       # ============================================================
-      # 0. 安装依赖（haru 改为 libharu）
+      # 0. 安装依赖（包含 openal-soft）
       # ============================================================
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake fmt pugixml embree ffmpeg openjpeg opencolorio openvdb potrace libharu manifold
+          brew install git-lfs cmake fmt pugixml embree ffmpeg openjpeg opencolorio openvdb potrace libharu manifold openal-soft
           git lfs install
           if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
             echo "❌ fmt not installed correctly!"
@@ -477,7 +477,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 精准修补 platform_apple.cmake（方案 B：iOS 强制，macOS 只强制 Python）
+      # 14. 精准修补 platform_apple.cmake（iOS 强制，macOS 仅 Python）
       # ============================================================
       - name: Patch platform_apple.cmake precisely
         run: |
@@ -607,16 +607,17 @@ jobs:
             set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
             set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
             set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
-            message(STATUS "IOS PATCH: macOS host tools - only Python forced")
+            # 确保 macOS 主机工具也关闭 OpenAL
+            set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
+            set(WITH_JACK OFF CACHE BOOL "" FORCE)
+            message(STATUS "IOS PATCH: macOS host tools - only Python forced, OpenAL disabled")
           endif()
           ### IOS PATCH END
           EOF
           # 插入到文件开头
           sed -i '' "1 r /tmp/patch_cmake" build_files/cmake/platform/platform_apple.cmake
 
-          # 只注释 iOS 相关的 find_package（这些在 macOS 主机工具中不会执行，因为被 if 条件包裹）
-          # 但为了保险，我们只注释 iOS 分支中可能调用的 find_package（实际上它们都在 iOS 分支内，不会被 macOS 执行）
-          # 不过它们可能在文件其他位置被调用，所以我们注释掉所有可能冲突的 find_package
+          # 注释所有可能冲突的 find_package（对 macOS 无害，对 iOS 必要）
           sed -i '' '/find_package(OpenColorIO/s/^/# /' build_files/cmake/platform/platform_apple.cmake
           sed -i '' '/find_package(OpenEXR/s/^/# /' build_files/cmake/platform/platform_apple.cmake
           sed -i '' '/find_package(OpenImageIO/s/^/# /' build_files/cmake/platform/platform_apple.cmake
@@ -632,12 +633,13 @@ jobs:
           sed -i '' '/find_package(Potrace/s/^/# /' build_files/cmake/platform/platform_apple.cmake
           sed -i '' '/find_package(Haru/s/^/# /' build_files/cmake/platform/platform_apple.cmake
           sed -i '' '/find_package(manifold/s/^/# /' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' '/find_package(OpenAL/s/^/# /' build_files/cmake/platform/platform_apple.cmake
 
           echo "✅ platform_apple.cmake patched (iOS only)"
           head -80 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
-      # 15. 生成 Xcode 项目
+      # 15. 生成 Xcode 项目（强制关闭 OpenAL 等）
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -659,6 +661,8 @@ jobs:
             -DWITH_RUBBERBAND=OFF \
             -DWITH_OPENIMAGEIO=ON \
             -DWITH_OPENMP=OFF \
+            -DWITH_OPENAL=OFF \
+            -DWITH_JACK=OFF \
             -DPYTHON_LIBRARY="${PYTHON_LIB_DIR}/libpython3.13.dylib" \
             -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
