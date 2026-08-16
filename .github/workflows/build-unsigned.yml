@@ -477,13 +477,13 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 精准修补 platform_apple.cmake（包含所有 target，并注释冲突的 find_package）
+      # 14. 精准修补 platform_apple.cmake（只添加缺失的 oiiotool）
       # ============================================================
       - name: Patch platform_apple.cmake precisely
         run: |
           cd blender
 
-          # 1. 在文件开头插入强制变量设置和所有 target 定义
+          # 1. 在文件开头插入强制变量设置和所有 target 定义（包含 oiiotool）
           if ! grep -q "### IOS PATCH START" build_files/cmake/platform/platform_apple.cmake; then
             sed -i '' '1i\
           ### IOS PATCH START\
@@ -510,7 +510,7 @@ jobs:
               IMPORTED_LOCATION "${OPENEXR_LIBRARY}"\
             )\
           endif()\
-          # OpenImageIO\
+          # OpenImageIO (including oiiotool)\
           set(OPENIMAGEIO_INCLUDE_DIR "${LIBDIR}/openimageio/include" CACHE PATH "" FORCE)\
           set(OPENIMAGEIO_LIBRARY "${LIBDIR}/openimageio/lib/libOpenImageIO.dylib" CACHE FILEPATH "" FORCE)\
           set(OPENIMAGEIO_FOUND TRUE CACHE BOOL "" FORCE)\
@@ -520,6 +520,12 @@ jobs:
             set_target_properties(OpenImageIO::OpenImageIO PROPERTIES\
               INTERFACE_INCLUDE_DIRECTORIES "${OPENIMAGEIO_INCLUDE_DIR}"\
               IMPORTED_LOCATION "${OPENIMAGEIO_LIBRARY}"\
+            )\
+          endif()\
+          if(NOT TARGET OpenImageIO::oiiotool)\
+            add_executable(OpenImageIO::oiiotool IMPORTED)\
+            set_target_properties(OpenImageIO::oiiotool PROPERTIES\
+              IMPORTED_LOCATION "/usr/bin/false"\
             )\
           endif()\
           # TBB and its components\
@@ -591,16 +597,9 @@ jobs:
           ' build_files/cmake/platform/platform_apple.cmake
           fi
 
-          # 2. 注释掉所有可能引起冲突的 find_package 调用
-          sed -i '' 's/find_package(OpenColorIO 2.0.0 REQUIRED CONFIG)/# find_package(OpenColorIO 2.0.0 REQUIRED CONFIG) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' 's/find_package(OpenAL REQUIRED)/# find_package(OpenAL REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' 's/find_package(OpenEXR REQUIRED)/# find_package(OpenEXR REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' 's/find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' 's/find_package(TBB 2021.13.0 REQUIRED)/# find_package(TBB 2021.13.0 REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' 's/find_package(OpenImageIO REQUIRED)/# find_package(OpenImageIO REQUIRED) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
-          sed -i '' 's/find_package(Eigen3 REQUIRED CONFIG)/# find_package(Eigen3 REQUIRED CONFIG) # commented by patch/g' build_files/cmake/platform/platform_apple.cmake
+          # 不再注释任何 find_package，保持原样，让已有的配置继续工作
 
-          echo "✅ platform_apple.cmake patched with all targets and find_package commented"
+          echo "✅ platform_apple.cmake patched with oiiotool added"
           head -80 build_files/cmake/platform/platform_apple.cmake
 
       # ============================================================
