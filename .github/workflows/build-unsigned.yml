@@ -10,11 +10,11 @@ jobs:
 
     steps:
       # ============================================================
-      # 0. 安装依赖
+      # 0. 安装依赖（添加 pugixml）
       # ============================================================
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake fmt
+          brew install git-lfs cmake fmt pugixml
           git lfs install
           if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
             echo "❌ fmt not installed correctly!"
