@@ -113,7 +113,7 @@ jobs:
             ios-libs-
 
       # ============================================================
-      # 5. 克隆 iOS 预编译库（仅 OpenEXR）
+      # 5. 克隆 iOS 预编译库（含 OpenEXR 和 Ceres）
       # ============================================================
       - name: Clone iOS precompiled libraries (cache miss)
         if: steps.cache-ios.outputs.cache-hit != 'true'
@@ -121,13 +121,19 @@ jobs:
           cd blender
           rm -rf lib/ios_arm64
           git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
-          cd lib/ios_arm64
-          git lfs pull --include="openexr/**"
-          cd ../..
-          echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
+          echo "✅ iOS libraries cloned"
 
       # ============================================================
-      # 5.1 🚀 删除 iOS zstd 以避免主机工具错误链接
+      # 5.1 🚀 拉取必要的 LFS 文件（OpenEXR 和 Ceres）
+      # ============================================================
+      - name: Pull LFS files for OpenEXR and Ceres
+        run: |
+          cd blender/lib/ios_arm64
+          git lfs pull --include="openexr/**" --include="ceres/**"
+          echo "✅ LFS pulled for openexr and ceres"
+
+      # ============================================================
+      # 5.2 🚀 删除 iOS zstd 以避免主机工具错误链接
       # ============================================================
       - name: Remove iOS zstd to avoid host tool linking
         run: |
@@ -268,14 +274,21 @@ jobs:
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
 
           # ---------- Ceres ----------
+          # 首先查找实际的 Ceres 头文件目录
           CERES_INC=$(find "$LIB_BASE" -path "*/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
-          [ -z "$CERES_INC" ] && CERES_INC="$LIB_BASE/ceres/include"
+          if [ -z "$CERES_INC" ]; then
+            CERES_INC="$LIB_BASE/ceres/include"
+            echo "⚠️ Ceres headers not found by find, using default: $CERES_INC"
+          else
+            echo "✅ Found Ceres headers at: $CERES_INC"
+          fi
           CERES_LIB=$(find "$LIB_BASE" -name "libceres.a" 2>/dev/null | head -1)
           [ -z "$CERES_LIB" ] && CERES_LIB="$LIB_BASE/ceres/lib/libceres.a"
           CERES_CMAKE_DIR="$LIB_BASE/ceres-config"
           mkdir -p "$CERES_CMAKE_DIR"
           cat > "$CERES_CMAKE_DIR/CeresConfig.cmake" <<EOF
           set(Ceres_FOUND TRUE)
+          set(CERES_FOUND TRUE)
           set(CERES_INCLUDE_DIR "${CERES_INC}")
           set(CERES_INCLUDE_DIRS "${CERES_INC}")
           set(Ceres_INCLUDE_DIR "${CERES_INC}")
@@ -286,7 +299,16 @@ jobs:
           set(Ceres_LIBRARIES "${CERES_LIB}")
           set(CERES_VERSION_STRING "2.0.0")
           set(Ceres_VERSION "2.0.0")
+          if(NOT TARGET Ceres::Ceres)
+            add_library(Ceres::Ceres UNKNOWN IMPORTED)
+            set_target_properties(Ceres::Ceres PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${CERES_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${CERES_LIBRARY}"
+            )
+          endif()
           EOF
+          echo "CERES_DIR=$CERES_CMAKE_DIR" >> $GITHUB_ENV
+          echo "✅ Ceres config created with include: $CERES_INC"
 
           # ---------- Boost ----------
           BOOST_INC=$(find "$LIB_BASE" -path "*/boost/version.hpp" -printf "%h\n" 2>/dev/null | head -1)
@@ -346,7 +368,6 @@ jobs:
           endif()
           EOF
 
-          echo "CERES_DIR=$CERES_CMAKE_DIR" >> $GITHUB_ENV
           echo "Boost_DIR=$BOOST_CMAKE_DIR" >> $GITHUB_ENV
           echo "TBB_DIR=$TBB_CMAKE_DIR" >> $GITHUB_ENV
           echo "✅ All fake config files created."
