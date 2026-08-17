@@ -10,7 +10,7 @@ jobs:
 
     steps:
       # ============================================================
-      # 0. 安装依赖（新增 zstd）
+      # 0. 安装依赖（包含 zstd）
       # ============================================================
       - name: Install dependencies
         run: |
@@ -125,6 +125,19 @@ jobs:
           git lfs pull --include="openexr/**"
           cd ../..
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
+
+      # ============================================================
+      # 5.1 🚀 删除 iOS zstd 以避免主机工具错误链接
+      # ============================================================
+      - name: Remove iOS zstd to avoid host tool linking
+        run: |
+          cd blender/lib/ios_arm64
+          if [ -d "zstd" ]; then
+            rm -rf zstd
+            echo "✅ Removed iOS zstd directory"
+          else
+            echo "ℹ️ iOS zstd not present, skipping"
+          fi
 
       # ============================================================
       # 6. 下载 OpenImageIO（main）
