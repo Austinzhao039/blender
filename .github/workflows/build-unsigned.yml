@@ -487,12 +487,12 @@ jobs:
           IOS_LIB="$PWD/lib/ios_arm64"
           MACOS_LIB="$PWD/lib/macos_arm64"
 
-          # ---------- 1. Patch CMakeLists.txt (for iOS build) ----------
+          # ---------- 1. Patch CMakeLists.txt ----------
           cat > /tmp/patch_cmakelists << EOF
           # --- FORCED PATCH FOR iOS BUILD ---
           set(ENV{HOME} "/Users/runner")
-          # For iOS build, set LIBDIR and Python
           if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")
+            # iOS build: set LIBDIR and Python
             set(LIBDIR "${IOS_LIB}" CACHE PATH "" FORCE)
             set(PYTHON_LIBRARY "${PY_LIB}/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
             set(PYTHON_INCLUDE_DIR "${PY_INC}" CACHE PATH "" FORCE)
@@ -502,11 +502,11 @@ jobs:
             set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
             set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
             set(WITH_JACK OFF CACHE BOOL "" FORCE)
+            set(WITH_TBB ON CACHE BOOL "" FORCE)
             set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)
             set(EPOXY_FOUND TRUE CACHE BOOL "" FORCE)
-            set(WITH_TBB ON CACHE BOOL "" FORCE)
           else()
-            # For macOS host tools: use macOS Python, disable TBB
+            # macOS host tools: use macOS Python, disable all heavy dependencies
             set(LIBDIR "${MACOS_LIB}" CACHE PATH "" FORCE)
             set(PYTHON_LIBRARY "${MACOS_LIB}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
             set(PYTHON_INCLUDE_DIR "${MACOS_LIB}/python/include/python3.13" CACHE PATH "" FORCE)
@@ -517,6 +517,23 @@ jobs:
             set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
             set(WITH_JACK OFF CACHE BOOL "" FORCE)
             set(WITH_TBB OFF CACHE BOOL "" FORCE)
+            set(WITH_OPENIMAGEIO OFF CACHE BOOL "" FORCE)
+            set(WITH_OPENCOLORIO OFF CACHE BOOL "" FORCE)
+            set(WITH_OPENVDB OFF CACHE BOOL "" FORCE)
+            set(WITH_CYCLES OFF CACHE BOOL "" FORCE)
+            set(WITH_NANOVDB OFF CACHE BOOL "" FORCE)
+            set(WITH_MOD_FLUID OFF CACHE BOOL "" FORCE)
+            set(WITH_OPENSUBDIV OFF CACHE BOOL "" FORCE)
+            set(WITH_ALEMBIC OFF CACHE BOOL "" FORCE)
+            set(WITH_USD OFF CACHE BOOL "" FORCE)
+            set(WITH_MATERIALX OFF CACHE BOOL "" FORCE)
+            set(WITH_POTRACE OFF CACHE BOOL "" FORCE)
+            set(WITH_HARU OFF CACHE BOOL "" FORCE)
+            set(WITH_GMP OFF CACHE BOOL "" FORCE)
+            set(WITH_MANIFOLD OFF CACHE BOOL "" FORCE)
+            set(WITH_OPENIMAGEDENOISE OFF CACHE BOOL "" FORCE)
+            set(WITH_EMBREE OFF CACHE BOOL "" FORCE)
+            set(WITH_FFTW3 OFF CACHE BOOL "" FORCE)
             set(TBB_FOUND FALSE CACHE BOOL "" FORCE)
             set(TBB_LIBRARIES "" CACHE STRING "" FORCE)
           endif()
@@ -631,7 +648,7 @@ jobs:
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
           sed -i '' 's/^[[:space:]]*find_package(OpenColorIO 2.0.0 REQUIRED CONFIG)/# find_package(OpenColorIO 2.0.0 REQUIRED CONFIG) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
-          echo "Patched CMakeLists.txt and platform_apple.cmake with all targets"
+          echo "Patched CMakeLists.txt and platform_apple.cmake with all targets and disabled heavy deps for host tools"
 
       # ============================================================
       # 15. Generate Xcode project
