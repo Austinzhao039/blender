@@ -513,56 +513,35 @@ jobs:
 
           echo "✅ Patched CMakeLists.txt and disabled Epoxy find_package"
 
-      # ============================================================
-      # 15. 生成 Xcode 项目
-      # ============================================================
       - name: Generate Xcode project
-        id: cmake_config
-        run: |
-          if [ ! -d "blender" ]; then
-            echo "❌ blender directory missing!"
-            exit 1
-          fi
-          cd blender
-          rm -rf build_ios
-          cmake -G Xcode -S . -B build_ios \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DWITH_GTESTS=OFF \
-            -DWITH_TESTS=OFF \
-            -DWITH_DOCS=OFF \
-            -DWITH_RUBBERBAND=OFF \
-            -DWITH_OPENIMAGEIO=ON \
-            -DWITH_OPENMP=OFF \
-            -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
-            -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
-            -Dfmt_DIR="${FMT_CMAKE_DIR}" \
-            -DOPENIMAGEIO_ROOT_DIR="$PWD/lib/ios_arm64/openimageio" \
-            -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
-            -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}" \
-            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio" \
-            -DEigen3_DIR="$Eigen3_DIR" \
-            -DCeres_DIR="$CERES_DIR" \
-            -DBoost_DIR="$Boost_DIR" \
-            -DTBB_DIR="$TBB_DIR" \
-            2>&1 | tee cmake_output.txt
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "❌ CMake configuration failed!"
-            exit 1
-          fi
-
-      - name: Upload CMake output (always)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cmake-output
-          path: |
-            blender/cmake_output.txt
-            blender/build_ios/CMakeFiles/CMakeError.log
-            blender/build_ios/CMakeFiles/CMakeOutput.log
-          retention-days: 7
+  id: cmake_config
+  run: |
+    cd blender
+    rm -rf build_ios
+    cmake -G Xcode -S . -B build_ios \
+      -DCMAKE_OSX_SYSROOT=iphoneos \
+      -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+      -DCMAKE_OSX_ARCHITECTURES=arm64 \
+      -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+      -DWITH_GTESTS=OFF \
+      -DWITH_TESTS=OFF \
+      -DWITH_DOCS=OFF \
+      -DWITH_RUBBERBAND=OFF \
+      -DWITH_OPENIMAGEIO=ON \
+      -DWITH_OPENMP=OFF \
+      -DWITH_TBB=OFF \                       # ← 显式禁用 TBB
+      -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
+      -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
+      -Dfmt_DIR="${FMT_CMAKE_DIR}" \
+      -DOPENIMAGEIO_ROOT_DIR="$PWD/lib/ios_arm64/openimageio" \
+      -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
+      -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}" \
+      -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio" \
+      -DEigen3_DIR="$Eigen3_DIR" \
+      -DCeres_DIR="$CERES_DIR" \
+      -DBoost_DIR="$Boost_DIR" \
+      # 不再需要 -DTBB_DIR
+      2>&1 | tee cmake_output.txt
 
       # ============================================================
       # 16. 验证 Xcode 项目是否生成
