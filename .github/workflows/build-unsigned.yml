@@ -10,27 +10,27 @@ jobs:
 
     steps:
       # ============================================================
-      # 0. 安装依赖
+      # 0. Install dependencies
       # ============================================================
       - name: Install dependencies
         run: |
           brew install git-lfs cmake fmt
           git lfs install
           if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
-            echo "❌ fmt not installed correctly!"
+            echo "fmt not installed correctly!"
             exit 1
           fi
-          echo "✅ fmt installed at /opt/homebrew/lib/libfmt.a"
+          echo "fmt installed at /opt/homebrew/lib/libfmt.a"
           FMT_CMAKE_DIR=$(find /opt/homebrew -name "fmt-config.cmake" 2>/dev/null | head -1 | xargs dirname)
           if [ -z "$FMT_CMAKE_DIR" ]; then
-            echo "❌ fmt CMake config not found!"
+            echo "fmt CMake config not found!"
             exit 1
           fi
           echo "FMT_CMAKE_DIR=$FMT_CMAKE_DIR" >> $GITHUB_ENV
-          echo "✅ fmt CMake config at $FMT_CMAKE_DIR"
+          echo "fmt CMake config at $FMT_CMAKE_DIR"
 
       # ============================================================
-      # 1. 克隆 Blender 源码（跳过 LFS）
+      # 1. Clone Blender source (skip LFS)
       # ============================================================
       - name: Clone Blender from official source (skip LFS)
         run: |
@@ -47,13 +47,13 @@ jobs:
       - name: Verify blender directory exists
         run: |
           if [ ! -d "blender" ]; then
-            echo "❌ blender directory missing!"
+            echo "blender directory missing!"
             exit 1
           fi
-          echo "✅ blender directory exists"
+          echo "blender directory exists"
 
       # ============================================================
-      # 2. 下载 startup.blend（main2）
+      # 2. Download startup.blend (main2)
       # ============================================================
       - name: Download startup.blend from Release (main2)
         run: |
@@ -73,13 +73,13 @@ jobs:
             git lfs pull --include="release/datafiles/startup.blend"
           fi
           if [ ! -f "release/datafiles/startup.blend" ]; then
-            echo "❌ startup.blend still missing!"
+            echo "startup.blend still missing!"
             exit 1
           fi
-          echo "✅ startup.blend ready"
+          echo "startup.blend ready"
 
       # ============================================================
-      # 3. 下载 macOS Python（mainly）
+      # 3. Download macOS Python (mainly)
       # ============================================================
       - name: Download macOS Python from Release (mainly)
         run: |
@@ -90,13 +90,13 @@ jobs:
           rm macos-python.zip
           chmod +x lib/macos_arm64/python/bin/python3.13
           if [ ! -f "lib/macos_arm64/python/bin/python3.13" ]; then
-            echo "❌ macOS Python still missing!"
+            echo "macOS Python still missing!"
             exit 1
           fi
-          echo "✅ macOS Python ready"
+          echo "macOS Python ready"
 
       # ============================================================
-      # 4. 缓存 iOS 库
+      # 4. Cache iOS libraries
       # ============================================================
       - name: Cache iOS libraries
         id: cache-ios
@@ -108,7 +108,7 @@ jobs:
             ios-libs-
 
       # ============================================================
-      # 5. 克隆 iOS 预编译库（仅 OpenEXR）
+      # 5. Clone iOS precompiled libraries (only OpenEXR)
       # ============================================================
       - name: Clone iOS precompiled libraries (cache miss)
         if: steps.cache-ios.outputs.cache-hit != 'true'
@@ -119,10 +119,10 @@ jobs:
           cd lib/ios_arm64
           git lfs pull --include="openexr/**"
           cd ../..
-          echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
+          echo "iOS libraries cloned and OpenEXR LFS pulled"
 
       # ============================================================
-      # 6. 下载 OpenImageIO（main）
+      # 6. Download OpenImageIO (main)
       # ============================================================
       - name: Download OpenImageIO from Release (main)
         run: |
@@ -132,35 +132,35 @@ jobs:
           rm openimageio-libs.zip
           ls -lh libOpenImageIO*.dylib
           if [ ! -f libOpenImageIO.dylib ] || [ $(stat -f%z libOpenImageIO.dylib) -lt 1000000 ]; then
-            echo "❌ libOpenImageIO.dylib missing or too small!"
+            echo "libOpenImageIO.dylib missing or too small!"
             exit 1
           fi
-          echo "✅ OpenImageIO dynamic libraries ready"
+          echo "OpenImageIO dynamic libraries ready"
 
       # ============================================================
-      # 7. 🚀 下载 Eigen 头文件到 quadriflow 源码目录
+      # 7. Download Eigen headers to quadriflow source
       # ============================================================
       - name: Download Eigen headers to quadriflow source
         run: |
           cd blender
-          echo "📥 Downloading Eigen 3.4.0 from official repository..."
+          echo "Downloading Eigen 3.4.0 from official repository..."
           curl -L -o eigen.tar.gz https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
           tar -xzf eigen.tar.gz
           mkdir -p extern/quadriflow/src/Eigen
           cp -r eigen-3.4.0/Eigen/* extern/quadriflow/src/Eigen/
           rm -rf eigen-3.4.0 eigen.tar.gz
           if [ -f "extern/quadriflow/src/Eigen/Core" ]; then
-            echo "✅ Eigen headers copied to extern/quadriflow/src/Eigen/"
+            echo "Eigen headers copied to extern/quadriflow/src/Eigen/"
           else
-            echo "❌ Eigen headers copy failed!"
+            echo "Eigen headers copy failed!"
             exit 1
           fi
           EIGEN_INCLUDE_PATH="$PWD/extern/quadriflow/src"
           echo "EIGEN_INCLUDE_PATH=$EIGEN_INCLUDE_PATH" >> $GITHUB_ENV
-          echo "✅ EIGEN_INCLUDE_PATH set to $EIGEN_INCLUDE_PATH"
+          echo "EIGEN_INCLUDE_PATH set to $EIGEN_INCLUDE_PATH"
 
       # ============================================================
-      # 8. 🚀 修复 list(INSERT) 错误（删除整行）
+      # 8. Fix list(INSERT) error (remove lines)
       # ============================================================
       - name: Fix list(INSERT) error in source/creator/CMakeLists.txt
         run: |
@@ -172,7 +172,7 @@ jobs:
           grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "All list(INSERT lines removed"
 
       # ============================================================
-      # 9. 🚀 创建假的 CMake 配置文件（展开变量）
+      # 9. Create fake CMake config files
       # ============================================================
       - name: Create fake CMake config files
         run: |
@@ -331,10 +331,10 @@ jobs:
           echo "CERES_DIR=$CERES_CMAKE_DIR" >> $GITHUB_ENV
           echo "Boost_DIR=$BOOST_CMAKE_DIR" >> $GITHUB_ENV
           echo "TBB_DIR=$TBB_CMAKE_DIR" >> $GITHUB_ENV
-          echo "✅ All fake config files created."
+          echo "All fake config files created."
 
       # ============================================================
-      # 10. 验证 OpenEXR
+      # 10. Verify OpenEXR
       # ============================================================
       - name: Verify OpenEXR files
         run: |
@@ -343,13 +343,13 @@ jobs:
             git lfs pull --include="openexr/**"
           fi
           if [ ! -f "openexr/lib/libOpenEXR.dylib" ] && [ ! -f "openexr/lib/libOpenEXR.a" ]; then
-            echo "❌ OpenEXR library still missing!"
+            echo "OpenEXR library still missing!"
             exit 1
           fi
-          echo "✅ OpenEXR is ready"
+          echo "OpenEXR is ready"
 
       # ============================================================
-      # 11. 下载 iOS Python
+      # 11. Download iOS Python
       # ============================================================
       - name: Download iOS Python 3.13 dynamic library from BeeWare
         run: |
@@ -365,32 +365,32 @@ jobs:
             if [ -f "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" ]; then
               cp "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" lib/ios_arm64/python/lib/
             else
-              echo "❌ libpython3.13.dylib not found!"
+              echo "libpython3.13.dylib not found!"
               exit 1
             fi
             if [ -d "$XCFRAMEWORK_BASE/include/python3.13" ]; then
               cp -r "$XCFRAMEWORK_BASE/include/python3.13" lib/ios_arm64/python/include/
             else
-              echo "❌ Headers directory not found!"
+              echo "Headers directory not found!"
               exit 1
             fi
           else
-            echo "❌ XCFramework not found!"
+            echo "XCFramework not found!"
             exit 1
           fi
           rm -rf python_temp python-ios.tar.gz
           if [ ! -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
-            echo "❌ iOS Python dynamic library not found!"
+            echo "iOS Python dynamic library not found!"
             exit 1
           fi
           if [ ! -f "lib/ios_arm64/python/include/python3.13/Python.h" ]; then
-            echo "❌ iOS Python headers not found!"
+            echo "iOS Python headers not found!"
             exit 1
           fi
-          echo "✅ iOS Python installed"
+          echo "iOS Python installed"
 
       # ============================================================
-      # 12. 动态查找路径（导出变量）
+      # 12. Locate library paths dynamically
       # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
@@ -401,18 +401,18 @@ jobs:
           if [ -f "$PYTHON_LIB" ]; then
             PYTHON_LIB_DIR=$(dirname "$PYTHON_LIB")
             echo "PYTHON_LIB_DIR=$PYTHON_LIB_DIR" >> $GITHUB_ENV
-            echo "✅ Python library: $PYTHON_LIB"
+            echo "Python library: $PYTHON_LIB"
           else
-            echo "❌ Python library not found!"
+            echo "Python library not found!"
             exit 1
           fi
           PYTHON_INC="$LIB_BASE/python/include/python3.13/Python.h"
           if [ -f "$PYTHON_INC" ]; then
             PYTHON_INC_DIR=$(dirname "$PYTHON_INC")
             echo "PYTHON_INC_DIR=$PYTHON_INC_DIR" >> $GITHUB_ENV
-            echo "✅ Python headers: $PYTHON_INC"
+            echo "Python headers: $PYTHON_INC"
           else
-            echo "❌ Python headers not found!"
+            echo "Python headers not found!"
             exit 1
           fi
           OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.dylib" -type f | head -1)
@@ -420,16 +420,16 @@ jobs:
             OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
             echo "OPENEXR_LIB_DIR=$OPENEXR_LIB_DIR" >> $GITHUB_ENV
             echo "OPENEXR_LIB_FILE=$OPENEXR_LIB" >> $GITHUB_ENV
-            echo "✅ OpenEXR library: $OPENEXR_LIB"
+            echo "OpenEXR library: $OPENEXR_LIB"
           else
             OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.a" -type f | head -1)
             if [ -n "$OPENEXR_LIB" ]; then
               OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
               echo "OPENEXR_LIB_DIR=$OPENEXR_LIB_DIR" >> $GITHUB_ENV
               echo "OPENEXR_LIB_FILE=$OPENEXR_LIB" >> $GITHUB_ENV
-              echo "✅ OpenEXR library (static): $OPENEXR_LIB"
+              echo "OpenEXR library (static): $OPENEXR_LIB"
             else
-              echo "❌ OpenEXR library not found!"
+              echo "OpenEXR library not found!"
               exit 1
             fi
           fi
@@ -437,9 +437,9 @@ jobs:
           if [ -f "$OPENEXR_INC" ]; then
             OPENEXR_INC_DIR=$(dirname "$OPENEXR_INC")
             echo "OPENEXR_INC_DIR=$OPENEXR_INC_DIR" >> $GITHUB_ENV
-            echo "✅ OpenEXR headers: $OPENEXR_INC"
+            echo "OpenEXR headers: $OPENEXR_INC"
           else
-            echo "❌ OpenEXR headers not found!"
+            echo "OpenEXR headers not found!"
             exit 1
           fi
           OIIO_LIB="$LIB_BASE/openimageio/lib/libOpenImageIO.dylib"
@@ -447,23 +447,23 @@ jobs:
             OIIO_LIB_DIR=$(dirname "$OIIO_LIB")
             echo "OIIO_LIB_DIR=$OIIO_LIB_DIR" >> $GITHUB_ENV
             echo "OIIO_LIB_FILE=$OIIO_LIB" >> $GITHUB_ENV
-            echo "✅ OpenImageIO library: $OIIO_LIB"
+            echo "OpenImageIO library: $OIIO_LIB"
           else
-            echo "❌ OpenImageIO library not found!"
+            echo "OpenImageIO library not found!"
             exit 1
           fi
           OIIO_INC="$LIB_BASE/openimageio/include/OpenImageIO"
           if [ -d "$OIIO_INC" ]; then
             OIIO_INC_DIR=$(dirname "$OIIO_INC")
             echo "OIIO_INC_DIR=$OIIO_INC_DIR" >> $GITHUB_ENV
-            echo "✅ OpenImageIO headers: $OIIO_INC"
+            echo "OpenImageIO headers: $OIIO_INC"
           else
-            echo "❌ OpenImageIO headers not found!"
+            echo "OpenImageIO headers not found!"
             exit 1
           fi
 
       # ============================================================
-      # 13. 设置 Xcode
+      # 13. Setup Xcode
       # ============================================================
       - name: Setup Xcode
         run: |
@@ -477,17 +477,15 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 直接修改 CMakeLists.txt 和 platform_apple.cmake（注释 Epoxy）
+      # 14. Patch CMakeLists.txt and platform_apple.cmake
       # ============================================================
       - name: Patch CMakeLists.txt and platform_apple.cmake
         run: |
           cd blender
-          # 获取变量值
           PY_LIB="$PYTHON_LIB_DIR"
           PY_INC="$PYTHON_INC_DIR"
           IOS_LIB="$PWD/lib/ios_arm64"
 
-          # ---------- 1. 在 CMakeLists.txt 开头插入补丁 ----------
           cat > /tmp/patch_cmakelists << EOF
           # --- FORCED PATCH FOR iOS BUILD ---
           set(ENV{HOME} "/Users/runner")
@@ -501,26 +499,24 @@ jobs:
           set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
           set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
           set(WITH_JACK OFF CACHE BOOL "" FORCE)
-          # Force Epoxy - set found and disable find_package
           set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)
           set(EPOXY_FOUND TRUE CACHE BOOL "" FORCE)
           # --- END PATCH ---
           EOF
           sed -i '' "1 r /tmp/patch_cmakelists" CMakeLists.txt
 
-          # ---------- 2. 注释掉 platform_apple.cmake 中的 find_package(Epoxy REQUIRED) ----------
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
-          echo "✅ Patched CMakeLists.txt and disabled Epoxy find_package"
+          echo "Patched CMakeLists.txt and disabled Epoxy find_package"
 
       # ============================================================
-      # 15. 生成 Xcode 项目
+      # 15. Generate Xcode project
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
         run: |
           if [ ! -d "blender" ]; then
-            echo "❌ blender directory missing!"
+            echo "blender directory missing!"
             exit 1
           fi
           cd blender
@@ -549,7 +545,7 @@ jobs:
             -DTBB_DIR="$TBB_DIR" \
             2>&1 | tee cmake_output.txt
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "❌ CMake configuration failed!"
+            echo "CMake configuration failed!"
             exit 1
           fi
 
@@ -565,22 +561,22 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 16. 验证 Xcode 项目是否生成
+      # 16. Verify Xcode project exists
       # ============================================================
       - name: Verify Xcode project exists
         run: |
           if [ ! -d "blender/build_ios/Blender.xcodeproj" ]; then
-            echo "❌ Blender.xcodeproj not found!"
+            echo "Blender.xcodeproj not found!"
             echo "Contents of build_ios:"
             ls -la blender/build_ios/ || echo "build_ios directory not found!"
             echo "CMake output (last 100 lines):"
             tail -100 blender/cmake_output.txt
             exit 1
           fi
-          echo "✅ Blender.xcodeproj found"
+          echo "Blender.xcodeproj found"
 
       # ============================================================
-      # 17. 🚀 构建交叉编译工具链（显式传递 HOME）
+      # 17. Build cross compile tools
       # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
@@ -599,7 +595,7 @@ jobs:
             HOME="$HOME"
 
       # ============================================================
-      # 18. 编译主应用（显式传递 HOME）
+      # 18. Build Blender.app for iOS
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
@@ -621,7 +617,7 @@ jobs:
             HOME="$HOME"
 
       # ============================================================
-      # 19. 打包成未签名 IPA
+      # 19. Package unsigned IPA
       # ============================================================
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
@@ -641,7 +637,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 20. 上传 IPA
+      # 20. Upload IPA
       # ============================================================
       - name: Upload IPA
         if: steps.cmake_config.outcome == 'success'
@@ -652,7 +648,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 21. 失败时上传日志
+      # 21. Upload logs on failure
       # ============================================================
       - name: Upload logs on failure
         if: failure()
