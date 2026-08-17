@@ -14,7 +14,7 @@ jobs:
       # ============================================================
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake fmt pugixml
+          brew install git-lfs cmake fmt
           git lfs install
           if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
             echo "fmt not installed correctly!"
@@ -477,30 +477,64 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. Patch platform_apple.cmake
+      # 14. Patch CMakeLists.txt and platform_apple.cmake (with all targets)
       # ============================================================
-      - name: Patch platform_apple.cmake
+      - name: Patch CMakeLists.txt and platform_apple.cmake
         run: |
           cd blender
-          # Remove any existing patch block
-          sed -i '' '/### IOS PATCH START/,/### IOS PATCH END/d' build_files/cmake/platform/platform_apple.cmake
+          PY_LIB="$PYTHON_LIB_DIR"
+          PY_INC="$PYTHON_INC_DIR"
+          IOS_LIB="$PWD/lib/ios_arm64"
+          MACOS_LIB="$PWD/lib/macos_arm64"
 
-          # Insert new patch at top using single-quoted heredoc to prevent shell expansion
-          cat > /tmp/patch_cmake << 'EOF'
-          ### IOS PATCH START
+          # ---------- 1. Patch CMakeLists.txt (for iOS build) ----------
+          cat > /tmp/patch_cmakelists << EOF
+          # --- FORCED PATCH FOR iOS BUILD ---
           set(ENV{HOME} "/Users/runner")
+          # For iOS build, set LIBDIR and Python
           if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")
-            # iOS build: force ios_arm64 libraries and define all targets
-            set(LIBDIR "${CMAKE_SOURCE_DIR}/lib/ios_arm64" CACHE PATH "" FORCE)
-            set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
-            set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
+            set(LIBDIR "${IOS_LIB}" CACHE PATH "" FORCE)
+            set(PYTHON_LIBRARY "${PY_LIB}/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+            set(PYTHON_INCLUDE_DIR "${PY_INC}" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_CONFIG_DIR "${PY_INC}" CACHE PATH "" FORCE)
+            set(PYTHON_LIBPATH "${PY_LIB}" CACHE PATH "" FORCE)
             set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
             set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
             set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
             set(WITH_JACK OFF CACHE BOOL "" FORCE)
+            set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)
+            set(EPOXY_FOUND TRUE CACHE BOOL "" FORCE)
+            set(WITH_TBB ON CACHE BOOL "" FORCE)
+          else()
+            # For macOS host tools: use macOS Python, disable TBB
+            set(LIBDIR "${MACOS_LIB}" CACHE PATH "" FORCE)
+            set(PYTHON_LIBRARY "${MACOS_LIB}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+            set(PYTHON_INCLUDE_DIR "${MACOS_LIB}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_CONFIG_DIR "${MACOS_LIB}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_LIBPATH "${MACOS_LIB}/python/lib" CACHE PATH "" FORCE)
+            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
+            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
+            set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
+            set(WITH_JACK OFF CACHE BOOL "" FORCE)
+            set(WITH_TBB OFF CACHE BOOL "" FORCE)
+            set(TBB_FOUND FALSE CACHE BOOL "" FORCE)
+            set(TBB_LIBRARIES "" CACHE STRING "" FORCE)
+          endif()
+          # --- END PATCH ---
+          EOF
+          sed -i '' "1 r /tmp/patch_cmakelists" CMakeLists.txt
 
+          # ---------- 2. Patch platform_apple.cmake ----------
+          # Remove any existing patch block
+          sed -i '' '/### IOS PATCH START/,/### IOS PATCH END/d' build_files/cmake/platform/platform_apple.cmake
+
+          # Insert new patch at top
+          cat > /tmp/patch_cmake << 'EOF'
+          ### IOS PATCH START
+          # This patch defines missing IMPORTED targets for iOS build and disables TBB for host tools
+          if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")
+            # iOS build: define all targets using ios_arm64 libraries
+            set(LIBDIR "${CMAKE_SOURCE_DIR}/lib/ios_arm64" CACHE PATH "" FORCE)
             # OpenEXR
             set(OPENEXR_INCLUDE_DIR "${LIBDIR}/openexr/include/OpenEXR" CACHE PATH "" FORCE)
             set(OPENEXR_LIBRARY "${LIBDIR}/openexr/lib/libOpenEXR.dylib" CACHE FILEPATH "" FORCE)
@@ -513,7 +547,6 @@ jobs:
                 IMPORTED_LOCATION "${OPENEXR_LIBRARY}"
               )
             endif()
-
             # OpenImageIO
             set(OPENIMAGEIO_INCLUDE_DIR "${LIBDIR}/openimageio/include" CACHE PATH "" FORCE)
             set(OPENIMAGEIO_LIBRARY "${LIBDIR}/openimageio/lib/libOpenImageIO.dylib" CACHE FILEPATH "" FORCE)
@@ -532,7 +565,6 @@ jobs:
                 IMPORTED_LOCATION "/usr/bin/false"
               )
             endif()
-
             # TBB
             set(TBB_INCLUDE_DIR "${LIBDIR}/tbb/include" CACHE PATH "" FORCE)
             set(TBB_LIBRARY "${LIBDIR}/tbb/lib/libtbb.dylib" CACHE FILEPATH "" FORCE)
@@ -560,9 +592,7 @@ jobs:
                 IMPORTED_LOCATION "${TBBMALLOC_PROXY_LIBRARY}"
               )
             endif()
-
             # Epoxy
-            set(EPOXY_ROOT_DIR "${LIBDIR}/epoxy" CACHE PATH "" FORCE)
             set(EPOXY_LIBRARY "${LIBDIR}/epoxy/lib/libepoxy.a" CACHE FILEPATH "" FORCE)
             set(EPOXY_INCLUDE_DIR "${LIBDIR}/epoxy/include" CACHE PATH "" FORCE)
             set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)
@@ -574,8 +604,7 @@ jobs:
                 IMPORTED_LOCATION "${EPOXY_LIBRARY}"
               )
             endif()
-
-            # OpenColorIO (may be needed)
+            # OpenColorIO
             set(OPENCOLORIO_ROOT_DIR "${LIBDIR}/opencolorio" CACHE PATH "" FORCE)
             set(OPENCOLORIO_INCLUDE_DIR "${OPENCOLORIO_ROOT_DIR}/include" CACHE PATH "" FORCE)
             set(OPENCOLORIO_LIBRARY "${OPENCOLORIO_ROOT_DIR}/lib/libOpenColorIO.dylib" CACHE FILEPATH "" FORCE)
@@ -588,25 +617,8 @@ jobs:
                 IMPORTED_LOCATION "${OPENCOLORIO_LIBRARY}"
               )
             endif()
-
             set(CMAKE_FIND_FRAMEWORK NEVER)
-            message(STATUS "IOS PATCH: iOS build forced paths and targets")
-          else()
-            # macOS host tools: only set Python, disable TBB, use macOS libraries
-            set(LIBDIR "${CMAKE_SOURCE_DIR}/lib/macos_arm64" CACHE PATH "" FORCE)
-            set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
-            set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
-            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
-            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
-            set(WITH_TBB OFF CACHE BOOL "" FORCE)
-            set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
-            set(WITH_JACK OFF CACHE BOOL "" FORCE)
-            # Ensure TBB is not used by clearing variables
-            set(TBB_FOUND FALSE CACHE BOOL "" FORCE)
-            set(TBB_LIBRARIES "" CACHE STRING "" FORCE)
-            message(STATUS "IOS PATCH: macOS host tools - Python only, TBB/OpenAL disabled")
+            message(STATUS "IOS PATCH: iOS targets defined")
           endif()
           ### IOS PATCH END
           EOF
@@ -619,7 +631,7 @@ jobs:
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
           sed -i '' 's/^[[:space:]]*find_package(OpenColorIO 2.0.0 REQUIRED CONFIG)/# find_package(OpenColorIO 2.0.0 REQUIRED CONFIG) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
-          echo "Patched platform_apple.cmake"
+          echo "Patched CMakeLists.txt and platform_apple.cmake with all targets"
 
       # ============================================================
       # 15. Generate Xcode project
