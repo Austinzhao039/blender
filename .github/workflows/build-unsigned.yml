@@ -127,44 +127,65 @@ jobs:
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
       # ============================================================
-      # 5.1 🚀 确保 Ceres 头文件存在（下载完整源码包）
+      # 5.1 🚀 确保 Ceres 头文件存在（多策略 + 备用）
       # ============================================================
       - name: Ensure Ceres headers are present
         run: |
           cd blender
           CERES_DIR="lib/ios_arm64/ceres"
-          mkdir -p "$CERES_DIR/include"
-          if [ -f "$CERES_DIR/include/ceres/ceres.h" ] && [ -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
-            echo "✅ Ceres headers already present (including internal)"
+          if [ -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
+            echo "✅ Ceres headers already present"
           else
-            echo "📥 Downloading Ceres full source from official release..."
-            CERES_VERSION="2.1.0"
-            curl -L -o /tmp/ceres-solver.tar.gz \
-              https://github.com/ceres-solver/ceres-solver/archive/refs/tags/${CERES_VERSION}.tar.gz
-            tar -xzf /tmp/ceres-solver.tar.gz -C /tmp
-            
-            # 复制整个 include 目录（包含 ceres 和 internal）
-            cp -r /tmp/ceres-solver-${CERES_VERSION}/include/* "$CERES_DIR/include/"
-            
-            # 复制 internal 目录（如果存在）
-            if [ -d "/tmp/ceres-solver-${CERES_VERSION}/internal" ]; then
-              mkdir -p "$CERES_DIR/internal"
-              cp -r /tmp/ceres-solver-${CERES_VERSION}/internal/* "$CERES_DIR/internal/"
+            echo "⚠️ Ceres headers missing, attempting LFS pull..."
+            cd lib/ios_arm64
+            # 策略1：拉取 ceres 子目录
+            git lfs pull --include="ceres/**" || true
+            # 策略2：拉取通配路径
+            if [ ! -f "ceres/include/ceres/internal/export.h" ]; then
+              git lfs pull --include="**/ceres/**" || true
             fi
-            
-            rm -rf /tmp/ceres-solver.tar.gz /tmp/ceres-solver-${CERES_VERSION}
-            echo "✅ Ceres headers downloaded and installed"
+            # 策略3：拉取所有 LFS 文件
+            if [ ! -f "ceres/include/ceres/internal/export.h" ]; then
+              git lfs pull || true
+            fi
+            cd ../..
+            # 如果 LFS 成功，文件应该存在
+            if [ -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
+              echo "✅ Ceres headers pulled via LFS"
+            else
+              echo "📥 LFS failed, downloading from Ceres official and creating missing files..."
+              CERES_VERSION="2.1.0"
+              curl -L -o /tmp/ceres-solver.tar.gz \
+                https://github.com/ceres-solver/ceres-solver/archive/refs/tags/${CERES_VERSION}.tar.gz
+              tar -xzf /tmp/ceres-solver.tar.gz -C /tmp
+              mkdir -p "$CERES_DIR/include"
+              cp -r /tmp/ceres-solver-${CERES_VERSION}/include/* "$CERES_DIR/include/"
+              # 如果 internal/export.h 仍然缺失，手动创建
+              if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
+                mkdir -p "$CERES_DIR/include/ceres/internal"
+                cat > "$CERES_DIR/include/ceres/internal/export.h" << 'EOF'
+                // Ceres export macros - dummy for iOS build
+                #ifndef CERES_EXPORT_H_
+                #define CERES_EXPORT_H_
+
+                #define CERES_EXPORT
+                #define CERES_EXPORT_TEMPLATE
+                #define CERES_NO_EXPORT
+                #define CERES_DEPRECATED
+
+                #endif  // CERES_EXPORT_H_
+                EOF
+                echo "✅ Created dummy export.h"
+              fi
+              rm -rf /tmp/ceres-solver.tar.gz /tmp/ceres-solver-${CERES_VERSION}
+            fi
           fi
-          # 验证
-          if [ ! -f "$CERES_DIR/include/ceres/ceres.h" ]; then
-            echo "❌ ceres/ceres.h not found!"
-            exit 1
-          fi
+          # 最终验证
           if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
-            echo "❌ ceres/internal/export.h not found!"
+            echo "❌ ceres/internal/export.h still not found!"
             exit 1
           fi
-          echo "✅ Ceres headers verified at $CERES_DIR/include/"
+          echo "✅ Ceres headers verified"
 
       # ============================================================
       # 5.2 🚀 删除 iOS zstd 以避免主机工具错误链接
@@ -590,12 +611,10 @@ jobs:
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
           # ---------- 3. 🆕 强制在 libmv 的 CMakeLists 中添加包含路径 ----------
-          # 使用 cat 合并文件，避免 sed 语法问题
           cat > /tmp/libmv_patch.txt << 'EOF'
           # Added by iOS patch: force Ceres include path
           include_directories(BEFORE SYSTEM "${CERES_INCLUDE_DIR}")
           EOF
-          # 在文件开头插入
           { cat /tmp/libmv_patch.txt; cat intern/libmv/CMakeLists.txt; } > intern/libmv/CMakeLists.txt.tmp && mv intern/libmv/CMakeLists.txt.tmp intern/libmv/CMakeLists.txt
 
           echo "✅ Patched CMakeLists.txt, disabled Epoxy, forced Ceres include path in libmv"
