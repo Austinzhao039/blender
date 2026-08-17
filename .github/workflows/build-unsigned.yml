@@ -10,11 +10,11 @@ jobs:
 
     steps:
       # ============================================================
-      # 0. 安装依赖
+      # 0. 安装依赖（新增 zstd）
       # ============================================================
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake fmt
+          brew install git-lfs cmake fmt zstd
           git lfs install
           if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
             echo "❌ fmt not installed correctly!"
@@ -28,6 +28,12 @@ jobs:
           fi
           echo "FMT_CMAKE_DIR=$FMT_CMAKE_DIR" >> $GITHUB_ENV
           echo "✅ fmt CMake config at $FMT_CMAKE_DIR"
+          # 验证 zstd 安装
+          if [ ! -f /opt/homebrew/lib/libzstd.dylib ]; then
+            echo "❌ zstd not installed correctly!"
+            exit 1
+          fi
+          echo "✅ zstd installed at /opt/homebrew/lib/libzstd.dylib"
 
       # ============================================================
       # 1. 克隆 Blender 源码（跳过 LFS）
@@ -514,7 +520,7 @@ jobs:
           echo "✅ Patched CMakeLists.txt and disabled Epoxy find_package"
 
       # ============================================================
-      # 15. 生成 Xcode 项目（已修复 TBB 链接问题）
+      # 15. 生成 Xcode 项目（指定 macOS zstd 路径）
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -537,6 +543,8 @@ jobs:
             -DWITH_OPENIMAGEIO=ON \
             -DWITH_OPENMP=OFF \
             -DWITH_TBB=OFF \
+            -DZSTD_LIBRARY=/opt/homebrew/lib/libzstd.dylib \
+            -DZSTD_INCLUDE_DIR=/opt/homebrew/include \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
             -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
             -Dfmt_DIR="${FMT_CMAKE_DIR}" \
