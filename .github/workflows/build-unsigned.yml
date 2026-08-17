@@ -150,6 +150,12 @@ jobs:
             rm -rf /tmp/ceres-solver.tar.gz /tmp/ceres-solver-${CERES_VERSION}
             echo "✅ Ceres headers downloaded and installed"
           fi
+          # 验证
+          if [ ! -f "$CERES_DIR/include/ceres/ceres.h" ]; then
+            echo "❌ Ceres headers still not found after download!"
+            exit 1
+          fi
+          echo "✅ Ceres headers verified at $CERES_DIR/include/ceres/ceres.h"
 
       # ============================================================
       # 5.2 🚀 删除 iOS zstd 以避免主机工具错误链接
@@ -293,13 +299,12 @@ jobs:
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
 
           # ---------- Ceres ----------
-          # 不再需要，因为我们在顶层强制设置了 CERES_FOUND 和包含路径，但保留也无害
-          CERES_INC=$(find "$LIB_BASE" -path "*/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
-          if [ -z "$CERES_INC" ]; then
-            CERES_INC="$LIB_BASE/ceres/include"
-            echo "⚠️ Ceres headers not found by find, using default: $CERES_INC"
+          CERES_INC="$LIB_BASE/ceres/include"
+          if [ -d "$CERES_INC" ] && [ -f "$CERES_INC/ceres/ceres.h" ]; then
+            echo "✅ Ceres headers found at $CERES_INC"
           else
-            echo "✅ Found Ceres headers at: $CERES_INC"
+            echo "❌ Ceres headers not found at $CERES_INC"
+            exit 1
           fi
           CERES_LIB=$(find "$LIB_BASE" -name "libceres.a" 2>/dev/null | head -1)
           [ -z "$CERES_LIB" ] && CERES_LIB="$LIB_BASE/ceres/lib/libceres.a"
@@ -535,7 +540,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 🚀 关键补丁：强制设置 Ceres 包含路径（修复 libmv 编译）
+      # 14. 🚀 关键补丁：强制设置 Ceres 包含路径并修改 libmv
       # ============================================================
       - name: Patch CMakeLists.txt and platform_apple.cmake
         run: |
@@ -575,7 +580,14 @@ jobs:
           # ---------- 2. 注释掉 platform_apple.cmake 中的 find_package(Epoxy REQUIRED) ----------
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
-          echo "✅ Patched CMakeLists.txt and disabled Epoxy, forced Ceres include path"
+          # ---------- 3. 🆕 强制在 libmv 的 CMakeLists 中添加包含路径 ----------
+          # 在 intern/libmv/CMakeLists.txt 开头插入 include_directories
+          sed -i '' '1i\
+          # Added by iOS patch: force Ceres include path
+          include_directories(BEFORE SYSTEM "${CERES_INCLUDE_DIR}")
+          ' intern/libmv/CMakeLists.txt
+
+          echo "✅ Patched CMakeLists.txt, disabled Epoxy, forced Ceres include path in libmv"
 
       # ============================================================
       # 15. 生成 Xcode 项目（使用 ZSTD_ROOT_DIR）
