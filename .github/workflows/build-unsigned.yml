@@ -163,18 +163,18 @@ jobs:
               # 如果 internal/export.h 仍然缺失，手动创建
               if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
                 mkdir -p "$CERES_DIR/include/ceres/internal"
-                cat > "$CERES_DIR/include/ceres/internal/export.h" << 'EOF'
-                // Ceres export macros - dummy for iOS build
-                #ifndef CERES_EXPORT_H_
-                #define CERES_EXPORT_H_
-
-                #define CERES_EXPORT
-                #define CERES_EXPORT_TEMPLATE
-                #define CERES_NO_EXPORT
-                #define CERES_DEPRECATED
-
-                #endif  // CERES_EXPORT_H_
-                EOF
+                printf '%s\n' \
+                  '// Ceres export macros - dummy for iOS build' \
+                  '#ifndef CERES_EXPORT_H_' \
+                  '#define CERES_EXPORT_H_' \
+                  '' \
+                  '#define CERES_EXPORT' \
+                  '#define CERES_EXPORT_TEMPLATE' \
+                  '#define CERES_NO_EXPORT' \
+                  '#define CERES_DEPRECATED' \
+                  '' \
+                  '#endif  // CERES_EXPORT_H_' \
+                  > "$CERES_DIR/include/ceres/internal/export.h"
                 echo "✅ Created dummy export.h"
               fi
               rm -rf /tmp/ceres-solver.tar.gz /tmp/ceres-solver-${CERES_VERSION}
@@ -581,7 +581,7 @@ jobs:
           IOS_LIB="$PWD/lib/ios_arm64"
 
           # ---------- 1. 在 CMakeLists.txt 开头插入补丁 ----------
-          cat > /tmp/patch_cmakelists << EOF
+          cat > /tmp/patch_cmakelists << 'EOF'
           # --- FORCED PATCH FOR iOS BUILD ---
           set(ENV{HOME} "/Users/runner")
           set(LIBDIR "${IOS_LIB}" CACHE PATH "" FORCE)
@@ -610,7 +610,7 @@ jobs:
           # ---------- 2. 注释掉 platform_apple.cmake 中的 find_package(Epoxy REQUIRED) ----------
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
-          # ---------- 3. 🆕 强制在 libmv 的 CMakeLists 中添加包含路径 ----------
+          # ---------- 3. 强制在 libmv 的 CMakeLists 中添加包含路径 ----------
           cat > /tmp/libmv_patch.txt << 'EOF'
           # Added by iOS patch: force Ceres include path
           include_directories(BEFORE SYSTEM "${CERES_INCLUDE_DIR}")
