@@ -477,9 +477,9 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 直接修改 CMakeLists.txt 强制设置所有变量（包含 Epoxy）
+      # 14. 直接修改 CMakeLists.txt 和 platform_apple.cmake（注释 Epoxy）
       # ============================================================
-      - name: Patch CMakeLists.txt to force all paths
+      - name: Patch CMakeLists.txt and platform_apple.cmake
         run: |
           cd blender
           # 获取变量值
@@ -487,7 +487,7 @@ jobs:
           PY_INC="$PYTHON_INC_DIR"
           IOS_LIB="$PWD/lib/ios_arm64"
 
-          # 创建补丁内容（在 CMakeLists.txt 开头插入）
+          # ---------- 1. 在 CMakeLists.txt 开头插入补丁 ----------
           cat > /tmp/patch_cmakelists << EOF
           # --- FORCED PATCH FOR iOS BUILD ---
           set(ENV{HOME} "/Users/runner")
@@ -501,16 +501,17 @@ jobs:
           set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
           set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
           set(WITH_JACK OFF CACHE BOOL "" FORCE)
-          # Force Epoxy to avoid find_package
-          set(CMAKE_DISABLE_FIND_PACKAGE_Epoxy ON CACHE BOOL "" FORCE)
+          # Force Epoxy - set found and disable find_package
           set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)
           set(EPOXY_FOUND TRUE CACHE BOOL "" FORCE)
           # --- END PATCH ---
           EOF
-
-          # 在文件开头插入
           sed -i '' "1 r /tmp/patch_cmakelists" CMakeLists.txt
-          echo "✅ Patched CMakeLists.txt with forced paths and Epoxy disabled"
+
+          # ---------- 2. 注释掉 platform_apple.cmake 中的 find_package(Epoxy REQUIRED) ----------
+          sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
+
+          echo "✅ Patched CMakeLists.txt and disabled Epoxy find_package"
 
       # ============================================================
       # 15. 生成 Xcode 项目
