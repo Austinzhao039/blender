@@ -293,6 +293,7 @@ jobs:
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
 
           # ---------- Ceres ----------
+          # 不再需要，因为我们在顶层强制设置了 CERES_FOUND 和包含路径，但保留也无害
           CERES_INC=$(find "$LIB_BASE" -path "*/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
           if [ -z "$CERES_INC" ]; then
             CERES_INC="$LIB_BASE/ceres/include"
@@ -534,7 +535,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 直接修改 CMakeLists.txt 和 platform_apple.cmake（注释 Epoxy）
+      # 14. 🚀 关键补丁：强制设置 Ceres 包含路径（修复 libmv 编译）
       # ============================================================
       - name: Patch CMakeLists.txt and platform_apple.cmake
         run: |
@@ -561,6 +562,12 @@ jobs:
           # Force Epoxy - set found and disable find_package
           set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)
           set(EPOXY_FOUND TRUE CACHE BOOL "" FORCE)
+          # Force Ceres - set found and include dirs (fix libmv)
+          set(CERES_FOUND TRUE CACHE BOOL "" FORCE)
+          set(CERES_INCLUDE_DIR "${IOS_LIB}/ceres/include" CACHE PATH "" FORCE)
+          set(CERES_INCLUDE_DIRS "${IOS_LIB}/ceres/include" CACHE PATH "" FORCE)
+          set(CERES_LIBRARY "${IOS_LIB}/ceres/lib/libceres.a" CACHE FILEPATH "" FORCE)
+          set(CERES_LIBRARIES "${IOS_LIB}/ceres/lib/libceres.a" CACHE FILEPATH "" FORCE)
           # --- END PATCH ---
           EOF
           sed -i '' "1 r /tmp/patch_cmakelists" CMakeLists.txt
@@ -568,7 +575,7 @@ jobs:
           # ---------- 2. 注释掉 platform_apple.cmake 中的 find_package(Epoxy REQUIRED) ----------
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
-          echo "✅ Patched CMakeLists.txt and disabled Epoxy find_package"
+          echo "✅ Patched CMakeLists.txt and disabled Epoxy, forced Ceres include path"
 
       # ============================================================
       # 15. 生成 Xcode 项目（使用 ZSTD_ROOT_DIR）
