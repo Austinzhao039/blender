@@ -127,35 +127,44 @@ jobs:
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
       # ============================================================
-      # 5.1 🚀 确保 Ceres 头文件存在（直接下载官方源码）
+      # 5.1 🚀 确保 Ceres 头文件存在（下载完整源码包）
       # ============================================================
       - name: Ensure Ceres headers are present
         run: |
           cd blender
           CERES_DIR="lib/ios_arm64/ceres"
           mkdir -p "$CERES_DIR/include"
-          if [ -f "$CERES_DIR/include/ceres/ceres.h" ]; then
-            echo "✅ Ceres headers already present"
+          if [ -f "$CERES_DIR/include/ceres/ceres.h" ] && [ -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
+            echo "✅ Ceres headers already present (including internal)"
           else
-            echo "📥 Downloading Ceres headers from official release..."
+            echo "📥 Downloading Ceres full source from official release..."
             CERES_VERSION="2.1.0"
             curl -L -o /tmp/ceres-solver.tar.gz \
               https://github.com/ceres-solver/ceres-solver/archive/refs/tags/${CERES_VERSION}.tar.gz
             tar -xzf /tmp/ceres-solver.tar.gz -C /tmp
-            cp -r /tmp/ceres-solver-${CERES_VERSION}/include/ceres "$CERES_DIR/include/"
+            
+            # 复制整个 include 目录（包含 ceres 和 internal）
+            cp -r /tmp/ceres-solver-${CERES_VERSION}/include/* "$CERES_DIR/include/"
+            
+            # 复制 internal 目录（如果存在）
             if [ -d "/tmp/ceres-solver-${CERES_VERSION}/internal" ]; then
               mkdir -p "$CERES_DIR/internal"
               cp -r /tmp/ceres-solver-${CERES_VERSION}/internal/* "$CERES_DIR/internal/"
             fi
+            
             rm -rf /tmp/ceres-solver.tar.gz /tmp/ceres-solver-${CERES_VERSION}
             echo "✅ Ceres headers downloaded and installed"
           fi
           # 验证
           if [ ! -f "$CERES_DIR/include/ceres/ceres.h" ]; then
-            echo "❌ Ceres headers still not found after download!"
+            echo "❌ ceres/ceres.h not found!"
             exit 1
           fi
-          echo "✅ Ceres headers verified at $CERES_DIR/include/ceres/ceres.h"
+          if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
+            echo "❌ ceres/internal/export.h not found!"
+            exit 1
+          fi
+          echo "✅ Ceres headers verified at $CERES_DIR/include/"
 
       # ============================================================
       # 5.2 🚀 删除 iOS zstd 以避免主机工具错误链接
@@ -581,7 +590,7 @@ jobs:
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
           # ---------- 3. 🆕 强制在 libmv 的 CMakeLists 中添加包含路径 ----------
-          # 使用 ed 或 cat 合并文件，避免 sed 语法问题
+          # 使用 cat 合并文件，避免 sed 语法问题
           cat > /tmp/libmv_patch.txt << 'EOF'
           # Added by iOS patch: force Ceres include path
           include_directories(BEFORE SYSTEM "${CERES_INCLUDE_DIR}")
@@ -646,101 +655,4 @@ jobs:
       # ============================================================
       # 16. 验证 Xcode 项目是否生成
       # ============================================================
-      - name: Verify Xcode project exists
-        run: |
-          if [ ! -d "blender/build_ios/Blender.xcodeproj" ]; then
-            echo "❌ Blender.xcodeproj not found!"
-            echo "Contents of build_ios:"
-            ls -la blender/build_ios/ || echo "build_ios directory not found!"
-            echo "CMake output (last 100 lines):"
-            tail -100 blender/cmake_output.txt
-            exit 1
-          fi
-          echo "✅ Blender.xcodeproj found"
-
-      # ============================================================
-      # 17. 🚀 构建交叉编译工具链（显式传递 HOME）
-      # ============================================================
-      - name: Build cross compile tools first
-        if: steps.cmake_config.outcome == 'success'
-        run: |
-          cd blender/build_ios
-          export HOME="/Users/runner"
-          xcodebuild \
-            -project Blender.xcodeproj \
-            -target blender_cross_tools_compile \
-            -sdk iphoneos \
-            -configuration Release \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            ARCHS=arm64 \
-            HOME="$HOME"
-
-      # ============================================================
-      # 18. 编译主应用（显式传递 HOME）
-      # ============================================================
-      - name: Build Blender.app for iOS
-        if: steps.cmake_config.outcome == 'success'
-        run: |
-          cd blender/build_ios
-          export HOME="/Users/runner"
-          xcodebuild \
-            -project Blender.xcodeproj \
-            -target install \
-            -sdk iphoneos \
-            -configuration Release \
-            -parallelizeTargets \
-            -jobs 4 \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            ARCHS=arm64 \
-            ONLY_ACTIVE_ARCH=NO \
-            HOME="$HOME"
-
-      # ============================================================
-      # 19. 打包成未签名 IPA
-      # ============================================================
-      - name: Package unsigned IPA
-        if: steps.cmake_config.outcome == 'success'
-        run: |
-          cd blender/build_ios
-          APP=$(find . -name "Blender.app" -type d | head -1)
-          if [ -z "$APP" ]; then
-            echo "ERROR: Blender.app not found!"
-            find . -name "*.app" -type d
-            exit 1
-          fi
-          echo "Found app at: $APP"
-          du -sh "$APP"
-          mkdir -p IPA/Payload
-          cp -r "$APP" IPA/Payload/
-          cd IPA && zip -r ../Blender.ipa Payload/ && cd ..
-          ls -lh Blender.ipa
-
-      # ============================================================
-      # 20. 上传 IPA
-      # ============================================================
-      - name: Upload IPA
-        if: steps.cmake_config.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: blender-ipad-unsigned
-          path: blender/build_ios/Blender.ipa
-          retention-days: 30
-
-      # ============================================================
-      # 21. 失败时上传日志
-      # ============================================================
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: |
-            blender/build_ios/**/*.log
-            blender/build_ios/**/*.txt
-            blender/build_ios/CMakeCache.txt
-            blender/build_ios/CMakeFiles/CMakeError.log
-          retention-days: 7
+      -
