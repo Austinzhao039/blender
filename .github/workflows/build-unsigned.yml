@@ -655,4 +655,101 @@ jobs:
       # ============================================================
       # 16. 验证 Xcode 项目是否生成
       # ============================================================
-      -
+      - name: Verify Xcode project exists
+        run: |
+          if [ ! -d "blender/build_ios/Blender.xcodeproj" ]; then
+            echo "❌ Blender.xcodeproj not found!"
+            echo "Contents of build_ios:"
+            ls -la blender/build_ios/ || echo "build_ios directory not found!"
+            echo "CMake output (last 100 lines):"
+            tail -100 blender/cmake_output.txt
+            exit 1
+          fi
+          echo "✅ Blender.xcodeproj found"
+
+      # ============================================================
+      # 17. 🚀 构建交叉编译工具链（显式传递 HOME）
+      # ============================================================
+      - name: Build cross compile tools first
+        if: steps.cmake_config.outcome == 'success'
+        run: |
+          cd blender/build_ios
+          export HOME="/Users/runner"
+          xcodebuild \
+            -project Blender.xcodeproj \
+            -target blender_cross_tools_compile \
+            -sdk iphoneos \
+            -configuration Release \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
+            HOME="$HOME"
+
+      # ============================================================
+      # 18. 编译主应用（显式传递 HOME）
+      # ============================================================
+      - name: Build Blender.app for iOS
+        if: steps.cmake_config.outcome == 'success'
+        run: |
+          cd blender/build_ios
+          export HOME="/Users/runner"
+          xcodebuild \
+            -project Blender.xcodeproj \
+            -target install \
+            -sdk iphoneos \
+            -configuration Release \
+            -parallelizeTargets \
+            -jobs 4 \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            HOME="$HOME"
+
+      # ============================================================
+      # 19. 打包成未签名 IPA
+      # ============================================================
+      - name: Package unsigned IPA
+        if: steps.cmake_config.outcome == 'success'
+        run: |
+          cd blender/build_ios
+          APP=$(find . -name "Blender.app" -type d | head -1)
+          if [ -z "$APP" ]; then
+            echo "ERROR: Blender.app not found!"
+            find . -name "*.app" -type d
+            exit 1
+          fi
+          echo "Found app at: $APP"
+          du -sh "$APP"
+          mkdir -p IPA/Payload
+          cp -r "$APP" IPA/Payload/
+          cd IPA && zip -r ../Blender.ipa Payload/ && cd ..
+          ls -lh Blender.ipa
+
+      # ============================================================
+      # 20. 上传 IPA
+      # ============================================================
+      - name: Upload IPA
+        if: steps.cmake_config.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender-ipad-unsigned
+          path: blender/build_ios/Blender.ipa
+          retention-days: 30
+
+      # ============================================================
+      # 21. 失败时上传日志
+      # ============================================================
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            blender/build_ios/**/*.log
+            blender/build_ios/**/*.txt
+            blender/build_ios/CMakeCache.txt
+            blender/build_ios/CMakeFiles/CMakeError.log
+          retention-days: 7
