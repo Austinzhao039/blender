@@ -485,42 +485,52 @@ jobs:
           PY_LIB="$PYTHON_LIB_DIR"
           PY_INC="$PYTHON_INC_DIR"
           IOS_LIB="$PWD/lib/ios_arm64"
+          MACOS_LIB="$PWD/lib/macos_arm64"
 
-          # ---------- Patch CMakeLists.txt ----------
           cat > /tmp/patch_cmakelists << EOF
           # --- FORCED PATCH FOR iOS BUILD ---
           set(ENV{HOME} "/Users/runner")
-          # Python variables for all builds
+          # Python variables for both builds (use correct LIBDIR later)
           set(PYTHON_VERSION 3.13 CACHE STRING "" FORCE)
-          set(PYTHON_LIBRARY "${PY_LIB}/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
-          set(PYTHON_INCLUDE_DIR "${PY_INC}" CACHE PATH "" FORCE)
-          set(PYTHON_INCLUDE_CONFIG_DIR "${PY_INC}" CACHE PATH "" FORCE)
-          set(PYTHON_LIBPATH "${PY_LIB}" CACHE PATH "" FORCE)
-          set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
-          set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
           set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
           set(WITH_JACK OFF CACHE BOOL "" FORCE)
           # For iOS build only
           if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")
             set(LIBDIR "${IOS_LIB}" CACHE PATH "" FORCE)
+            set(PYTHON_LIBRARY "${IOS_LIB}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+            set(PYTHON_INCLUDE_DIR "${IOS_LIB}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_CONFIG_DIR "${IOS_LIB}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_LIBPATH "${IOS_LIB}/python/lib" CACHE PATH "" FORCE)
+            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
+            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
             set(WITH_TBB ON CACHE BOOL "" FORCE)
             set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)
             set(EPOXY_FOUND TRUE CACHE BOOL "" FORCE)
           else()
-            # For host tools, disable TBB to avoid linking iOS library
+            # For host tools, use macOS Python
+            set(LIBDIR "${MACOS_LIB}" CACHE PATH "" FORCE)
+            set(PYTHON_LIBRARY "${MACOS_LIB}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+            set(PYTHON_INCLUDE_DIR "${MACOS_LIB}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_CONFIG_DIR "${MACOS_LIB}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_LIBPATH "${MACOS_LIB}/python/lib" CACHE PATH "" FORCE)
+            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
+            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
             set(WITH_TBB OFF CACHE BOOL "" FORCE)
           endif()
           # --- END PATCH ---
           EOF
           sed -i '' "1 r /tmp/patch_cmakelists" CMakeLists.txt
 
-          # ---------- Patch platform_apple.cmake ----------
-          # Comment out find_package(Epoxy REQUIRED) and find_package(TBB REQUIRED)
+          # Patch platform_apple.cmake: comment out find_package for Epoxy, TBB, OpenEXR
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
           sed -i '' 's/^[[:space:]]*find_package(TBB 2021.13.0 REQUIRED)/# find_package(TBB 2021.13.0 REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
-          # Also force TBB_FOUND TRUE just in case
+          sed -i '' 's/^[[:space:]]*find_package(OpenEXR REQUIRED)/# find_package(OpenEXR REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
+          # Force FOUND for these
           sed -i '' '/# find_package(TBB 2021.13.0 REQUIRED)/a\
           set(TBB_FOUND TRUE CACHE BOOL "" FORCE)
+          ' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' '/# find_package(OpenEXR REQUIRED)/a\
+          set(OPENEXR_FOUND TRUE CACHE BOOL "" FORCE)
           ' build_files/cmake/platform/platform_apple.cmake
 
           echo "Patched CMakeLists.txt and platform_apple.cmake"
