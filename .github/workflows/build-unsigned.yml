@@ -477,7 +477,39 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 生成 Xcode 项目（强制所有路径和变量）
+      # 14. 直接修改 CMakeLists.txt 强制设置所有变量
+      # ============================================================
+      - name: Patch CMakeLists.txt to force all paths
+        run: |
+          cd blender
+          # 获取变量值
+          PY_LIB="$PYTHON_LIB_DIR"
+          PY_INC="$PYTHON_INC_DIR"
+          IOS_LIB="$PWD/lib/ios_arm64"
+
+          # 创建补丁内容（在 CMakeLists.txt 开头插入）
+          cat > /tmp/patch_cmakelists << EOF
+          # --- FORCED PATCH FOR iOS BUILD ---
+          set(ENV{HOME} "/Users/runner")
+          set(LIBDIR "${IOS_LIB}" CACHE PATH "" FORCE)
+          set(PYTHON_VERSION 3.13 CACHE STRING "" FORCE)
+          set(PYTHON_LIBRARY "${PY_LIB}/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+          set(PYTHON_INCLUDE_DIR "${PY_INC}" CACHE PATH "" FORCE)
+          set(PYTHON_INCLUDE_CONFIG_DIR "${PY_INC}" CACHE PATH "" FORCE)
+          set(PYTHON_LIBPATH "${PY_LIB}" CACHE PATH "" FORCE)
+          set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
+          set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
+          set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
+          set(WITH_JACK OFF CACHE BOOL "" FORCE)
+          # --- END PATCH ---
+          EOF
+
+          # 在文件开头插入
+          sed -i '' "1 r /tmp/patch_cmakelists" CMakeLists.txt
+          echo "✅ Patched CMakeLists.txt with forced paths"
+
+      # ============================================================
+      # 15. 生成 Xcode 项目
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -499,17 +531,6 @@ jobs:
             -DWITH_RUBBERBAND=OFF \
             -DWITH_OPENIMAGEIO=ON \
             -DWITH_OPENMP=OFF \
-            -DWITH_OPENAL=OFF \
-            -DWITH_JACK=OFF \
-            -DPYTHON_VERSION=3.13 \
-            -DPYTHON_ROOT_DIR="$PWD/lib/ios_arm64/python" \
-            -DPYTHON_LIBRARY="${PYTHON_LIB_DIR}/libpython3.13.dylib" \
-            -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
-            -DPYTHON_INCLUDE_CONFIG_DIR="${PYTHON_INC_DIR}" \
-            -DPYTHON_LIBPATH="${PYTHON_LIB_DIR}" \
-            -DPYTHONLIBS_FOUND=ON \
-            -DPythonLibsUnix_FOUND=ON \
-            -DLIBDIR="$PWD/lib/ios_arm64" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
             -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
             -Dfmt_DIR="${FMT_CMAKE_DIR}" \
@@ -539,7 +560,7 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 15. 验证 Xcode 项目是否生成
+      # 16. 验证 Xcode 项目是否生成
       # ============================================================
       - name: Verify Xcode project exists
         run: |
@@ -554,7 +575,7 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
+      # 17. 🚀 构建交叉编译工具链（显式传递 HOME）
       # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
@@ -573,7 +594,7 @@ jobs:
             HOME="$HOME"
 
       # ============================================================
-      # 17. 编译主应用（显式传递 HOME）
+      # 18. 编译主应用（显式传递 HOME）
       # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
@@ -595,7 +616,7 @@ jobs:
             HOME="$HOME"
 
       # ============================================================
-      # 18. 打包成未签名 IPA
+      # 19. 打包成未签名 IPA
       # ============================================================
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
@@ -615,7 +636,7 @@ jobs:
           ls -lh Blender.ipa
 
       # ============================================================
-      # 19. 上传 IPA
+      # 20. 上传 IPA
       # ============================================================
       - name: Upload IPA
         if: steps.cmake_config.outcome == 'success'
@@ -626,7 +647,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 20. 失败时上传日志
+      # 21. 失败时上传日志
       # ============================================================
       - name: Upload logs on failure
         if: failure()
