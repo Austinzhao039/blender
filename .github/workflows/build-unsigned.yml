@@ -581,11 +581,13 @@ jobs:
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
           # ---------- 3. 🆕 强制在 libmv 的 CMakeLists 中添加包含路径 ----------
-          # 在 intern/libmv/CMakeLists.txt 开头插入 include_directories
-          sed -i '' '1i\
+          # 使用 ed 或 cat 合并文件，避免 sed 语法问题
+          cat > /tmp/libmv_patch.txt << 'EOF'
           # Added by iOS patch: force Ceres include path
           include_directories(BEFORE SYSTEM "${CERES_INCLUDE_DIR}")
-          ' intern/libmv/CMakeLists.txt
+          EOF
+          # 在文件开头插入
+          { cat /tmp/libmv_patch.txt; cat intern/libmv/CMakeLists.txt; } > intern/libmv/CMakeLists.txt.tmp && mv intern/libmv/CMakeLists.txt.tmp intern/libmv/CMakeLists.txt
 
           echo "✅ Patched CMakeLists.txt, disabled Epoxy, forced Ceres include path in libmv"
 
