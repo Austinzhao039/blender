@@ -113,7 +113,7 @@ jobs:
             ios-libs-
 
       # ============================================================
-      # 5. 克隆 iOS 预编译库（含 OpenEXR 和 Ceres）
+      # 5. 克隆 iOS 预编译库（仅缓存未命中时）
       # ============================================================
       - name: Clone iOS precompiled libraries (cache miss)
         if: steps.cache-ios.outputs.cache-hit != 'true'
@@ -121,16 +121,32 @@ jobs:
           cd blender
           rm -rf lib/ios_arm64
           git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
-          echo "✅ iOS libraries cloned"
+          cd lib/ios_arm64
+          git lfs pull --include="openexr/**"
+          cd ../..
+          echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
       # ============================================================
-      # 5.1 🚀 拉取必要的 LFS 文件（OpenEXR 和 Ceres）
+      # 5.1 🚀 确保 Ceres 头文件存在（无条件执行）
       # ============================================================
-      - name: Pull LFS files for OpenEXR and Ceres
+      - name: Ensure Ceres headers are present
         run: |
-          cd blender/lib/ios_arm64
-          git lfs pull --include="openexr/**" --include="ceres/**"
-          echo "✅ LFS pulled for openexr and ceres"
+          cd blender
+          CERES_DIR="lib/ios_arm64/ceres"
+          if [ -f "$CERES_DIR/include/ceres/ceres.h" ]; then
+            echo "✅ Ceres headers already present"
+          else
+            echo "⚠️ Ceres headers missing, cloning lib-ios_arm64 to fetch ceres..."
+            rm -rf /tmp/lib-ios_arm64
+            git clone https://projects.blender.org/blender/lib-ios_arm64.git /tmp/lib-ios_arm64
+            cd /tmp/lib-ios_arm64
+            git lfs pull --include="ceres/**"
+            cd -
+            mkdir -p "$CERES_DIR"
+            cp -r /tmp/lib-ios_arm64/ceres/* "$CERES_DIR/"
+            rm -rf /tmp/lib-ios_arm64
+            echo "✅ Ceres headers copied"
+          fi
 
       # ============================================================
       # 5.2 🚀 删除 iOS zstd 以避免主机工具错误链接
