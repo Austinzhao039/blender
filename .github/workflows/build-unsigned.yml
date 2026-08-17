@@ -477,7 +477,7 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. 生成 Xcode 项目（添加 PYTHON_ROOT_DIR）
+      # 14. 生成 Xcode 项目（强制所有路径和变量）
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -501,9 +501,15 @@ jobs:
             -DWITH_OPENMP=OFF \
             -DWITH_OPENAL=OFF \
             -DWITH_JACK=OFF \
+            -DPYTHON_VERSION=3.13 \
             -DPYTHON_ROOT_DIR="$PWD/lib/ios_arm64/python" \
             -DPYTHON_LIBRARY="${PYTHON_LIB_DIR}/libpython3.13.dylib" \
             -DPYTHON_INCLUDE_DIR="${PYTHON_INC_DIR}" \
+            -DPYTHON_INCLUDE_CONFIG_DIR="${PYTHON_INC_DIR}" \
+            -DPYTHON_LIBPATH="${PYTHON_LIB_DIR}" \
+            -DPYTHONLIBS_FOUND=ON \
+            -DPythonLibsUnix_FOUND=ON \
+            -DLIBDIR="$PWD/lib/ios_arm64" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
             -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
             -Dfmt_DIR="${FMT_CMAKE_DIR}" \
@@ -546,54 +552,6 @@ jobs:
             exit 1
           fi
           echo "✅ Blender.xcodeproj found"
-
-      # ============================================================
-      # 🆕 15.5 修补 platform_apple.cmake：禁用 Python 查找并强制路径
-      # ============================================================
-      - name: Patch platform_apple.cmake for macOS host tools
-        run: |
-          cd blender
-          # 删除旧的补丁块
-          sed -i '' '/### IOS PATCH START/,/### IOS PATCH END/d' build_files/cmake/platform/platform_apple.cmake
-          # 插入补丁（强制设置 LIBDIR 和 Python 变量）
-          cat > /tmp/patch_cmake << EOF
-          ### IOS PATCH START
-          set(ENV{HOME} "/Users/runner")
-          if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")
-            set(LIBDIR \${CMAKE_SOURCE_DIR}/lib/ios_arm64)
-            set(PYTHON_VERSION 3.13 CACHE STRING "" FORCE)
-            set(PYTHON_LIBRARY "\${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
-            set(PYTHON_INCLUDE_DIR "\${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_INCLUDE_CONFIG_DIR "\${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_LIBPATH "\${LIBDIR}/python/lib" CACHE PATH "" FORCE)
-            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
-            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
-          else()
-            set(LIBDIR \${CMAKE_SOURCE_DIR}/lib/macos_arm64)
-            set(PYTHON_VERSION 3.13 CACHE STRING "" FORCE)
-            set(PYTHON_LIBRARY "\${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
-            set(PYTHON_INCLUDE_DIR "${PYTHON_INC_DIR}" CACHE PATH "" FORCE)
-            set(PYTHON_INCLUDE_CONFIG_DIR "${PYTHON_INC_DIR}" CACHE PATH "" FORCE)
-            set(PYTHON_LIBPATH "\${LIBDIR}/python/lib" CACHE PATH "" FORCE)
-            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
-            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
-          endif()
-          ### IOS PATCH END
-          EOF
-          sed -i '' "1 r /tmp/patch_cmake" build_files/cmake/platform/platform_apple.cmake
-
-          # 注释掉 find_package(PythonLibsUnix REQUIRED)
-          sed -i '' 's/find_package(PythonLibsUnix REQUIRED)/# find_package(PythonLibsUnix REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
-          # 在注释行后插入强制设置（以防万一）
-          sed -i '' '/# find_package(PythonLibsUnix REQUIRED)/a\
-          set(PYTHON_INCLUDE_DIR "${PYTHON_INC_DIR}" CACHE PATH "" FORCE)\
-          set(PYTHON_INCLUDE_CONFIG_DIR "${PYTHON_INC_DIR}" CACHE PATH "" FORCE)\
-          set(PYTHON_LIBRARY "${PYTHON_LIB_DIR}/libpython3.13.dylib" CACHE FILEPATH "" FORCE)\
-          set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)\
-          set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
-          ' build_files/cmake/platform/platform_apple.cmake
-
-          echo "✅ Patched platform_apple.cmake: disabled find_package(PythonLibsUnix) and forced includes"
 
       # ============================================================
       # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
