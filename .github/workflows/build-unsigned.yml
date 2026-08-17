@@ -14,7 +14,7 @@ jobs:
       # ============================================================
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake fmt
+          brew install git-lfs cmake fmt pugixml
           git lfs install
           if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
             echo "fmt not installed correctly!"
@@ -477,55 +477,53 @@ jobs:
           xcodebuild -version
 
       # ============================================================
-      # 14. Patch platform_apple.cmake (define targets, disable find_package)
+      # 14. Patch platform_apple.cmake
       # ============================================================
       - name: Patch platform_apple.cmake
         run: |
           cd blender
-          IOS_LIB="$PWD/lib/ios_arm64"
-          MACOS_LIB="$PWD/lib/macos_arm64"
-
-          # Delete old patch block if any
+          # Remove any existing patch block
           sed -i '' '/### IOS PATCH START/,/### IOS PATCH END/d' build_files/cmake/platform/platform_apple.cmake
 
-          # Insert patch at top of file
-          cat > /tmp/patch_cmake << EOF
+          # Insert new patch at top using single-quoted heredoc to prevent shell expansion
+          cat > /tmp/patch_cmake << 'EOF'
           ### IOS PATCH START
           set(ENV{HOME} "/Users/runner")
           if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")
-            set(LIBDIR "${IOS_LIB}" CACHE PATH "" FORCE)
-            set(PYTHON_LIBRARY "\${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
-            set(PYTHON_INCLUDE_DIR "\${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_INCLUDE_CONFIG_DIR "\${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_LIBPATH "\${LIBDIR}/python/lib" CACHE PATH "" FORCE)
+            # iOS build: force ios_arm64 libraries and define all targets
+            set(LIBDIR "${CMAKE_SOURCE_DIR}/lib/ios_arm64" CACHE PATH "" FORCE)
+            set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+            set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
             set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
             set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
             set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
             set(WITH_JACK OFF CACHE BOOL "" FORCE)
 
-            # Define OpenEXR target
-            set(OPENEXR_INCLUDE_DIR "\${LIBDIR}/openexr/include/OpenEXR" CACHE PATH "" FORCE)
-            set(OPENEXR_LIBRARY "\${LIBDIR}/openexr/lib/libOpenEXR.dylib" CACHE FILEPATH "" FORCE)
+            # OpenEXR
+            set(OPENEXR_INCLUDE_DIR "${LIBDIR}/openexr/include/OpenEXR" CACHE PATH "" FORCE)
+            set(OPENEXR_LIBRARY "${LIBDIR}/openexr/lib/libOpenEXR.dylib" CACHE FILEPATH "" FORCE)
             set(OPENEXR_FOUND TRUE CACHE BOOL "" FORCE)
             set(OpenEXR_FOUND TRUE CACHE BOOL "" FORCE)
             if(NOT TARGET OpenEXR::OpenEXR)
               add_library(OpenEXR::OpenEXR UNKNOWN IMPORTED)
               set_target_properties(OpenEXR::OpenEXR PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "\${OPENEXR_INCLUDE_DIR}"
-                IMPORTED_LOCATION "\${OPENEXR_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${OPENEXR_INCLUDE_DIR}"
+                IMPORTED_LOCATION "${OPENEXR_LIBRARY}"
               )
             endif()
 
-            # Define OpenImageIO target
-            set(OPENIMAGEIO_INCLUDE_DIR "\${LIBDIR}/openimageio/include" CACHE PATH "" FORCE)
-            set(OPENIMAGEIO_LIBRARY "\${LIBDIR}/openimageio/lib/libOpenImageIO.dylib" CACHE FILEPATH "" FORCE)
+            # OpenImageIO
+            set(OPENIMAGEIO_INCLUDE_DIR "${LIBDIR}/openimageio/include" CACHE PATH "" FORCE)
+            set(OPENIMAGEIO_LIBRARY "${LIBDIR}/openimageio/lib/libOpenImageIO.dylib" CACHE FILEPATH "" FORCE)
             set(OPENIMAGEIO_FOUND TRUE CACHE BOOL "" FORCE)
             set(OpenImageIO_FOUND TRUE CACHE BOOL "" FORCE)
             if(NOT TARGET OpenImageIO::OpenImageIO)
               add_library(OpenImageIO::OpenImageIO UNKNOWN IMPORTED)
               set_target_properties(OpenImageIO::OpenImageIO PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "\${OPENIMAGEIO_INCLUDE_DIR}"
-                IMPORTED_LOCATION "\${OPENIMAGEIO_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${OPENIMAGEIO_INCLUDE_DIR}"
+                IMPORTED_LOCATION "${OPENIMAGEIO_LIBRARY}"
               )
             endif()
             if(NOT TARGET OpenImageIO::oiiotool)
@@ -535,72 +533,93 @@ jobs:
               )
             endif()
 
-            # Define TBB targets
-            set(TBB_INCLUDE_DIR "\${LIBDIR}/tbb/include" CACHE PATH "" FORCE)
-            set(TBB_LIBRARY "\${LIBDIR}/tbb/lib/libtbb.dylib" CACHE FILEPATH "" FORCE)
-            set(TBBMALLOC_LIBRARY "\${LIBDIR}/tbb/lib/libtbbmalloc.dylib" CACHE FILEPATH "" FORCE)
-            set(TBBMALLOC_PROXY_LIBRARY "\${LIBDIR}/tbb/lib/libtbbmalloc_proxy.dylib" CACHE FILEPATH "" FORCE)
+            # TBB
+            set(TBB_INCLUDE_DIR "${LIBDIR}/tbb/include" CACHE PATH "" FORCE)
+            set(TBB_LIBRARY "${LIBDIR}/tbb/lib/libtbb.dylib" CACHE FILEPATH "" FORCE)
+            set(TBBMALLOC_LIBRARY "${LIBDIR}/tbb/lib/libtbbmalloc.dylib" CACHE FILEPATH "" FORCE)
+            set(TBBMALLOC_PROXY_LIBRARY "${LIBDIR}/tbb/lib/libtbbmalloc_proxy.dylib" CACHE FILEPATH "" FORCE)
             set(TBB_FOUND TRUE CACHE BOOL "" FORCE)
             if(NOT TARGET TBB::tbb)
               add_library(TBB::tbb UNKNOWN IMPORTED)
               set_target_properties(TBB::tbb PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "\${TBB_INCLUDE_DIR}"
-                IMPORTED_LOCATION "\${TBB_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
+                IMPORTED_LOCATION "${TBB_LIBRARY}"
               )
             endif()
             if(NOT TARGET TBB::tbbmalloc)
               add_library(TBB::tbbmalloc UNKNOWN IMPORTED)
               set_target_properties(TBB::tbbmalloc PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "\${TBB_INCLUDE_DIR}"
-                IMPORTED_LOCATION "\${TBBMALLOC_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
+                IMPORTED_LOCATION "${TBBMALLOC_LIBRARY}"
               )
             endif()
             if(NOT TARGET TBB::tbbmalloc_proxy)
               add_library(TBB::tbbmalloc_proxy UNKNOWN IMPORTED)
               set_target_properties(TBB::tbbmalloc_proxy PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "\${TBB_INCLUDE_DIR}"
-                IMPORTED_LOCATION "\${TBBMALLOC_PROXY_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
+                IMPORTED_LOCATION "${TBBMALLOC_PROXY_LIBRARY}"
               )
             endif()
 
-            # Define Epoxy target
-            set(EPOXY_LIBRARY "\${LIBDIR}/epoxy/lib/libepoxy.a" CACHE FILEPATH "" FORCE)
-            set(EPOXY_INCLUDE_DIR "\${LIBDIR}/epoxy/include" CACHE PATH "" FORCE)
+            # Epoxy
+            set(EPOXY_ROOT_DIR "${LIBDIR}/epoxy" CACHE PATH "" FORCE)
+            set(EPOXY_LIBRARY "${LIBDIR}/epoxy/lib/libepoxy.a" CACHE FILEPATH "" FORCE)
+            set(EPOXY_INCLUDE_DIR "${LIBDIR}/epoxy/include" CACHE PATH "" FORCE)
             set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)
             set(EPOXY_FOUND TRUE CACHE BOOL "" FORCE)
             if(NOT TARGET Epoxy::Epoxy)
               add_library(Epoxy::Epoxy UNKNOWN IMPORTED)
               set_target_properties(Epoxy::Epoxy PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "\${EPOXY_INCLUDE_DIR}"
-                IMPORTED_LOCATION "\${EPOXY_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${EPOXY_INCLUDE_DIR}"
+                IMPORTED_LOCATION "${EPOXY_LIBRARY}"
               )
             endif()
 
-            # Disable find_package for these libraries by commenting them out later
+            # OpenColorIO (may be needed)
+            set(OPENCOLORIO_ROOT_DIR "${LIBDIR}/opencolorio" CACHE PATH "" FORCE)
+            set(OPENCOLORIO_INCLUDE_DIR "${OPENCOLORIO_ROOT_DIR}/include" CACHE PATH "" FORCE)
+            set(OPENCOLORIO_LIBRARY "${OPENCOLORIO_ROOT_DIR}/lib/libOpenColorIO.dylib" CACHE FILEPATH "" FORCE)
+            set(OpenColorIO_FOUND TRUE CACHE BOOL "" FORCE)
+            set(OPENCOLORIO_FOUND TRUE CACHE BOOL "" FORCE)
+            if(NOT TARGET OpenColorIO::OpenColorIO)
+              add_library(OpenColorIO::OpenColorIO UNKNOWN IMPORTED)
+              set_target_properties(OpenColorIO::OpenColorIO PROPERTIES
+                INTERFACE_INCLUDE_DIRECTORIES "${OPENCOLORIO_INCLUDE_DIR}"
+                IMPORTED_LOCATION "${OPENCOLORIO_LIBRARY}"
+              )
+            endif()
+
+            set(CMAKE_FIND_FRAMEWORK NEVER)
+            message(STATUS "IOS PATCH: iOS build forced paths and targets")
           else()
-            # macOS host tools: use macOS precompiled libs for Python only, and disable TBB
-            set(LIBDIR "${MACOS_LIB}" CACHE PATH "" FORCE)
-            set(PYTHON_LIBRARY "\${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
-            set(PYTHON_INCLUDE_DIR "\${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_INCLUDE_CONFIG_DIR "\${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
-            set(PYTHON_LIBPATH "\${LIBDIR}/python/lib" CACHE PATH "" FORCE)
+            # macOS host tools: only set Python, disable TBB, use macOS libraries
+            set(LIBDIR "${CMAKE_SOURCE_DIR}/lib/macos_arm64" CACHE PATH "" FORCE)
+            set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+            set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
             set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
             set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
             set(WITH_TBB OFF CACHE BOOL "" FORCE)
             set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
             set(WITH_JACK OFF CACHE BOOL "" FORCE)
+            # Ensure TBB is not used by clearing variables
+            set(TBB_FOUND FALSE CACHE BOOL "" FORCE)
+            set(TBB_LIBRARIES "" CACHE STRING "" FORCE)
+            message(STATUS "IOS PATCH: macOS host tools - Python only, TBB/OpenAL disabled")
           endif()
           ### IOS PATCH END
           EOF
           sed -i '' "1 r /tmp/patch_cmake" build_files/cmake/platform/platform_apple.cmake
 
-          # Comment out find_package calls that we handle manually
+          # Comment out find_package calls for libraries we manually define
           sed -i '' 's/^[[:space:]]*find_package(OpenEXR REQUIRED)/# find_package(OpenEXR REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
           sed -i '' 's/^[[:space:]]*find_package(OpenImageIO REQUIRED)/# find_package(OpenImageIO REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
           sed -i '' 's/^[[:space:]]*find_package(TBB 2021.13.0 REQUIRED)/# find_package(TBB 2021.13.0 REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
+          sed -i '' 's/^[[:space:]]*find_package(OpenColorIO 2.0.0 REQUIRED CONFIG)/# find_package(OpenColorIO 2.0.0 REQUIRED CONFIG) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
-          echo "Patched platform_apple.cmake with all targets defined"
+          echo "Patched platform_apple.cmake"
 
       # ============================================================
       # 15. Generate Xcode project
