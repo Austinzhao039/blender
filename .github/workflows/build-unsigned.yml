@@ -112,9 +112,8 @@ jobs:
         run: |
           cd blender
           CERES_DIR="lib/ios_arm64/ceres"
-          # Check if both export.h and config.h exist
           if [ -f "$CERES_DIR/include/ceres/internal/export.h" ] && [ -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
-            echo "✅ Ceres headers already present (including internal files)"
+            echo "✅ Ceres headers already present"
           else
             echo "⚠️ Ceres headers missing, attempting LFS pull..."
             cd lib/ios_arm64
@@ -137,7 +136,7 @@ jobs:
               mkdir -p "$CERES_DIR/include"
               cp -r /tmp/ceres-solver-${CERES_VERSION}/include/* "$CERES_DIR/include/"
               
-              # Create export.h if missing using printf
+              # Create export.h if missing
               if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
                 mkdir -p "$CERES_DIR/include/ceres/internal"
                 printf '%s\n' \
@@ -155,30 +154,30 @@ jobs:
                 echo "✅ Created dummy export.h"
               fi
               
-              # Create config.h if missing using printf
+              # Create config.h if missing
               if [ ! -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
                 mkdir -p "$CERES_DIR/include/ceres/internal"
-                printf '%s\n' \
-                  '// Manual config.h for iOS cross-compilation' \
-                  '#ifndef CERES_INTERNAL_CONFIG_H_' \
-                  '#define CERES_INTERNAL_CONFIG_H_' \
-                  '' \
-                  '#define CERES_HAVE_SSE3 0' \
-                  '#define CERES_HAVE_SSE4_1 0' \
-                  '#define CERES_HAVE_SSE4_2 0' \
-                  '#define CERES_HAVE_AVX 0' \
-                  '#define CERES_HAVE_AVX2 0' \
-                  '#define CERES_HAVE_AVX512 0' \
-                  '#define CERES_HAVE_EIGEN 1' \
-                  '#define CERES_HAVE_EIGEN_SPARSE 1' \
-                  '#define CERES_HAVE_OPENMP 0' \
-                  '#define CERES_HAVE_TBB 0' \
-                  '#define CERES_HAVE_CXX11 1' \
-                  '#define CERES_HAVE_THREADS 1' \
-                  '#define CERES_USE_EIGEN_SPARSE 1' \
-                  '' \
-                  '#endif  // CERES_INTERNAL_CONFIG_H_' \
-                  > "$CERES_DIR/include/ceres/internal/config.h"
+                cat > "$CERES_DIR/include/ceres/internal/config.h" << 'EOF'
+                // Manual config.h for iOS cross-compilation
+                #ifndef CERES_INTERNAL_CONFIG_H_
+                #define CERES_INTERNAL_CONFIG_H_
+
+                #define CERES_HAVE_SSE3 0
+                #define CERES_HAVE_SSE4_1 0
+                #define CERES_HAVE_SSE4_2 0
+                #define CERES_HAVE_AVX 0
+                #define CERES_HAVE_AVX2 0
+                #define CERES_HAVE_AVX512 0
+                #define CERES_HAVE_EIGEN 1
+                #define CERES_HAVE_EIGEN_SPARSE 1
+                #define CERES_HAVE_OPENMP 0
+                #define CERES_HAVE_TBB 0
+                #define CERES_HAVE_CXX11 1
+                #define CERES_HAVE_THREADS 1
+                #define CERES_USE_EIGEN_SPARSE 1
+
+                #endif  // CERES_INTERNAL_CONFIG_H_
+                EOF
                 echo "✅ Created dummy config.h"
               fi
               
@@ -544,13 +543,14 @@ jobs:
           sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
-      - name: Patch CMakeLists.txt and platform_apple.cmake
+      - name: Patch CMakeLists, platform_apple, and fix libmv Eigen issue
         run: |
           cd blender
           PY_LIB="$PYTHON_LIB_DIR"
           PY_INC="$PYTHON_INC_DIR"
           IOS_LIB="$PWD/lib/ios_arm64"
 
+          # 1. Patch CMakeLists.txt
           cat > /tmp/patch_cmakelists << EOF
           # --- FORCED PATCH FOR iOS BUILD ---
           set(ENV{HOME} "/Users/runner")
@@ -575,15 +575,20 @@ jobs:
           EOF
           sed -i '' "1 r /tmp/patch_cmakelists" CMakeLists.txt
 
+          # 2. Disable Epoxy find_package
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
+          # 3. Force Ceres include in libmv
           cat > /tmp/libmv_patch.txt << 'EOF'
           # Added by iOS patch: force Ceres include path
           include_directories(BEFORE SYSTEM "${CERES_INCLUDE_DIR}")
           EOF
           { cat /tmp/libmv_patch.txt; cat intern/libmv/CMakeLists.txt; } > intern/libmv/CMakeLists.txt.tmp && mv intern/libmv/CMakeLists.txt.tmp intern/libmv/CMakeLists.txt
 
-          echo "✅ Patched CMakeLists.txt, disabled Epoxy, forced Ceres include path in libmv"
+          # 4. Fix Eigen jacobiSvd usage in track_region.cc
+          sed -i '' 's/\.jacobiSvd<[^>]*>/\.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)/g' intern/libmv/libmv/tracking/track_region.cc
+
+          echo "✅ All patches applied"
 
       - name: Generate Xcode project
         id: cmake_config
