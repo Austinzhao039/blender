@@ -9,9 +9,6 @@ jobs:
     timeout-minutes: 210
 
     steps:
-      # ============================================================
-      # 0. 安装依赖（包含 zstd）
-      # ============================================================
       - name: Install dependencies
         run: |
           brew install git-lfs cmake fmt zstd
@@ -34,9 +31,6 @@ jobs:
           fi
           echo "✅ zstd installed at /opt/homebrew/lib/libzstd.dylib"
 
-      # ============================================================
-      # 1. 克隆 Blender 源码（跳过 LFS）
-      # ============================================================
       - name: Clone Blender from official source (skip LFS)
         run: |
           rm -rf blender
@@ -57,9 +51,6 @@ jobs:
           fi
           echo "✅ blender directory exists"
 
-      # ============================================================
-      # 2. 下载 startup.blend（main2）
-      # ============================================================
       - name: Download startup.blend from Release (main2)
         run: |
           cd blender
@@ -83,9 +74,6 @@ jobs:
           fi
           echo "✅ startup.blend ready"
 
-      # ============================================================
-      # 3. 下载 macOS Python（mainly）
-      # ============================================================
       - name: Download macOS Python from Release (mainly)
         run: |
           cd blender
@@ -100,9 +88,6 @@ jobs:
           fi
           echo "✅ macOS Python ready"
 
-      # ============================================================
-      # 4. 缓存 iOS 库
-      # ============================================================
       - name: Cache iOS libraries
         id: cache-ios
         uses: actions/cache@v4
@@ -112,9 +97,6 @@ jobs:
           restore-keys: |
             ios-libs-
 
-      # ============================================================
-      # 5. 克隆 iOS 预编译库（仅缓存未命中时）
-      # ============================================================
       - name: Clone iOS precompiled libraries (cache miss)
         if: steps.cache-ios.outputs.cache-hit != 'true'
         run: |
@@ -126,9 +108,6 @@ jobs:
           cd ../..
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
-      # ============================================================
-      # 5.1 🚀 确保 Ceres 头文件存在（多策略 + 备用）
-      # ============================================================
       - name: Ensure Ceres headers are present
         run: |
           cd blender
@@ -138,18 +117,14 @@ jobs:
           else
             echo "⚠️ Ceres headers missing, attempting LFS pull..."
             cd lib/ios_arm64
-            # 策略1：拉取 ceres 子目录
             git lfs pull --include="ceres/**" || true
-            # 策略2：拉取通配路径
             if [ ! -f "ceres/include/ceres/internal/export.h" ]; then
               git lfs pull --include="**/ceres/**" || true
             fi
-            # 策略3：拉取所有 LFS 文件
             if [ ! -f "ceres/include/ceres/internal/export.h" ]; then
               git lfs pull || true
             fi
             cd ../..
-            # 如果 LFS 成功，文件应该存在
             if [ -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
               echo "✅ Ceres headers pulled via LFS"
             else
@@ -160,7 +135,6 @@ jobs:
               tar -xzf /tmp/ceres-solver.tar.gz -C /tmp
               mkdir -p "$CERES_DIR/include"
               cp -r /tmp/ceres-solver-${CERES_VERSION}/include/* "$CERES_DIR/include/"
-              # 如果 internal/export.h 仍然缺失，手动创建
               if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
                 mkdir -p "$CERES_DIR/include/ceres/internal"
                 printf '%s\n' \
@@ -180,16 +154,12 @@ jobs:
               rm -rf /tmp/ceres-solver.tar.gz /tmp/ceres-solver-${CERES_VERSION}
             fi
           fi
-          # 最终验证
           if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
             echo "❌ ceres/internal/export.h still not found!"
             exit 1
           fi
           echo "✅ Ceres headers verified"
 
-      # ============================================================
-      # 5.2 🚀 删除 iOS zstd 以避免主机工具错误链接
-      # ============================================================
       - name: Remove iOS zstd to avoid host tool linking
         run: |
           cd blender/lib/ios_arm64
@@ -200,9 +170,6 @@ jobs:
             echo "ℹ️ iOS zstd not present, skipping"
           fi
 
-      # ============================================================
-      # 6. 下载 OpenImageIO（main）
-      # ============================================================
       - name: Download OpenImageIO from Release (main)
         run: |
           cd blender/lib/ios_arm64/openimageio/lib/
@@ -216,9 +183,6 @@ jobs:
           fi
           echo "✅ OpenImageIO dynamic libraries ready"
 
-      # ============================================================
-      # 7. 🚀 下载 Eigen 头文件到 quadriflow 源码目录
-      # ============================================================
       - name: Download Eigen headers to quadriflow source
         run: |
           cd blender
@@ -238,9 +202,6 @@ jobs:
           echo "EIGEN_INCLUDE_PATH=$EIGEN_INCLUDE_PATH" >> $GITHUB_ENV
           echo "✅ EIGEN_INCLUDE_PATH set to $EIGEN_INCLUDE_PATH"
 
-      # ============================================================
-      # 8. 🚀 修复 list(INSERT) 错误（删除整行）
-      # ============================================================
       - name: Fix list(INSERT) error in source/creator/CMakeLists.txt
         run: |
           cd blender
@@ -250,17 +211,12 @@ jobs:
           echo "After fix:"
           grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "All list(INSERT lines removed"
 
-      # ============================================================
-      # 9. 🚀 创建假的 CMake 配置文件（展开变量）
-      # ============================================================
       - name: Create fake CMake config files
         run: |
           cd blender
           LIB_BASE="$PWD/lib/ios_arm64"
           EIGEN_CMAKE_DIR="$LIB_BASE/eigen3-config"
           mkdir -p "$EIGEN_CMAKE_DIR"
-
-          # ---------- Eigen3 ----------
           cat > "$EIGEN_CMAKE_DIR/Eigen3Config.cmake" <<EOF
           set(Eigen3_FOUND TRUE)
           set(EIGEN3_FOUND TRUE)
@@ -279,7 +235,6 @@ jobs:
           EOF
           echo "Eigen3_DIR=$EIGEN_CMAKE_DIR" >> $GITHUB_ENV
 
-          # ---------- OpenImageIO ----------
           OIIO_DIR="$LIB_BASE/openimageio"
           mkdir -p "$OIIO_DIR"
           cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<EOF
@@ -306,7 +261,6 @@ jobs:
           EOF
           cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
 
-          # ---------- OpenEXR ----------
           OPENEXR_DIR="$LIB_BASE/openexr"
           OPENEXR_INC="$OPENEXR_DIR/include/OpenEXR"
           OPENEXR_LIB_FILE="$OPENEXR_DIR/lib/libOpenEXR.dylib"
@@ -328,7 +282,6 @@ jobs:
           EOF
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
 
-          # ---------- Ceres ----------
           CERES_INC="$LIB_BASE/ceres/include"
           if [ -d "$CERES_INC" ] && [ -f "$CERES_INC/ceres/ceres.h" ]; then
             echo "✅ Ceres headers found at $CERES_INC"
@@ -364,7 +317,6 @@ jobs:
           echo "CERES_DIR=$CERES_CMAKE_DIR" >> $GITHUB_ENV
           echo "✅ Ceres config created with include: $CERES_INC"
 
-          # ---------- Boost ----------
           BOOST_INC=$(find "$LIB_BASE" -path "*/boost/version.hpp" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$BOOST_INC" ] && BOOST_INC="$LIB_BASE/boost/include"
           BOOST_CMAKE_DIR="$LIB_BASE/boost-config"
@@ -380,7 +332,6 @@ jobs:
           EOF
           cp "$BOOST_CMAKE_DIR/BoostConfig.cmake" "$BOOST_CMAKE_DIR/boost-config.cmake"
 
-          # ---------- TBB ----------
           TBB_INC=$(find "$LIB_BASE" -path "*/tbb/tbb.h" -printf "%h\n" 2>/dev/null | head -1)
           [ -z "$TBB_INC" ] && TBB_INC="$LIB_BASE/tbb/include"
           TBB_LIB=$(find "$LIB_BASE" -name "libtbb.dylib" 2>/dev/null | head -1)
@@ -426,9 +377,6 @@ jobs:
           echo "TBB_DIR=$TBB_CMAKE_DIR" >> $GITHUB_ENV
           echo "✅ All fake config files created."
 
-      # ============================================================
-      # 10. 验证 OpenEXR
-      # ============================================================
       - name: Verify OpenEXR files
         run: |
           cd blender/lib/ios_arm64
@@ -441,9 +389,6 @@ jobs:
           fi
           echo "✅ OpenEXR is ready"
 
-      # ============================================================
-      # 11. 下载 iOS Python
-      # ============================================================
       - name: Download iOS Python 3.13 dynamic library from BeeWare
         run: |
           cd blender
@@ -482,9 +427,6 @@ jobs:
           fi
           echo "✅ iOS Python installed"
 
-      # ============================================================
-      # 12. 动态查找路径（导出变量）
-      # ============================================================
       - name: Locate library paths dynamically
         id: locate_libs
         run: |
@@ -555,9 +497,6 @@ jobs:
             exit 1
           fi
 
-      # ============================================================
-      # 13. 设置 Xcode
-      # ============================================================
       - name: Setup Xcode
         run: |
           XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
@@ -569,19 +508,15 @@ jobs:
           sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
-      # ============================================================
-      # 14. 🚀 关键补丁：强制设置 Ceres 包含路径并修改 libmv
-      # ============================================================
       - name: Patch CMakeLists.txt and platform_apple.cmake
         run: |
           cd blender
-          # 获取变量值
           PY_LIB="$PYTHON_LIB_DIR"
           PY_INC="$PYTHON_INC_DIR"
           IOS_LIB="$PWD/lib/ios_arm64"
 
-          # ---------- 1. 在 CMakeLists.txt 开头插入补丁 ----------
-          cat > /tmp/patch_cmakelists << 'EOF'
+          # ---------- 1. 在 CMakeLists.txt 开头插入补丁（变量展开） ----------
+          cat > /tmp/patch_cmakelists << EOF
           # --- FORCED PATCH FOR iOS BUILD ---
           set(ENV{HOME} "/Users/runner")
           set(LIBDIR "${IOS_LIB}" CACHE PATH "" FORCE)
@@ -619,9 +554,6 @@ jobs:
 
           echo "✅ Patched CMakeLists.txt, disabled Epoxy, forced Ceres include path in libmv"
 
-      # ============================================================
-      # 15. 生成 Xcode 项目（使用 ZSTD_ROOT_DIR）
-      # ============================================================
       - name: Generate Xcode project
         id: cmake_config
         run: |
@@ -671,9 +603,6 @@ jobs:
             blender/build_ios/CMakeFiles/CMakeOutput.log
           retention-days: 7
 
-      # ============================================================
-      # 16. 验证 Xcode 项目是否生成
-      # ============================================================
       - name: Verify Xcode project exists
         run: |
           if [ ! -d "blender/build_ios/Blender.xcodeproj" ]; then
@@ -686,9 +615,6 @@ jobs:
           fi
           echo "✅ Blender.xcodeproj found"
 
-      # ============================================================
-      # 17. 🚀 构建交叉编译工具链（显式传递 HOME）
-      # ============================================================
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
         run: |
@@ -705,9 +631,6 @@ jobs:
             ARCHS=arm64 \
             HOME="$HOME"
 
-      # ============================================================
-      # 18. 编译主应用（显式传递 HOME）
-      # ============================================================
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
         run: |
@@ -727,9 +650,6 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             HOME="$HOME"
 
-      # ============================================================
-      # 19. 打包成未签名 IPA
-      # ============================================================
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
         run: |
@@ -747,9 +667,6 @@ jobs:
           cd IPA && zip -r ../Blender.ipa Payload/ && cd ..
           ls -lh Blender.ipa
 
-      # ============================================================
-      # 20. 上传 IPA
-      # ============================================================
       - name: Upload IPA
         if: steps.cmake_config.outcome == 'success'
         uses: actions/upload-artifact@v4
@@ -758,9 +675,6 @@ jobs:
           path: blender/build_ios/Blender.ipa
           retention-days: 30
 
-      # ============================================================
-      # 21. 失败时上传日志
-      # ============================================================
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
