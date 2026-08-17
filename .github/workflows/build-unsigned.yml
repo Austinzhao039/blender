@@ -112,20 +112,21 @@ jobs:
         run: |
           cd blender
           CERES_DIR="lib/ios_arm64/ceres"
-          if [ -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
-            echo "✅ Ceres headers already present"
+          # Check if both export.h and config.h exist
+          if [ -f "$CERES_DIR/include/ceres/internal/export.h" ] && [ -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
+            echo "✅ Ceres headers already present (including internal files)"
           else
             echo "⚠️ Ceres headers missing, attempting LFS pull..."
             cd lib/ios_arm64
             git lfs pull --include="ceres/**" || true
-            if [ ! -f "ceres/include/ceres/internal/export.h" ]; then
+            if [ ! -f "ceres/include/ceres/internal/export.h" ] || [ ! -f "ceres/include/ceres/internal/config.h" ]; then
               git lfs pull --include="**/ceres/**" || true
             fi
-            if [ ! -f "ceres/include/ceres/internal/export.h" ]; then
+            if [ ! -f "ceres/include/ceres/internal/export.h" ] || [ ! -f "ceres/include/ceres/internal/config.h" ]; then
               git lfs pull || true
             fi
             cd ../..
-            if [ -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
+            if [ -f "$CERES_DIR/include/ceres/internal/export.h" ] && [ -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
               echo "✅ Ceres headers pulled via LFS"
             else
               echo "📥 LFS failed, downloading from Ceres official and creating missing files..."
@@ -135,6 +136,8 @@ jobs:
               tar -xzf /tmp/ceres-solver.tar.gz -C /tmp
               mkdir -p "$CERES_DIR/include"
               cp -r /tmp/ceres-solver-${CERES_VERSION}/include/* "$CERES_DIR/include/"
+              
+              # Create export.h if missing
               if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
                 mkdir -p "$CERES_DIR/include/ceres/internal"
                 printf '%s\n' \
@@ -151,11 +154,44 @@ jobs:
                   > "$CERES_DIR/include/ceres/internal/export.h"
                 echo "✅ Created dummy export.h"
               fi
+              
+              # Create config.h if missing
+              if [ ! -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
+                mkdir -p "$CERES_DIR/include/ceres/internal"
+                cat > "$CERES_DIR/include/ceres/internal/config.h" << 'EOF'
+                // Manual config.h for iOS cross-compilation
+                #ifndef CERES_INTERNAL_CONFIG_H_
+                #define CERES_INTERNAL_CONFIG_H_
+
+                #define CERES_HAVE_SSE3 0
+                #define CERES_HAVE_SSE4_1 0
+                #define CERES_HAVE_SSE4_2 0
+                #define CERES_HAVE_AVX 0
+                #define CERES_HAVE_AVX2 0
+                #define CERES_HAVE_AVX512 0
+                #define CERES_HAVE_EIGEN 1
+                #define CERES_HAVE_EIGEN_SPARSE 1
+                #define CERES_HAVE_OPENMP 0
+                #define CERES_HAVE_TBB 0
+                #define CERES_HAVE_CXX11 1
+                #define CERES_HAVE_THREADS 1
+                #define CERES_USE_EIGEN_SPARSE 1
+
+                #endif  // CERES_INTERNAL_CONFIG_H_
+                EOF
+                echo "✅ Created dummy config.h"
+              fi
+              
               rm -rf /tmp/ceres-solver.tar.gz /tmp/ceres-solver-${CERES_VERSION}
             fi
           fi
+          # Final verification
           if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
             echo "❌ ceres/internal/export.h still not found!"
+            exit 1
+          fi
+          if [ ! -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
+            echo "❌ ceres/internal/config.h still not found!"
             exit 1
           fi
           echo "✅ Ceres headers verified"
@@ -515,7 +551,6 @@ jobs:
           PY_INC="$PYTHON_INC_DIR"
           IOS_LIB="$PWD/lib/ios_arm64"
 
-          # ---------- 1. 在 CMakeLists.txt 开头插入补丁（变量展开） ----------
           cat > /tmp/patch_cmakelists << EOF
           # --- FORCED PATCH FOR iOS BUILD ---
           set(ENV{HOME} "/Users/runner")
@@ -529,10 +564,8 @@ jobs:
           set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
           set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
           set(WITH_JACK OFF CACHE BOOL "" FORCE)
-          # Force Epoxy - set found and disable find_package
           set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)
           set(EPOXY_FOUND TRUE CACHE BOOL "" FORCE)
-          # Force Ceres - set found and include dirs (fix libmv)
           set(CERES_FOUND TRUE CACHE BOOL "" FORCE)
           set(CERES_INCLUDE_DIR "${IOS_LIB}/ceres/include" CACHE PATH "" FORCE)
           set(CERES_INCLUDE_DIRS "${IOS_LIB}/ceres/include" CACHE PATH "" FORCE)
@@ -542,10 +575,8 @@ jobs:
           EOF
           sed -i '' "1 r /tmp/patch_cmakelists" CMakeLists.txt
 
-          # ---------- 2. 注释掉 platform_apple.cmake 中的 find_package(Epoxy REQUIRED) ----------
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
-          # ---------- 3. 强制在 libmv 的 CMakeLists 中添加包含路径 ----------
           cat > /tmp/libmv_patch.txt << 'EOF'
           # Added by iOS patch: force Ceres include path
           include_directories(BEFORE SYSTEM "${CERES_INCLUDE_DIR}")
