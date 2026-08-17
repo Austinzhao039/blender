@@ -137,7 +137,7 @@ jobs:
               mkdir -p "$CERES_DIR/include"
               cp -r /tmp/ceres-solver-${CERES_VERSION}/include/* "$CERES_DIR/include/"
               
-              # Create export.h if missing
+              # Create export.h if missing using printf
               if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
                 mkdir -p "$CERES_DIR/include/ceres/internal"
                 printf '%s\n' \
@@ -155,30 +155,30 @@ jobs:
                 echo "✅ Created dummy export.h"
               fi
               
-              # Create config.h if missing
+              # Create config.h if missing using printf
               if [ ! -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
                 mkdir -p "$CERES_DIR/include/ceres/internal"
-                cat > "$CERES_DIR/include/ceres/internal/config.h" << 'EOF'
-                // Manual config.h for iOS cross-compilation
-                #ifndef CERES_INTERNAL_CONFIG_H_
-                #define CERES_INTERNAL_CONFIG_H_
-
-                #define CERES_HAVE_SSE3 0
-                #define CERES_HAVE_SSE4_1 0
-                #define CERES_HAVE_SSE4_2 0
-                #define CERES_HAVE_AVX 0
-                #define CERES_HAVE_AVX2 0
-                #define CERES_HAVE_AVX512 0
-                #define CERES_HAVE_EIGEN 1
-                #define CERES_HAVE_EIGEN_SPARSE 1
-                #define CERES_HAVE_OPENMP 0
-                #define CERES_HAVE_TBB 0
-                #define CERES_HAVE_CXX11 1
-                #define CERES_HAVE_THREADS 1
-                #define CERES_USE_EIGEN_SPARSE 1
-
-                #endif  // CERES_INTERNAL_CONFIG_H_
-                EOF
+                printf '%s\n' \
+                  '// Manual config.h for iOS cross-compilation' \
+                  '#ifndef CERES_INTERNAL_CONFIG_H_' \
+                  '#define CERES_INTERNAL_CONFIG_H_' \
+                  '' \
+                  '#define CERES_HAVE_SSE3 0' \
+                  '#define CERES_HAVE_SSE4_1 0' \
+                  '#define CERES_HAVE_SSE4_2 0' \
+                  '#define CERES_HAVE_AVX 0' \
+                  '#define CERES_HAVE_AVX2 0' \
+                  '#define CERES_HAVE_AVX512 0' \
+                  '#define CERES_HAVE_EIGEN 1' \
+                  '#define CERES_HAVE_EIGEN_SPARSE 1' \
+                  '#define CERES_HAVE_OPENMP 0' \
+                  '#define CERES_HAVE_TBB 0' \
+                  '#define CERES_HAVE_CXX11 1' \
+                  '#define CERES_HAVE_THREADS 1' \
+                  '#define CERES_USE_EIGEN_SPARSE 1' \
+                  '' \
+                  '#endif  // CERES_INTERNAL_CONFIG_H_' \
+                  > "$CERES_DIR/include/ceres/internal/config.h"
                 echo "✅ Created dummy config.h"
               fi
               
