@@ -548,22 +548,48 @@ jobs:
           echo "✅ Blender.xcodeproj found"
 
       # ============================================================
-      # 🆕 15.5 修补 platform_apple.cmake（正确设置 iOS 和 macOS 的 LIBDIR）
+      # 🆕 15.5 修补 platform_apple.cmake（使用转义路径）
       # ============================================================
-      - name: Patch platform_apple.cmake for correct LIBDIR
+      - name: Patch platform_apple.cmake with escaped paths
         run: |
           cd blender
-          # 删除旧的补丁块（如果存在）
+          # 删除旧的补丁块
           sed -i '' '/### IOS PATCH START/,/### IOS PATCH END/d' build_files/cmake/platform/platform_apple.cmake
-          # 获取 PYTHON_INC_DIR 的实际值（用于 macOS 主机工具）
           PY_INC="$PYTHON_INC_DIR"
-          # 插入新补丁到文件开头
+          cat > /tmp/patch_cmake << 'EOF'
+          ### IOS PATCH START
+          set(ENV{HOME} "/Users/runner")
+          if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")
+            set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/ios_arm64)
+            set(PYTHON_VERSION 3.13 CACHE STRING "" FORCE)
+            set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+            set(PYTHON_INCLUDE_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_CONFIG_DIR "${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
+            set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
+            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
+            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
+          else()
+            set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_arm64)
+            set(PYTHON_VERSION 3.13 CACHE STRING "" FORCE)
+            set(PYTHON_LIBRARY "${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+            set(PYTHON_INCLUDE_DIR "${PY_INC}" CACHE PATH "" FORCE)
+            set(PYTHON_INCLUDE_CONFIG_DIR "${PY_INC}" CACHE PATH "" FORCE)
+            set(PYTHON_LIBPATH "${LIBDIR}/python/lib" CACHE PATH "" FORCE)
+            set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
+            set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
+          endif()
+          ### IOS PATCH END
+          EOF
+          # 注意：使用 'EOF' 防止 shell 展开，但我们需要 `PY_INC` 被展开，所以用不带引号的 EOF，
+          # 但要对 `$` 进行转义。我们采用混合方法：用单引号包裹固定部分，但需要插入 PY_INC 变量。
+          # 更好的做法：用双引号，但转义 `${CMAKE_SOURCE_DIR}` 为 `\${CMAKE_SOURCE_DIR}`。
+          # 我们重新生成正确的补丁：
+          rm -f /tmp/patch_cmake
           cat > /tmp/patch_cmake << EOF
           ### IOS PATCH START
           set(ENV{HOME} "/Users/runner")
           if(CMAKE_OSX_SYSROOT MATCHES "iphoneos")
-            # iOS 构建：使用 ios_arm64 库
-            set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/ios_arm64)
+            set(LIBDIR \${CMAKE_SOURCE_DIR}/lib/ios_arm64)
             set(PYTHON_VERSION 3.13 CACHE STRING "" FORCE)
             set(PYTHON_LIBRARY "\${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
             set(PYTHON_INCLUDE_DIR "\${LIBDIR}/python/include/python3.13" CACHE PATH "" FORCE)
@@ -572,8 +598,7 @@ jobs:
             set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
             set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
           else()
-            # macOS 主机工具：使用 macOS 库 + iOS 头文件（平台无关）
-            set(LIBDIR ${CMAKE_SOURCE_DIR}/lib/macos_arm64)
+            set(LIBDIR \${CMAKE_SOURCE_DIR}/lib/macos_arm64)
             set(PYTHON_VERSION 3.13 CACHE STRING "" FORCE)
             set(PYTHON_LIBRARY "\${LIBDIR}/python/lib/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
             set(PYTHON_INCLUDE_DIR "${PY_INC}" CACHE PATH "" FORCE)
@@ -585,7 +610,7 @@ jobs:
           ### IOS PATCH END
           EOF
           sed -i '' "1 r /tmp/patch_cmake" build_files/cmake/platform/platform_apple.cmake
-          echo "✅ Patched platform_apple.cmake with correct LIBDIR for both iOS and macOS"
+          echo "✅ Patched platform_apple.cmake with escaped CMAKE_SOURCE_DIR"
 
       # ============================================================
       # 16. 🚀 构建交叉编译工具链（显式传递 HOME）
