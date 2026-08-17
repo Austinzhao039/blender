@@ -127,7 +127,7 @@ jobs:
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
       # ============================================================
-      # 5.1 🚀 确保 Ceres 头文件存在（无条件执行）
+      # 5.1 🚀 确保 Ceres 头文件存在（多策略）
       # ============================================================
       - name: Ensure Ceres headers are present
         run: |
@@ -136,16 +136,75 @@ jobs:
           if [ -f "$CERES_DIR/include/ceres/ceres.h" ]; then
             echo "✅ Ceres headers already present"
           else
-            echo "⚠️ Ceres headers missing, cloning lib-ios_arm64 to fetch ceres..."
-            rm -rf /tmp/lib-ios_arm64
-            git clone https://projects.blender.org/blender/lib-ios_arm64.git /tmp/lib-ios_arm64
-            cd /tmp/lib-ios_arm64
+            echo "⚠️ Ceres headers missing, attempting multiple strategies to fetch..."
+            rm -rf /tmp/lib-ios-arm64
+            git clone https://projects.blender.org/blender/lib-ios_arm64.git /tmp/lib-ios-arm64
+            cd /tmp/lib-ios-arm64
+
+            success=0
+
+            # 策略 1：使用 include="ceres/**"
+            echo "📥 Strategy 1: git lfs pull --include=\"ceres/**\""
             git lfs pull --include="ceres/**"
+            if [ -f "ceres/include/ceres/ceres.h" ]; then
+              success=1
+            else
+              echo "⚠️ Strategy 1 failed"
+            fi
+
+            # 策略 2：使用 include="**/ceres/**"
+            if [ $success -eq 0 ]; then
+              echo "📥 Strategy 2: git lfs pull --include=\"**/ceres/**\""
+              git lfs pull --include="**/ceres/**"
+              if [ -f "ceres/include/ceres/ceres.h" ]; then
+                success=1
+              else
+                echo "⚠️ Strategy 2 failed"
+              fi
+            fi
+
+            # 策略 3：拉取所有 LFS 文件
+            if [ $success -eq 0 ]; then
+              echo "📥 Strategy 3: git lfs pull (all files)"
+              git lfs pull
+              if [ -f "ceres/include/ceres/ceres.h" ]; then
+                success=1
+              else
+                echo "⚠️ Strategy 3 failed"
+              fi
+            fi
+
+            # 策略 4：从官方 Ceres 源码下载头文件（备选）
+            if [ $success -eq 0 ]; then
+              echo "📥 Strategy 4: Download Ceres headers from official release"
+              CERES_VERSION="2.1.0"
+              curl -L -o ceres-solver.tar.gz \
+                https://github.com/ceres-solver/ceres-solver/archive/refs/tags/${CERES_VERSION}.tar.gz
+              tar -xzf ceres-solver.tar.gz
+              mkdir -p ceres/include
+              cp -r ceres-solver-${CERES_VERSION}/include/ceres ceres/include/
+              if [ -d "ceres-solver-${CERES_VERSION}/internal" ]; then
+                mkdir -p ceres/internal
+                cp -r ceres-solver-${CERES_VERSION}/internal/* ceres/internal/
+              fi
+              if [ -f "ceres/include/ceres/ceres.h" ]; then
+                success=1
+                echo "✅ Ceres headers downloaded from official source"
+              else
+                echo "❌ Strategy 4 failed"
+              fi
+            fi
+
             cd -
-            mkdir -p "$CERES_DIR"
-            cp -r /tmp/lib-ios_arm64/ceres/* "$CERES_DIR/"
-            rm -rf /tmp/lib-ios_arm64
-            echo "✅ Ceres headers copied"
+
+            if [ $success -eq 1 ]; then
+              mkdir -p "$CERES_DIR"
+              cp -r /tmp/lib-ios-arm64/ceres/* "$CERES_DIR/"
+              echo "✅ Ceres headers copied to $CERES_DIR"
+            else
+              echo "❌ All strategies failed to obtain Ceres headers"
+              exit 1
+            fi
           fi
 
       # ============================================================
@@ -290,7 +349,6 @@ jobs:
           cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
 
           # ---------- Ceres ----------
-          # 首先查找实际的 Ceres 头文件目录
           CERES_INC=$(find "$LIB_BASE" -path "*/ceres/ceres.h" -printf "%h\n" 2>/dev/null | head -1)
           if [ -z "$CERES_INC" ]; then
             CERES_INC="$LIB_BASE/ceres/include"
