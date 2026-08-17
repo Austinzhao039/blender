@@ -28,7 +28,6 @@ jobs:
           fi
           echo "FMT_CMAKE_DIR=$FMT_CMAKE_DIR" >> $GITHUB_ENV
           echo "✅ fmt CMake config at $FMT_CMAKE_DIR"
-          # 验证 zstd 安装
           if [ ! -f /opt/homebrew/lib/libzstd.dylib ]; then
             echo "❌ zstd not installed correctly!"
             exit 1
@@ -520,7 +519,7 @@ jobs:
           echo "✅ Patched CMakeLists.txt and disabled Epoxy find_package"
 
       # ============================================================
-      # 15. 生成 Xcode 项目（指定 macOS zstd 路径）
+      # 15. 生成 Xcode 项目（使用 ZSTD_ROOT_DIR）
       # ============================================================
       - name: Generate Xcode project
         id: cmake_config
@@ -543,8 +542,7 @@ jobs:
             -DWITH_OPENIMAGEIO=ON \
             -DWITH_OPENMP=OFF \
             -DWITH_TBB=OFF \
-            -DZSTD_LIBRARY=/opt/homebrew/lib/libzstd.dylib \
-            -DZSTD_INCLUDE_DIR=/opt/homebrew/include \
+            -DZSTD_ROOT_DIR=/opt/homebrew \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
             -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
             -Dfmt_DIR="${FMT_CMAKE_DIR}" \
