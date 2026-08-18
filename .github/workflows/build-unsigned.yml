@@ -117,7 +117,6 @@ jobs:
           else
             echo "ℹ️ iOS zstd not present, skipping"
           fi
-          # Verify removal
           if [ -d "zstd" ]; then
             echo "❌ Failed to remove zstd!"
             exit 1
@@ -152,7 +151,6 @@ jobs:
               mkdir -p "$CERES_DIR/include"
               cp -r /tmp/ceres-solver-${CERES_VERSION}/include/* "$CERES_DIR/include/"
               
-              # Create export.h if missing
               if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
                 mkdir -p "$CERES_DIR/include/ceres/internal"
                 printf '%s\n' \
@@ -170,7 +168,6 @@ jobs:
                 echo "✅ Created dummy export.h"
               fi
               
-              # Create config.h if missing
               if [ ! -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
                 mkdir -p "$CERES_DIR/include/ceres/internal"
                 printf '%s\n' \
@@ -200,7 +197,6 @@ jobs:
               rm -rf /tmp/ceres-solver.tar.gz /tmp/ceres-solver-${CERES_VERSION}
             fi
           fi
-          # Final verification
           if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
             echo "❌ ceres/internal/export.h still not found!"
             exit 1
@@ -603,8 +599,9 @@ jobs:
           EOF
           { cat /tmp/libmv_patch.txt; cat intern/libmv/CMakeLists.txt; } > intern/libmv/CMakeLists.txt.tmp && mv intern/libmv/CMakeLists.txt.tmp intern/libmv/CMakeLists.txt
 
-          # 4. Fix Eigen jacobiSvd usage in track_region.cc
-          sed -i '' 's/\.jacobiSvd<[^>]*>/\.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)/g' intern/libmv/libmv/tracking/track_region.cc
+          # 4. Fix Eigen jacobiSvd usage in track_region.cc - exact line replacement
+          # Find the line with "Q1.jacobiSvd" and replace it with the correct form
+          sed -i '' 's/^[[:space:]]*Vec4 a = Q1\.jacobiSvd<[^>]*>()[^;]*;/    Vec4 a = Q1.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(Q2);/g' intern/libmv/libmv/tracking/track_region.cc
 
           echo "✅ All patches applied"
 
