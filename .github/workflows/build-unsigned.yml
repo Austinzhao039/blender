@@ -108,7 +108,7 @@ jobs:
           cd ../..
           echo "✅ iOS libraries cloned and OpenEXR LFS pulled"
 
-      - name: Remove iOS zstd to avoid host tool linking
+      - name: Remove iOS zstd and verify
         run: |
           cd blender/lib/ios_arm64
           if [ -d "zstd" ]; then
@@ -117,6 +117,12 @@ jobs:
           else
             echo "ℹ️ iOS zstd not present, skipping"
           fi
+          # Verify removal
+          if [ -d "zstd" ]; then
+            echo "❌ Failed to remove zstd!"
+            exit 1
+          fi
+          echo "✅ zstd removal verified"
 
       - name: Ensure Ceres headers are present
         run: |
@@ -164,7 +170,7 @@ jobs:
                 echo "✅ Created dummy export.h"
               fi
               
-              # Create config.h if missing (using printf to avoid heredoc issues)
+              # Create config.h if missing
               if [ ! -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
                 mkdir -p "$CERES_DIR/include/ceres/internal"
                 printf '%s\n' \
@@ -571,6 +577,18 @@ jobs:
           set(CERES_INCLUDE_DIRS "${IOS_LIB}/ceres/include" CACHE PATH "" FORCE)
           set(CERES_LIBRARY "${IOS_LIB}/ceres/lib/libceres.a" CACHE FILEPATH "" FORCE)
           set(CERES_LIBRARIES "${IOS_LIB}/ceres/lib/libceres.a" CACHE FILEPATH "" FORCE)
+          # Force Zstd to macOS library for host tools
+          set(ZSTD_LIBRARY "/opt/homebrew/lib/libzstd.dylib" CACHE FILEPATH "" FORCE)
+          set(ZSTD_LIBRARIES "/opt/homebrew/lib/libzstd.dylib" CACHE FILEPATH "" FORCE)
+          set(ZSTD_INCLUDE_DIR "/opt/homebrew/include" CACHE PATH "" FORCE)
+          set(ZSTD_FOUND TRUE CACHE BOOL "" FORCE)
+          if(NOT TARGET ZSTD::ZSTD)
+            add_library(ZSTD::ZSTD UNKNOWN IMPORTED)
+            set_target_properties(ZSTD::ZSTD PROPERTIES
+              IMPORTED_LOCATION "/opt/homebrew/lib/libzstd.dylib"
+              INTERFACE_INCLUDE_DIRECTORIES "/opt/homebrew/include"
+            )
+          endif()
           # --- END PATCH ---
           EOF
           sed -i '' "1 r /tmp/patch_cmakelists" CMakeLists.txt
