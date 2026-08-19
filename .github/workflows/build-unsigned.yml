@@ -9,7 +9,6 @@ jobs:
     timeout-minutes: 210
 
     steps:
-      # ========== 安装依赖、克隆、下载资源（与之前相同） ==========
       - name: Install dependencies
         run: |
           brew install git-lfs cmake fmt zstd
@@ -546,7 +545,7 @@ jobs:
           sudo xcode-select -s "/Applications/$XCODE_APP"
           xcodebuild -version
 
-      # ========== 关键补丁步骤（调整顺序） ==========
+      # ========== 增强补丁步骤 ==========
       - name: Patch CMakeLists, platform_apple, and fix all Eigen jacobiSvd issues
         run: |
           cd blender
@@ -575,7 +574,6 @@ jobs:
           set(CERES_INCLUDE_DIRS "${IOS_LIB}/ceres/include" CACHE PATH "" FORCE)
           set(CERES_LIBRARY "${IOS_LIB}/ceres/lib/libceres.a" CACHE FILEPATH "" FORCE)
           set(CERES_LIBRARIES "${IOS_LIB}/ceres/lib/libceres.a" CACHE FILEPATH "" FORCE)
-          # Force Zstd to macOS library for host tools
           set(ZSTD_LIBRARY "/opt/homebrew/lib/libzstd.dylib" CACHE FILEPATH "" FORCE)
           set(ZSTD_LIBRARIES "/opt/homebrew/lib/libzstd.dylib" CACHE FILEPATH "" FORCE)
           set(ZSTD_INCLUDE_DIR "/opt/homebrew/include" CACHE PATH "" FORCE)
@@ -601,32 +599,33 @@ jobs:
           EOF
           { cat /tmp/libmv_patch.txt; cat intern/libmv/CMakeLists.txt; } > intern/libmv/CMakeLists.txt.tmp && mv intern/libmv/CMakeLists.txt.tmp intern/libmv/CMakeLists.txt
 
-          # 4. Global fix: replace all .jacobiSvd<...> with .jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)
-          # This will handle most cases, but we'll override specific files later.
-          find intern -name "*.cc" -exec sed -i '' 's/\.jacobiSvd<[^>]*>/\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' {} \;
-          find intern -name "*.cpp" -exec sed -i '' 's/\.jacobiSvd<[^>]*>/\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' {} \;
+          # 4. Aggressive fix: replace all .jacobiSvd<...> in all source files
+          echo "Applying global jacobiSvd replacement to all source files..."
+          find . -type f \( -name "*.cc" -o -name "*.cpp" -o -name "*.c" -o -name "*.h" -o -name "*.hpp" \) -exec sed -i '' 's/\.jacobiSvd<[^>]*>/\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' {} \;
 
           # 5. Override specific files that need different options
-          # euclidean_resection.cc - restore ComputeFullU and ComputeFullV where needed
-          # Note: The global fix already made them all "ComputeFullU | ComputeFullV", we'll correct back
+          echo "Overriding specific files..."
           sed -i '' 's/N\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/N.jacobiSvd(Eigen::ComputeFullU)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
           sed -i '' 's/M\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/M.jacobiSvd(Eigen::ComputeFullV)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
           sed -i '' 's/K\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/K.jacobiSvd(Eigen::ComputeFullV)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
-
-          # track_region.cc - needs ThinU | ThinV
           sed -i '' 's/Q1\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/Q1.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)/g' intern/libmv/libmv/tracking/track_region.cc
-
-          # octree.cpp - uses Options variable, restore
           sed -i '' 's/a\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/a.jacobiSvd(Options)/g' intern/dualcon/intern/octree.cpp
 
-          # detect.cc - we can keep the global fix (FullU|FullV) which is fine
+          # 6. Verify no remaining jacobiSvd< in source files
+          echo "Checking for remaining .jacobiSvd< patterns..."
+          REMAINING=$(find . -type f \( -name "*.cc" -o -name "*.cpp" -o -name "*.c" -o -name "*.h" -o -name "*.hpp" \) -exec grep -l "jacobiSvd<" {} \;)
+          if [ -n "$REMAINING" ]; then
+            echo "⚠️ Warning: Some files still contain .jacobiSvd< pattern:"
+            echo "$REMAINING"
+            for file in $REMAINING; do
+              echo "In $file:"
+              grep -n "jacobiSvd<" "$file" || true
+            done
+          else
+            echo "✅ No .jacobiSvd< patterns found in any source file."
+          fi
 
-          echo "✅ All patches applied (Eigen jacobiSvd fixed with overrides)"
-          # Verify no remaining template syntax
-          echo "Checking for any remaining .jacobiSvd< ..."
-          grep -r "jacobiSvd<" intern/libmv/libmv/multiview/euclidean_resection.cc || echo "None found in euclidean_resection.cc"
-          grep -r "jacobiSvd<" intern/libmv/libmv/tracking/track_region.cc || echo "None found in track_region.cc"
-          grep -r "jacobiSvd<" intern/dualcon/intern/octree.cpp || echo "None found in octree.cpp"
+          echo "✅ All patches applied"
 
       - name: Generate Xcode project
         id: cmake_config
