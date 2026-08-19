@@ -611,11 +611,14 @@ jobs:
           # track_region.cc - one place (already had template syntax)
           sed -i '' 's/^[[:space:]]*Vec4 a = Q1\.jacobiSvd<[^>]*>()[^;]*;/    Vec4 a = Q1.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(Q2);/g' intern/libmv/libmv/tracking/track_region.cc
 
+          # detect.cc - likely has similar issue
+          sed -i '' 's/\.jacobiSvd<[^>]*>/\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' intern/libmv/libmv/simple_pipeline/detect.cc
+
           # As a safety net, convert any remaining .jacobiSvd<...> to .jacobiSvd(...) with ComputeFullU | ComputeFullV
           find intern -name "*.cc" -exec sed -i '' 's/\.jacobiSvd<[^>]*>/\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' {} \;
           find intern -name "*.cpp" -exec sed -i '' 's/\.jacobiSvd<[^>]*>/\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' {} \;
 
-          echo "✅ All patches applied (Eigen jacobiSvd fixed)"
+          echo "✅ All patches applied (Eigen jacobiSvd fixed, including detect.cc)"
 
       - name: Generate Xcode project
         id: cmake_config
