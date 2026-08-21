@@ -604,9 +604,11 @@ jobs:
           find intern/libmv -type f \( -name "*.cc" -o -name "*.cpp" \) -exec perl -pi -e 's/jacobiSvd<([^>]+)>/jacobiSvd($1)/g' {} \;
           find intern/libmv -type f \( -name "*.cc" -o -name "*.cpp" \) -exec perl -pi -e 's/jacobiSvd\(([^)]*)\)\(\)/jacobiSvd($1)/g' {} \;
 
-          # 5. Revert octree.cpp to original (it was never broken)
-          echo "Reverting octree.cpp to original..."
+          # 5. Revert octree.cpp to original (but then fix it explicitly)
+          echo "Fixing octree.cpp explicitly..."
           git checkout intern/dualcon/intern/octree.cpp
+          # Replace the wrong template usage with correct function call
+          sed -i '' 's/a\.jacobiSvd<[^>]*>\(\)/a.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' intern/dualcon/intern/octree.cpp
 
           # 6. Verify key files are fixed
           echo "Verifying euclidean_resection.cc..."
@@ -633,6 +635,12 @@ jobs:
             exit 1
           fi
 
+          echo "Verifying octree.cpp..."
+          if grep -q "jacobiSvd<" intern/dualcon/intern/octree.cpp; then
+            echo "ERROR: octree.cpp still has template syntax!"
+            grep -n "jacobiSvd<" intern/dualcon/intern/octree.cpp
+            exit 1
+          fi
           echo "All patches applied"
 
       - name: Generate Xcode project
