@@ -610,11 +610,11 @@ jobs:
           # 6. Override octree.cpp
           sed -i '' 's/a\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/a.jacobiSvd(Options)/g' intern/dualcon/intern/octree.cpp
 
-          # 7. Override track_region.cc - exact line replacement to remove extra parentheses
+          # 7. Fix track_region.cc - remove extra parentheses
           echo "Fixing track_region.cc..."
-          sed -i '' 's/^[[:space:]]*Vec4 a = Q1\.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)()[[:space:]]*\.solve(Q2);/    Vec4 a = Q1.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(Q2);/g' intern/libmv/libmv/tracking/track_region.cc
+          sed -i '' 's/jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)()\.solve/jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve/g' intern/libmv/libmv/tracking/track_region.cc
 
-          # 8. Verify no jacobiSvd< remains in problematic files
+          # 8. Verify fixes
           echo "Verifying euclidean_resection.cc..."
           if grep -q "jacobiSvd<" intern/libmv/libmv/multiview/euclidean_resection.cc; then
             echo "ERROR: euclidean_resection.cc still contains jacobiSvd<:"
@@ -628,6 +628,11 @@ jobs:
           if grep -q "jacobiSvd<" intern/libmv/libmv/tracking/track_region.cc; then
             echo "ERROR: track_region.cc still contains jacobiSvd<:"
             grep -n "jacobiSvd<" intern/libmv/libmv/tracking/track_region.cc
+            exit 1
+          fi
+          if grep -q "jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)()" intern/libmv/libmv/tracking/track_region.cc; then
+            echo "ERROR: track_region.cc still has extra parentheses:"
+            grep -n "jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)()" intern/libmv/libmv/tracking/track_region.cc
             exit 1
           else
             echo "track_region.cc cleaned"
