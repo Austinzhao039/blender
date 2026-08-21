@@ -598,35 +598,28 @@ jobs:
           EOF
           { cat /tmp/libmv_patch.txt; cat intern/libmv/CMakeLists.txt; } > intern/libmv/CMakeLists.txt.tmp && mv intern/libmv/CMakeLists.txt.tmp intern/libmv/CMakeLists.txt
 
-          # 4. Fix euclidean_resection.cc (remove extra parentheses)
-          echo "Fixing euclidean_resection.cc..."
-          sed -i '' 's/jacobiSvd(Eigen::ComputeFullU)()/jacobiSvd(Eigen::ComputeFullU)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
-          sed -i '' 's/jacobiSvd(Eigen::ComputeFullV)()/jacobiSvd(Eigen::ComputeFullV)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
+          # 4. GLOBAL FIX: Replace all jacobiSvd<...>() and jacobiSvd<...> with jacobiSvd(...) and remove extra parentheses
+          echo "Fixing all jacobiSvd template usages in intern/libmv..."
+          find intern/libmv -type f \( -name "*.cc" -o -name "*.cpp" \) -exec perl -pi -e 's/jacobiSvd<([^>]+)>\(\)/jacobiSvd($1)/g' {} \;
+          find intern/libmv -type f \( -name "*.cc" -o -name "*.cpp" \) -exec perl -pi -e 's/jacobiSvd<([^>]+)>/jacobiSvd($1)/g' {} \;
+          find intern/libmv -type f \( -name "*.cc" -o -name "*.cpp" \) -exec perl -pi -e 's/jacobiSvd\(([^)]*)\)\(\)/jacobiSvd($1)/g' {} \;
 
-          # 5. Fix track_region.cc (replace template syntax with function call)
-          echo "Fixing track_region.cc..."
-          # Use perl to replace Q1.jacobiSvd<...>() with Q1.jacobiSvd(...)
-          perl -pi -e 's/Q1\.jacobiSvd<([^>]+)>\(\)\.solve/Q1.jacobiSvd($1).solve/g' intern/libmv/libmv/tracking/track_region.cc
-          # Also handle cases without leading Q1.
-          perl -pi -e 's/jacobiSvd<([^>]+)>\(\)\.solve/jacobiSvd($1).solve/g' intern/libmv/libmv/tracking/track_region.cc
-
-          # 6. Revert octree.cpp to original (it was never broken)
+          # 5. Revert octree.cpp to original (it was never broken)
           echo "Reverting octree.cpp to original..."
           git checkout intern/dualcon/intern/octree.cpp
 
-          # 7. Verify fixes
+          # 6. Verify key files are fixed
           echo "Verifying euclidean_resection.cc..."
+          if grep -q "jacobiSvd<" intern/libmv/libmv/multiview/euclidean_resection.cc; then
+            echo "ERROR: euclidean_resection.cc still has template syntax!"
+            grep -n "jacobiSvd<" intern/libmv/libmv/multiview/euclidean_resection.cc
+            exit 1
+          fi
           if grep -q "jacobiSvd(Eigen::ComputeFullU)()" intern/libmv/libmv/multiview/euclidean_resection.cc; then
             echo "ERROR: euclidean_resection.cc still has extra parentheses!"
             grep -n "jacobiSvd(Eigen::ComputeFullU)()" intern/libmv/libmv/multiview/euclidean_resection.cc
             exit 1
           fi
-          if grep -q "jacobiSvd(Eigen::ComputeFullV)()" intern/libmv/libmv/multiview/euclidean_resection.cc; then
-            echo "ERROR: euclidean_resection.cc still has extra parentheses!"
-            grep -n "jacobiSvd(Eigen::ComputeFullV)()" intern/libmv/libmv/multiview/euclidean_resection.cc
-            exit 1
-          fi
-          echo "euclidean_resection.cc cleaned"
 
           echo "Verifying track_region.cc..."
           if grep -q "jacobiSvd<" intern/libmv/libmv/tracking/track_region.cc; then
@@ -639,7 +632,6 @@ jobs:
             grep -n "jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)()" intern/libmv/libmv/tracking/track_region.cc
             exit 1
           fi
-          echo "track_region.cc cleaned"
 
           echo "All patches applied"
 
