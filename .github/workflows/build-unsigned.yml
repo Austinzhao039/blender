@@ -600,21 +600,21 @@ jobs:
 
           # 4. Fix euclidean_resection.cc - all 3 calls
           echo "Fixing euclidean_resection.cc..."
-          # Replace N.jacobiSvd<Eigen::ComputeFullU>
           sed -i '' 's/N\.jacobiSvd<Eigen::ComputeFullU>/N.jacobiSvd(Eigen::ComputeFullU)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
-          # Replace M.jacobiSvd<Eigen::ComputeFullV>
           sed -i '' 's/M\.jacobiSvd<Eigen::ComputeFullV>/M.jacobiSvd(Eigen::ComputeFullV)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
-          # Replace K.jacobiSvd<Eigen::ComputeFullV>
           sed -i '' 's/K\.jacobiSvd<Eigen::ComputeFullV>/K.jacobiSvd(Eigen::ComputeFullV)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
 
-          # Also fix any generic jacobiSvd<...> in other files (global fallback)
+          # 5. Fix any generic jacobiSvd<...> in other files (global fallback)
           find intern -type f \( -name "*.cc" -o -name "*.cpp" \) -exec sed -i '' 's/\.jacobiSvd<[^>]*>/\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' {} \;
 
-          # Override octree.cpp and track_region.cc again
+          # 6. Override octree.cpp
           sed -i '' 's/a\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/a.jacobiSvd(Options)/g' intern/dualcon/intern/octree.cpp
-          sed -i '' 's/Q1\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/Q1.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)/g' intern/libmv/libmv/tracking/track_region.cc
 
-          # Verify no jacobiSvd< remains in the problematic file
+          # 7. Override track_region.cc - exact line replacement to remove extra parentheses
+          echo "Fixing track_region.cc..."
+          sed -i '' 's/^[[:space:]]*Vec4 a = Q1\.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)()[[:space:]]*\.solve(Q2);/    Vec4 a = Q1.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(Q2);/g' intern/libmv/libmv/tracking/track_region.cc
+
+          # 8. Verify no jacobiSvd< remains in problematic files
           echo "Verifying euclidean_resection.cc..."
           if grep -q "jacobiSvd<" intern/libmv/libmv/multiview/euclidean_resection.cc; then
             echo "ERROR: euclidean_resection.cc still contains jacobiSvd<:"
@@ -622,6 +622,15 @@ jobs:
             exit 1
           else
             echo "euclidean_resection.cc cleaned"
+          fi
+
+          echo "Verifying track_region.cc..."
+          if grep -q "jacobiSvd<" intern/libmv/libmv/tracking/track_region.cc; then
+            echo "ERROR: track_region.cc still contains jacobiSvd<:"
+            grep -n "jacobiSvd<" intern/libmv/libmv/tracking/track_region.cc
+            exit 1
+          else
+            echo "track_region.cc cleaned"
           fi
 
           echo "All patches applied"
@@ -703,13 +712,11 @@ jobs:
             ARCHS=arm64 \
             HOME="$HOME"
 
-      - name: Build Blender.app for iOS (with full log capture)
-        id: build_app
+      - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
         run: |
           cd blender/build_ios
           export HOME="/Users/runner"
-          echo "Starting xcodebuild for Blender.app..."
           xcodebuild \
             -project Blender.xcodeproj \
             -target install \
@@ -722,16 +729,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
-            HOME="$HOME" 2>&1 | tee build_ios.log
-          exit ${PIPESTATUS[0]}
-
-      - name: Upload iOS build log (always)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: blender-ios-build-log
-          path: blender/build_ios/build_ios.log
-          retention-days: 7
+            HOME="$HOME"
 
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
