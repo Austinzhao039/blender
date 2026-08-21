@@ -611,8 +611,7 @@ jobs:
           sed -i '' 's/jacobiSvd(Eigen::ComputeFullU)()/jacobiSvd(Eigen::ComputeFullU)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
           sed -i '' 's/jacobiSvd(Eigen::ComputeFullV)()/jacobiSvd(Eigen::ComputeFullV)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
 
-          # 6. Override octree.cpp
-          sed -i '' 's/a\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/a.jacobiSvd(Options)/g' intern/dualcon/intern/octree.cpp
+          # 6. (REMOVED) Do NOT modify octree.cpp - it uses correct syntax and would cause type mismatch if changed
 
           # 7. Verify fixes
           echo "Verifying euclidean_resection.cc..."
