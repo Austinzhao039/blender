@@ -604,12 +604,13 @@ jobs:
           find intern/libmv -type f \( -name "*.cc" -o -name "*.cpp" \) -exec perl -pi -e 's/jacobiSvd<([^>]+)>/jacobiSvd($1)/g' {} \;
           find intern/libmv -type f \( -name "*.cc" -o -name "*.cpp" \) -exec perl -pi -e 's/jacobiSvd\(([^)]*)\)\(\)/jacobiSvd($1)/g' {} \;
 
-          # 5. Fix octree.cpp: revert to original, then replace and remove extra parentheses
+          # 5. Fix octree.cpp: revert to original, then correct the declaration and call
           echo "Fixing octree.cpp explicitly..."
           git checkout intern/dualcon/intern/octree.cpp
-          # Replace template call with correct function call (without trailing parentheses)
+          # Remove the wrong template argument 'Options' from the declaration
+          sed -i '' 's/Eigen::JacobiSVD<Eigen::Matrix3f, Options>/Eigen::JacobiSVD<Eigen::Matrix3f>/g' intern/dualcon/intern/octree.cpp
+          # Ensure the call has no template arguments and no extra parentheses
           sed -i '' 's/a\.jacobiSvd<[^>]*>\(\)/a.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' intern/dualcon/intern/octree.cpp
-          # In case there are still extra parentheses after the replacement, remove them
           sed -i '' 's/a\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)()/a.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' intern/dualcon/intern/octree.cpp
 
           # 6. Verify key files are fixed
@@ -638,6 +639,11 @@ jobs:
           fi
 
           echo "Verifying octree.cpp..."
+          if grep -q "Eigen::JacobiSVD<Eigen::Matrix3f, Options>" intern/dualcon/intern/octree.cpp; then
+            echo "ERROR: octree.cpp still has wrong template argument!"
+            grep -n "Eigen::JacobiSVD<Eigen::Matrix3f, Options>" intern/dualcon/intern/octree.cpp
+            exit 1
+          fi
           if grep -q "a\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)()" intern/dualcon/intern/octree.cpp; then
             echo "ERROR: octree.cpp still has extra parentheses!"
             grep -n "a\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)()" intern/dualcon/intern/octree.cpp
