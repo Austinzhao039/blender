@@ -689,6 +689,7 @@ jobs:
             -DEigen3_DIR="$Eigen3_DIR" \
             -DCeres_DIR="$CERES_DIR" \
             -DBoost_DIR="$Boost_DIR" \
+            -DPYTHON_EXECUTABLE=/usr/bin/python3 \
             2>&1 | tee cmake_output.txt
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo "ERROR: CMake configuration failed!"
