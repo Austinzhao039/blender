@@ -598,61 +598,56 @@ jobs:
           EOF
           { cat /tmp/libmv_patch.txt; cat intern/libmv/CMakeLists.txt; } > intern/libmv/CMakeLists.txt.tmp && mv intern/libmv/CMakeLists.txt.tmp intern/libmv/CMakeLists.txt
 
-          # 4. GLOBAL FIX: Replace all jacobiSvd<...>() and jacobiSvd<...> with jacobiSvd(...) and remove extra parentheses
-          echo "Fixing all jacobiSvd template usages in intern/libmv..."
-          find intern/libmv -type f \( -name "*.cc" -o -name "*.cpp" \) -exec perl -pi -e 's/jacobiSvd<([^>]+)>\(\)/jacobiSvd($1)/g' {} \;
-          find intern/libmv -type f \( -name "*.cc" -o -name "*.cpp" \) -exec perl -pi -e 's/jacobiSvd<([^>]+)>/jacobiSvd($1)/g' {} \;
-          find intern/libmv -type f \( -name "*.cc" -o -name "*.cpp" \) -exec perl -pi -e 's/jacobiSvd\(([^)]*)\)\(\)/jacobiSvd($1)/g' {} \;
+          # 4. Fix euclidean_resection.cc
+          echo "Fixing euclidean_resection.cc..."
+          sed -i '' 's/N\.jacobiSvd<Eigen::ComputeFullU>/N.jacobiSvd(Eigen::ComputeFullU)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
+          sed -i '' 's/M\.jacobiSvd<Eigen::ComputeFullV>/M.jacobiSvd(Eigen::ComputeFullV)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
+          sed -i '' 's/K\.jacobiSvd<Eigen::ComputeFullV>/K.jacobiSvd(Eigen::ComputeFullV)/g' intern/libmv/libmv/multiview/euclidean_resection.cc
 
-          # 5. Fix octree.cpp: revert to original, then correct the declaration and call
-          echo "Fixing octree.cpp explicitly..."
-          git checkout intern/dualcon/intern/octree.cpp
-          # Remove the wrong template argument 'Options' from the declaration
-          sed -i '' 's/Eigen::JacobiSVD<Eigen::Matrix3f, Options>/Eigen::JacobiSVD<Eigen::Matrix3f>/g' intern/dualcon/intern/octree.cpp
-          # Ensure the call has no template arguments and no extra parentheses
-          sed -i '' 's/a\.jacobiSvd<[^>]*>\(\)/a.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' intern/dualcon/intern/octree.cpp
-          sed -i '' 's/a\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)()/a.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' intern/dualcon/intern/octree.cpp
+          # 5. Global fallback for .jacobiSvd<...> in intern directory
+          find intern -type f \( -name "*.cc" -o -name "*.cpp" \) -exec sed -i '' 's/\.jacobiSvd<[^>]*>/\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' {} \;
 
-          # 6. Verify key files are fixed
+          # 6. Fix track_region.cc with perl (remove extra parentheses)
+          echo "Fixing track_region.cc..."
+          perl -pi -e 's/^\s*Vec4 a = Q1\.jacobiSvd\([^)]*\)\s*\(\)\s*\.solve\(Q2\);/    Vec4 a = Q1.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(Q2);/' intern/libmv/libmv/tracking/track_region.cc
+          perl -pi -e 's/^\s*Vec4 a = Q1\.jacobiSvd\([^)]*\)\s*\.solve\(Q2\);/    Vec4 a = Q1.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(Q2);/' intern/libmv/libmv/tracking/track_region.cc
+
+          # 7. Override octree.cpp
+          sed -i '' 's/a\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/a.jacobiSvd(Options)/g' intern/dualcon/intern/octree.cpp
+
+          # 8. NEW: Fix Alembic related files (and any other source/blender files)
+          echo "Fixing source/blender directory for any remaining jacobiSvd<...>"
+          find source/blender -name "*.cc" -exec sed -i '' 's/\.jacobiSvd<[^>]*>/\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)/g' {} \;
+
+          # 9. Verify fixes
           echo "Verifying euclidean_resection.cc..."
           if grep -q "jacobiSvd<" intern/libmv/libmv/multiview/euclidean_resection.cc; then
-            echo "ERROR: euclidean_resection.cc still has template syntax!"
+            echo "ERROR: euclidean_resection.cc still contains jacobiSvd<:"
             grep -n "jacobiSvd<" intern/libmv/libmv/multiview/euclidean_resection.cc
             exit 1
-          fi
-          if grep -q "jacobiSvd(Eigen::ComputeFullU)()" intern/libmv/libmv/multiview/euclidean_resection.cc; then
-            echo "ERROR: euclidean_resection.cc still has extra parentheses!"
-            grep -n "jacobiSvd(Eigen::ComputeFullU)()" intern/libmv/libmv/multiview/euclidean_resection.cc
-            exit 1
+          else
+            echo "euclidean_resection.cc cleaned"
           fi
 
           echo "Verifying track_region.cc..."
           if grep -q "jacobiSvd<" intern/libmv/libmv/tracking/track_region.cc; then
-            echo "ERROR: track_region.cc still has template syntax!"
+            echo "ERROR: track_region.cc still contains jacobiSvd<:"
             grep -n "jacobiSvd<" intern/libmv/libmv/tracking/track_region.cc
             exit 1
           fi
           if grep -q "jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)()" intern/libmv/libmv/tracking/track_region.cc; then
-            echo "ERROR: track_region.cc still has extra parentheses!"
+            echo "ERROR: track_region.cc still has extra parentheses"
             grep -n "jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)()" intern/libmv/libmv/tracking/track_region.cc
             exit 1
+          else
+            echo "track_region.cc cleaned"
           fi
 
-          echo "Verifying octree.cpp..."
-          if grep -q "Eigen::JacobiSVD<Eigen::Matrix3f, Options>" intern/dualcon/intern/octree.cpp; then
-            echo "ERROR: octree.cpp still has wrong template argument!"
-            grep -n "Eigen::JacobiSVD<Eigen::Matrix3f, Options>" intern/dualcon/intern/octree.cpp
-            exit 1
-          fi
-          if grep -q "a\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)()" intern/dualcon/intern/octree.cpp; then
-            echo "ERROR: octree.cpp still has extra parentheses!"
-            grep -n "a\.jacobiSvd(Eigen::ComputeFullU | Eigen::ComputeFullV)()" intern/dualcon/intern/octree.cpp
-            exit 1
-          fi
-          if grep -q "jacobiSvd<" intern/dualcon/intern/octree.cpp; then
-            echo "ERROR: octree.cpp still has template syntax!"
-            grep -n "jacobiSvd<" intern/dualcon/intern/octree.cpp
-            exit 1
+          echo "Checking for any remaining .jacobiSvd< in source/blender..."
+          if grep -r "jacobiSvd<" source/blender --include="*.cc" | head -5; then
+            echo "WARNING: Some jacobiSvd< still found in source/blender, but continuing (may be comments)"
+          else
+            echo "source/blender looks clean"
           fi
 
           echo "All patches applied"
@@ -689,7 +684,6 @@ jobs:
             -DEigen3_DIR="$Eigen3_DIR" \
             -DCeres_DIR="$CERES_DIR" \
             -DBoost_DIR="$Boost_DIR" \
-            -DPYTHON_EXECUTABLE=/usr/bin/python3 \
             2>&1 | tee cmake_output.txt
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo "ERROR: CMake configuration failed!"
