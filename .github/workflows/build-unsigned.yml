@@ -240,14 +240,16 @@ jobs:
           n=$(ls "$FMT_DIR/include/fmt" | wc -l | tr -d ' ')
           echo "fetched $n fmt headers"
           if [ "$n" -lt 14 ]; then echo "::error::incomplete fmt headers"; exit 1; fi
-          # 防止半截文件（curl -f 只挡 HTTP 错误，挡不住传输截断）
-          small=$(find "$FMT_DIR/include/fmt" -name "*.h" -size -2k | head -5)
-          if [ -n "$small" ]; then
-            echo "::error::suspiciously small fmt headers:"
-            echo "$small"
-            ls -l "$FMT_DIR/include/fmt"
-            exit 1
-          fi
+          # 防止半截文件（curl -f 只挡 HTTP 错误，挡不住传输截断）。
+          # 只查本来就该很大的两个头；core.h 在 fmt 12 里只是 187 字节的转发头。
+          for f in base.h format.h; do
+            sz=$(wc -c < "$FMT_DIR/include/fmt/$f" | tr -d ' ')
+            echo "  $f = $sz bytes"
+            if [ "$sz" -lt 50000 ]; then
+              echo "::error::$f looks truncated ($sz bytes)"
+              exit 1
+            fi
+          done
           V=$(grep -m1 "define FMT_VERSION" "$FMT_DIR/include/fmt/base.h" | grep -oE "[0-9]+" || true)
           echo "FMT_VERSION=$V"
           # base.h 必须真的定义 FMT_PRAGMA_CLANG / FMT_EXPORT，否则说明文件是坏的
