@@ -262,12 +262,35 @@ jobs:
             fi
           done
 
-          # 关键：必须把 homebrew 的 fmt 头挪开。
-          # /opt/homebrew/include 会被 zstd 的 INTERFACE_INCLUDE_DIRECTORIES 带进
-          # 编译命令，而 runner 上预装/brew 装的是 fmt 12.2。两个版本的 fmt 混编时，
-          # base.h 的 include guard FMT_BASE_H_ 会先被 12.2 占住，我们 12.1 的
-          # base.h 整个被跳过，于是 ranges.h 里的 FMT_PRAGMA_CLANG / FMT_EXPORT
-          # 全都"未定义"，报一堆 unknown type name。
+          # 关键：编译单元里不能出现第二份 fmt。
+          # 前面那个 "把所有 ${LIBDIR}/*/include 加进搜索路径" 的补丁可能把某个
+          # 自带 fmt 的依赖也带进来了。老版本 fmt 的 format.h 会先占住
+          # FMT_FORMAT_H_ 这个 include guard，于是我们的 12.1 format.h 被整段跳过，
+          # base.h 也就不会被包含 —— 表现就是 ranges.h 里 FMT_PRAGMA_CLANG /
+          # FMT_EXPORT 全部"未定义"，正是 run#253 的现象。
+          echo "=== scan for competing fmt copies ==="
+          OTHERS=$(find lib/ios_arm64 -type d -name fmt \
+                     -not -path "lib/ios_arm64/fmt" \
+                     -not -path "lib/ios_arm64/fmt/*" 2>/dev/null || true)
+          if [ -n "$OTHERS" ]; then
+            echo "found competing fmt dirs:"
+            echo "$OTHERS"
+            for d in $OTHERS; do
+              mv "$d" "${d}.disabled" && echo "  disabled $d"
+            done
+          else
+            echo "no competing fmt dir inside lib/ios_arm64"
+          fi
+          # 再全局确认：lib 里只应该剩下我们自己那份 format.h
+          DUP=$(find lib/ios_arm64 -name "format.h" -path "*/fmt/*" \
+                  -not -path "lib/ios_arm64/fmt/include/fmt/*" 2>/dev/null || true)
+          if [ -n "$DUP" ]; then
+            echo "::warning::still other fmt headers present:"
+            echo "$DUP"
+          fi
+
+          # homebrew 里也不能有（/opt/homebrew/include 会被 zstd 的
+          # INTERFACE_INCLUDE_DIRECTORIES 带进编译命令）
           for p in /opt/homebrew/include/fmt /opt/homebrew/Cellar/fmt; do
             if [ -e "$p" ]; then
               mv "$p" "${p}.disabled" 2>/dev/null \
@@ -793,18 +816,22 @@ jobs:
           # 要编译到 source/blender/imbuf/intern/oiio 这种深层才会报 file not found。
           # 统一把各依赖的 include 目录加进头搜索路径（AFTER，不抢系统头）。
           file(GLOB _ios_dep_inc_dirs "${LIBDIR}/*/include")
+          # 这些库头多、与 Blender/系统头容易撞，而且它们的使用方都走各自的
+          # find_package INTERFACE，不需要全局注入（llvm 会带进来一堆冲突定义，
+          # osl/materialx/usd 里也可能夹带自己的第三方头）。
+          set(_ios_skip_deps python zlib llvm osl materialx usd sse2neon shaderc vulkan udev)
           foreach(_d ${_ios_dep_inc_dirs})
             get_filename_component(_dep "${_d}" DIRECTORY)
             get_filename_component(_depname "${_dep}" NAME)
-            # python 头由 PYTHON_INCLUDE_DIR 精确指定；zlib 有 zconf.h 冲突风险
-            if(_depname STREQUAL "python" OR _depname STREQUAL "zlib")
+            list(FIND _ios_skip_deps "${_depname}" _ios_skip_idx)
+            if(_ios_skip_idx GREATER -1)
               continue()
             endif()
             if(IS_DIRECTORY "${_d}")
               include_directories(AFTER "${_d}")
-              message(STATUS "iOS patch: include ${_d}")
             endif()
           endforeach()
+          message(STATUS "iOS patch: ${LIBDIR}/*/include injected (skipping python/zlib/llvm/osl/materialx/usd)")
 
           # Alembic 的头按 Imath 2.x 写（#include <half.h>），而 imath 是 3.x 布局；
           # 且 half.h 内部用相对 include（"ImathExport.h"），所以 Imath/ 目录本身也要在路径里。
