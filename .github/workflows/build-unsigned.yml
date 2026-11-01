@@ -958,6 +958,62 @@ jobs:
           fi
           echo "jacobiSvd normalized and verified"
 
+          # 6. iOS 依赖的 imported target 缺 IMPORTED_LOCATION。
+          #    CMake 的 CMP0111 旧行为会把 "<target>-NOTFOUND" 当成文件路径写进
+          #    链接命令，clang++ 于是报:
+          #      no such file or directory: 'OpenImageIO::OpenImageIO-NOTFOUND'
+          #    这些 target 由 lib/ios_arm64 各包的 xxxConfig.cmake 创建，但该 iOS
+          #    包只带 .dylib，config 没给出实现文件位置。
+          #    IMPORTED_LOCATION 在 generate 阶段才解析，所以追加到顶层
+          #    CMakeLists.txt 末尾同样生效（不必改各包的 config）。
+          cat >> CMakeLists.txt <<'IOSEOF'
+
+          # --- iOS: 给缺 IMPORTED_LOCATION 的依赖 target 补真实 dylib ---
+          if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+            file(GLOB _ios_dylibs "${LIBDIR}/*/lib/*.dylib")
+            list(LENGTH _ios_dylibs _ios_ndylib)
+            message(STATUS "iOS patch: ${_ios_ndylib} dylibs under ${LIBDIR}/*/lib")
+            foreach(_t
+                OpenImageIO::OpenImageIO
+                OpenImageIO::OpenImageIO_Util
+                OpenEXR::OpenEXR
+                OpenEXR::OpenEXRCore
+                OpenEXR::Iex
+                OpenEXR::IlmThread
+                OpenEXR::Imath
+                Imath::Imath
+                OpenColorIO::OpenColorIO
+                TBB::tbb)
+              if(TARGET ${_t})
+                get_target_property(_cur ${_t} IMPORTED_LOCATION)
+                if(NOT _cur OR _cur MATCHES "NOTFOUND$" OR NOT EXISTS "${_cur}")
+                  string(REGEX REPLACE "^.*::" "" _nm "${_t}")
+                  set(_hit "")
+                  foreach(_d ${_ios_dylibs})
+                    get_filename_component(_stem "${_d}" NAME_WE)
+                    if(_stem STREQUAL "lib${_nm}")
+                      set(_hit "${_d}")
+                      break()
+                    endif()
+                  endforeach()
+                  if(_hit)
+                    set_target_properties(${_t} PROPERTIES
+                      IMPORTED_LOCATION "${_hit}"
+                      IMPORTED_LOCATION_DEBUG "${_hit}"
+                      IMPORTED_LOCATION_RELEASE "${_hit}"
+                      IMPORTED_LOCATION_MINSIZEREL "${_hit}"
+                      IMPORTED_LOCATION_RELWITHDEBINFO "${_hit}"
+                      IMPORTED_CONFIGURATIONS "DEBUG;RELEASE;MINSIZEREL;RELWITHDEBINFO")
+                    message(STATUS "iOS patch: ${_t} -> ${_hit}")
+                  else()
+                    message(WARNING "iOS patch: ${_t} has no IMPORTED_LOCATION and no matching dylib")
+                  endif()
+                endif()
+              endif()
+            endforeach()
+          endif()
+          IOSEOF
+
           echo "All patches applied"
 
       - name: Generate Xcode project
@@ -1113,6 +1169,104 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
             HOME="$HOME"
+
+      - name: Embed iOS dylibs into app bundle
+        if: steps.cmake_config.outcome == 'success'
+        run: |
+          cd blender
+          APP=$(find build_ios -name "Blender.app" -type d | head -1)
+          if [ -z "$APP" ]; then
+            echo "ERROR: Blender.app missing"
+            exit 1
+          fi
+          echo "app bundle: $APP"
+          python3 - "$APP" "$PWD/lib/ios_arm64" <<'PYEOF'
+          import os, struct, shutil, subprocess, sys
+
+          app, libroot = sys.argv[1], sys.argv[2]
+          binary = os.path.join(app, "Blender")
+          fwdir = os.path.join(app, "Frameworks")
+          os.makedirs(fwdir, exist_ok=True)
+
+          # LC_LOAD_DYLIB / LC_LAZY_LOAD_DYLIB / LC_LOAD_WEAK_DYLIB /
+          # LC_REEXPORT_DYLIB / LC_LOAD_UPWARD_DYLIB
+          DYLIB_CMDS = {0xC, 0x20, 0x80000018, 0x8000001F, 0x80000023}
+
+          def load_deps(path):
+              with open(path, "rb") as fh:
+                  b = fh.read()
+              if len(b) < 32 or struct.unpack("<I", b[:4])[0] != 0xFEEDFACF:
+                  return []
+              ncmds = struct.unpack("<I", b[16:20])[0]
+              off, out = 32, []
+              for _ in range(ncmds):
+                  if off + 8 > len(b):
+                      break
+                  cmd, size = struct.unpack("<II", b[off:off + 8])
+                  if size == 0:
+                      break
+                  if cmd in DYLIB_CMDS:
+                      nmoff = struct.unpack("<I", b[off + 8:off + 12])[0]
+                      name = b[off + nmoff:off + size].split(b"\x00")[0]
+                      out.append(name.decode("utf-8", "replace"))
+                  off += size
+              return out
+
+          # 库索引：lib/ios_arm64/*/lib/*.dylib（按文件名索引，先到先得）
+          index = {}
+          for root, _dirs, files in os.walk(libroot):
+              for f in files:
+                  if f.endswith(".dylib"):
+                      index.setdefault(f, os.path.join(root, f))
+
+          def resolve(base):
+              if base in index:
+                  return index[base]
+              # 带版本号的库（libz.1.dylib -> libz.1.3.1.dylib）
+              for k in index:
+                  if k.startswith(base + "."):
+                      return index[k]
+              return None
+
+          copied, rewritten = [], []
+          queue = [binary]
+          while queue:
+              cur = queue.pop(0)
+              for dep in load_deps(cur):
+                  if dep.startswith("/usr/lib") or dep.startswith("/System"):
+                      continue
+                  base = os.path.basename(dep)
+                  src = resolve(base)
+                  if src is None:
+                      print("  MISSING dylib:", dep)
+                      continue
+                  dst = os.path.join(fwdir, base)
+                  if dep.startswith("/"):
+                      # 绝对路径依赖改成 @rpath，否则 iOS 上 dyld 一定找不到
+                      rewritten.append((cur, dep, "@rpath/" + base))
+                  if not os.path.exists(dst):
+                      shutil.copy2(src, dst)
+                      copied.append(base)
+                      queue.append(dst)
+
+          for parent, old, new in rewritten:
+              subprocess.run(["install_name_tool", "-change", old, new, parent], check=False)
+          for base in copied:
+              dst = os.path.join(fwdir, base)
+              subprocess.run(["install_name_tool", "-id", "@rpath/" + base, dst], check=False)
+          for target in [binary] + [os.path.join(fwdir, b) for b in copied]:
+              subprocess.run(
+                  ["install_name_tool", "-add_rpath", "@executable_path/Frameworks", target],
+                  check=False, stderr=subprocess.DEVNULL)
+
+          print("copied %d dylibs into Frameworks/:" % len(copied))
+          for base in copied:
+              print("   ", base, os.path.getsize(os.path.join(fwdir, base)))
+          print("rewritten absolute deps: %d" % len(rewritten))
+          PYEOF
+          echo "--- otool -L Blender (tail) ---"
+          otool -L "$APP/Blender" | tail -20 || true
+          du -sh "$APP"
 
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
