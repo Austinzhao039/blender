@@ -854,6 +854,16 @@ jobs:
           endforeach()
           message(STATUS "iOS patch: ${LIBDIR}/*/include injected (skipping python/zlib/llvm/osl/materialx/usd)")
 
+          # OpenEXR 的 openexr_config.h 里写的是 #include <IlmThreadConfig.h>，
+          # 而 IlmThreadConfig.h 在 openexr/include/OpenEXR/ 下（不是 include 根），
+          # 所以 OpenEXR 子目录本身也要在路径里。
+          foreach(_sub openexr/include/OpenEXR)
+            if(IS_DIRECTORY "${LIBDIR}/${_sub}")
+              include_directories(AFTER "${LIBDIR}/${_sub}")
+              message(STATUS "iOS patch: extra include ${LIBDIR}/${_sub}")
+            endif()
+          endforeach()
+
           # Alembic 的头按 Imath 2.x 写（#include <half.h>），而 imath 是 3.x 布局；
           # 且 half.h 内部用相对 include（"ImathExport.h"），所以 Imath/ 目录本身也要在路径里。
           if(EXISTS "${LIBDIR}/imath/include/Imath/half.h")
