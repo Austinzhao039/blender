@@ -74,19 +74,35 @@ jobs:
           fi
           echo "startup.blend ready"
 
-      - name: Download macOS Python from Release (mainly)
+      - name: Setup host Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Provide host (macOS) Python for code generation
         run: |
           cd blender
           mkdir -p lib/macos_arm64/python/bin
-          curl -L -o macos-python.zip https://github.com/Austinzhao039/blender/releases/download/mainly/macos-python.zip
-          unzip -o macos-python.zip
-          rm macos-python.zip
-          chmod +x lib/macos_arm64/python/bin/python3.13
-          if [ ! -f "lib/macos_arm64/python/bin/python3.13" ]; then
-            echo "ERROR: macOS Python still missing!"
-            exit 1
+          curl -fsSL -o macos-python.zip \
+            https://github.com/Austinzhao039/blender/releases/download/mainly/macos-python.zip || true
+          unzip -oq macos-python.zip || true
+          rm -f macos-python.zip
+          HP=lib/macos_arm64/python/bin/python3.13
+          [ -f "$HP" ] || : > "$HP"
+          chmod +x "$HP" 2>/dev/null || true
+
+          # 这个预编译 python 在 xcodebuild 的 script phase 里可能 exec 不起来
+          # （报 "cannot execute binary file"）。先自检，不行就换成 runner 上真 python 的包装脚本。
+          if ! "$HP" -V > /tmp/hp.out 2>&1; then
+            echo "WARN: bundled host python unusable: $(cat /tmp/hp.out)"
+            REAL=$(command -v python3.13 || command -v python3)
+            echo "falling back to $REAL ($("$REAL" -V 2>&1))"
+            rm -f "$HP"
+            printf '#!/bin/sh\nexec "%s" "$@"\n' "$REAL" > "$HP"
+            chmod +x "$HP"
           fi
-          echo "macOS Python ready"
+          echo "host python: $($HP -V 2>&1)"
+          file "$HP" || true
 
       - name: Cache iOS libraries
         id: cache-ios
@@ -762,7 +778,20 @@ jobs:
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
         run: |
-          cd blender/build_ios
+          cd blender
+          # 构建前再确认一次宿主 python 可用：xcodebuild 的 script phase 会用它的绝对路径
+          HP=lib/macos_arm64/python/bin/python3.13
+          ls -l "$HP" || true
+          file "$HP" || true
+          if ! "$HP" -V; then
+            echo "WARN: host python broken at build time, re-wrapping"
+            REAL=$(command -v python3.13 || command -v python3)
+            rm -f "$HP"
+            printf '#!/bin/sh\nexec "%s" "$@"\n' "$REAL" > "$HP"
+            chmod +x "$HP"
+            "$HP" -V
+          fi
+          cd build_ios
           export HOME="/Users/runner"
           xcodebuild \
             -project Blender.xcodeproj \
