@@ -704,6 +704,30 @@ jobs:
             echo "ERROR: XCFramework not found!"
             exit 1
           fi
+          # 纯 Python 标准库在 xcframework/lib/python3.13（跨平台共享），
+          # 架构相关的扩展模块在 ios-arm64/lib-arm64/python3.13/lib-dynload。
+          # Blender 的 install 规则会把这个目录整份拷进 App，所以先拼好；
+          # 否则 xcodebuild 会报
+          #   file INSTALL cannot find ".../lib/ios_arm64/python/lib/python3.13"
+          XCF_LIB="python_temp/Python.xcframework/lib/python3.13"
+          if [ -d "$XCF_LIB" ]; then
+            rm -rf lib/ios_arm64/python/lib/python3.13
+            mkdir -p lib/ios_arm64/python/lib/python3.13
+            cp -R "$XCF_LIB/." lib/ios_arm64/python/lib/python3.13/
+            if [ -d "$XCFRAMEWORK_BASE/lib-arm64/python3.13" ]; then
+              cp -R "$XCFRAMEWORK_BASE/lib-arm64/python3.13/." lib/ios_arm64/python/lib/python3.13/
+            fi
+            if [ ! -f lib/ios_arm64/python/lib/python3.13/os.py ]; then
+              echo "ERROR: python stdlib (os.py) missing after copy"
+              exit 1
+            fi
+            echo "python stdlib installed:"
+            du -sh lib/ios_arm64/python/lib/python3.13
+            ls lib/ios_arm64/python/lib/python3.13 | head -20
+          else
+            echo "ERROR: python stdlib not found in xcframework"
+            exit 1
+          fi
           rm -rf python_temp python-ios.tar.gz
           if [ ! -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
             echo "ERROR: iOS Python dynamic library not found!"
