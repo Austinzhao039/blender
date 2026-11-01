@@ -11,20 +11,11 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          brew install git-lfs cmake fmt zstd
+          # fmt 不再依赖 homebrew 版本：12.2.0 的 pragma 宏在 iOS SDK 的 clang 下
+          # 展开失败（ranges.h:26 unknown type name 'diagnostic'）。
+          # 改用 lib-macos_arm64 配套的 12.1.0 头文件，见后面的 fmt 步骤。
+          brew install git-lfs cmake zstd
           git lfs install
-          if [ ! -f /opt/homebrew/lib/libfmt.a ]; then
-            echo "ERROR: fmt not installed correctly!"
-            exit 1
-          fi
-          echo "fmt installed at /opt/homebrew/lib/libfmt.a"
-          FMT_CMAKE_DIR=$(find /opt/homebrew -name "fmt-config.cmake" 2>/dev/null | head -1 | xargs dirname)
-          if [ -z "$FMT_CMAKE_DIR" ]; then
-            echo "ERROR: fmt CMake config not found!"
-            exit 1
-          fi
-          echo "FMT_CMAKE_DIR=$FMT_CMAKE_DIR" >> $GITHUB_ENV
-          echo "fmt CMake config at $FMT_CMAKE_DIR"
           if [ ! -f /opt/homebrew/lib/libzstd.dylib ]; then
             echo "ERROR: zstd not installed correctly!"
             exit 1
@@ -228,6 +219,49 @@ jobs:
             echo "::error::Imath headers missing - cannot satisfy Alembic"
             exit 1
           fi
+
+      # lib-ios_arm64 里没有 fmt 目录（lib-macos_arm64 有），原脚本退回用
+      # homebrew 装的 fmt 12.2.0，而它的 pragma 宏在 iOS SDK 的 clang 下展开失败：
+      #   ./fmt/ranges.h:26:18: error: unknown type name 'diagnostic'
+      #       FMT_PRAGMA_CLANG(diagnostic error "-Wreturn-stack-address")
+      # Blender 5.1.2 配套的是 fmt 12.1.0，这里装官方那份头文件。
+      # 预编译库里没有 iOS 版 libfmt.a，所以走 header-only（FMT_HEADER_ONLY）。
+      - name: Provide fmt 12.1 headers for iOS
+        run: |
+          cd blender
+          FMT_DIR="$PWD/lib/ios_arm64/fmt"
+          mkdir -p "$FMT_DIR/include/fmt" "$FMT_DIR/lib/cmake/fmt"
+          BASE="https://projects.blender.org/api/v1/repos/blender/lib-macos_arm64/raw/fmt/include/fmt"
+          for h in args.h base.h chrono.h color.h compile.h core.h \
+                   format-inl.h format.h os.h ostream.h printf.h ranges.h std.h xchar.h; do
+            curl -fsSL --retry 3 -o "$FMT_DIR/include/fmt/$h" "$BASE/$h?ref=main" \
+              || { echo "::error::failed to fetch fmt/$h"; exit 1; }
+          done
+          n=$(ls "$FMT_DIR/include/fmt" | wc -l | tr -d ' ')
+          echo "fetched $n fmt headers"
+          if [ "$n" -lt 14 ]; then echo "::error::incomplete fmt headers"; exit 1; fi
+          V=$(grep -m1 "define FMT_VERSION" "$FMT_DIR/include/fmt/base.h" | grep -oE "[0-9]+" || true)
+          echo "FMT_VERSION=$V"
+          cat > "$FMT_DIR/lib/cmake/fmt/fmt-config.cmake" <<'CFGEOF'
+          set(fmt_FOUND TRUE)
+          set(FMT_FOUND TRUE)
+          set(fmt_VERSION "12.1.0")
+          set(FMT_VERSION "12.1.0")
+          if(NOT TARGET fmt::fmt)
+            add_library(fmt::fmt INTERFACE IMPORTED)
+            set_target_properties(fmt::fmt PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include"
+              INTERFACE_COMPILE_DEFINITIONS "FMT_HEADER_ONLY=1")
+          endif()
+          if(NOT TARGET fmt::fmt-header-only)
+            add_library(fmt::fmt-header-only INTERFACE IMPORTED)
+            set_target_properties(fmt::fmt-header-only PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include"
+              INTERFACE_COMPILE_DEFINITIONS "FMT_HEADER_ONLY=1")
+          endif()
+          CFGEOF
+          echo "fmt config written:"
+          ls -l "$FMT_DIR/lib/cmake/fmt"
 
       - name: Ensure Ceres headers are present
         run: |
@@ -742,6 +776,17 @@ jobs:
           else()
             message(WARNING "iOS patch: ${LIBDIR}/imath/include/Imath/half.h not found")
           endif()
+
+          # fmt：iOS 下只能 header-only（预编译库没有 iOS 版 libfmt.a）。
+          # 用 BEFORE 顶到最前面，避免命中 /opt/homebrew/include 里的 fmt 12.2.0
+          # （那个版本的 pragma 宏在 iOS SDK 的 clang 下会展开失败）。
+          if(EXISTS "${LIBDIR}/fmt/include/fmt/format.h")
+            include_directories(BEFORE "${LIBDIR}/fmt/include")
+            add_definitions(-DFMT_HEADER_ONLY=1)
+            message(STATUS "iOS patch: fmt header-only <- ${LIBDIR}/fmt/include")
+          else()
+            message(WARNING "iOS patch: ${LIBDIR}/fmt/include/fmt/format.h not found")
+          endif()
           CMEOF
 
           # 2.6 精准兜底：凡是用 Alembic 的 target 直接带上 Imath 头路径
@@ -827,7 +872,9 @@ jobs:
             exit 1
           fi
           cd blender
-          rm -rf build_ios
+          # 注意：这里绝对不能 rm -rf build_ios。
+          # 增量构建缓存恢复的就是这个目录（含 CMakeCache 和全部 .o），
+          # 删掉等于每次从零编译。CMake 会复用已有配置做增量更新。
           cmake -G Xcode -S . -B build_ios \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
@@ -843,7 +890,7 @@ jobs:
             -DZSTD_ROOT_DIR=/opt/homebrew \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
             -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
-            -Dfmt_DIR="${FMT_CMAKE_DIR}" \
+            -Dfmt_DIR="$PWD/lib/ios_arm64/fmt/lib/cmake/fmt" \
             -DOPENIMAGEIO_ROOT_DIR="$PWD/lib/ios_arm64/openimageio" \
             -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
             -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}" \
@@ -908,6 +955,18 @@ jobs:
             echo "OK: openimageio include path present in project.pbxproj"
           else
             echo "::error::openimageio include path NOT in project.pbxproj - build would fail on <OpenImageIO/imageio.h>"
+            exit 1
+          fi
+          # fmt 必须来自我们装的 12.1.0，不能是 /opt/homebrew 的 12.2.0
+          if grep -q "lib/ios_arm64/fmt" "$PBX"; then
+            echo "OK: fmt resolves to bundled 12.1.0"
+          else
+            echo "::error::fmt does not point at lib/ios_arm64/fmt - homebrew fmt 12.2 would break the build"
+            grep -o "[^ \"\\]*fmt[^ \"\\]*" "$PBX" | sort -u | head -5
+            exit 1
+          fi
+          if grep -q "opt/homebrew/Cellar/fmt" "$PBX"; then
+            echo "::error::homebrew Cellar fmt leaked into the Xcode project"
             exit 1
           fi
 
