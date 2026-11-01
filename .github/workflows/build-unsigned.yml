@@ -268,24 +268,38 @@ jobs:
           # FMT_FORMAT_H_ 这个 include guard，于是我们的 12.1 format.h 被整段跳过，
           # base.h 也就不会被包含 —— 表现就是 ranges.h 里 FMT_PRAGMA_CLANG /
           # FMT_EXPORT 全部"未定义"，正是 run#253 的现象。
-          echo "=== scan for competing fmt copies ==="
-          OTHERS=$(find lib/ios_arm64 -type d -name fmt \
-                     -not -path "lib/ios_arm64/fmt" \
-                     -not -path "lib/ios_arm64/fmt/*" 2>/dev/null || true)
+          echo "=== scan for competing fmt copies (only lib-level include/fmt) ==="
+          # 只处理 <lib>/include/fmt 和 <lib>/fmt 这种"整库级"的 fmt 副本。
+          # 绝不能碰嵌套目录：OpenImageIO/detail/fmt 是 OIIO 自己的内部实现，
+          # 上一版用 `find -type d -name fmt` 把它当竞争库禁掉了，
+          # 结果 OIIO 的 detail/fmt.h 找不到自己的 format.h。
+          OTHERS=""
+          for d in lib/ios_arm64/*/include/fmt lib/ios_arm64/*/fmt; do
+            [ -d "$d" ] || continue
+            case "$d" in
+              lib/ios_arm64/fmt|lib/ios_arm64/fmt/*) continue ;;
+            esac
+            OTHERS="$OTHERS $d"
+          done
           if [ -n "$OTHERS" ]; then
-            echo "found competing fmt dirs:"
-            echo "$OTHERS"
+            echo "found competing fmt dirs:$OTHERS"
             for d in $OTHERS; do
               mv "$d" "${d}.disabled" && echo "  disabled $d"
             done
           else
-            echo "no competing fmt dir inside lib/ios_arm64"
+            echo "no competing lib-level fmt dir"
           fi
-          # 再全局确认：lib 里只应该剩下我们自己那份 format.h
+          # OIIO 的 fmt 必须还在
+          if [ ! -f lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt/format.h ]; then
+            echo "::error::OpenImageIO detail/fmt got damaged - OIIO will not compile"
+            exit 1
+          fi
+          # 仅报告，不做处理：OpenImageIO/detail/fmt 是 OIIO 内部实现，属正常
           DUP=$(find lib/ios_arm64 -name "format.h" -path "*/fmt/*" \
-                  -not -path "lib/ios_arm64/fmt/include/fmt/*" 2>/dev/null || true)
+                  -not -path "lib/ios_arm64/fmt/include/fmt/*" \
+                  -not -path "lib/ios_arm64/openimageio/*" 2>/dev/null || true)
           if [ -n "$DUP" ]; then
-            echo "::warning::still other fmt headers present:"
+            echo "::warning::other fmt headers still present:"
             echo "$DUP"
           fi
 
