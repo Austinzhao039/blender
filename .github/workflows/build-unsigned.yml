@@ -824,16 +824,36 @@ jobs:
           set(CERES_INCLUDE_DIRS "${IOS_LIB}/ceres/include" CACHE PATH "" FORCE)
           set(CERES_LIBRARY "${IOS_LIB}/ceres/lib/libceres.a" CACHE FILEPATH "" FORCE)
           set(CERES_LIBRARIES "${IOS_LIB}/ceres/lib/libceres.a" CACHE FILEPATH "" FORCE)
-          set(ZSTD_LIBRARY "${ZSTD_LIB_FILE}" CACHE FILEPATH "" FORCE)
-          set(ZSTD_LIBRARIES "${ZSTD_LIB_FILE}" CACHE FILEPATH "" FORCE)
-          set(ZSTD_INCLUDE_DIR "${ZSTD_INC_DIR}" CACHE PATH "" FORCE)
-          set(ZSTD_FOUND TRUE CACHE BOOL "" FORCE)
-          if(NOT TARGET ZSTD::ZSTD)
-            add_library(ZSTD::ZSTD UNKNOWN IMPORTED)
-            set_target_properties(ZSTD::ZSTD PROPERTIES
-              IMPORTED_LOCATION "${ZSTD_LIB_FILE}"
-              INTERFACE_INCLUDE_DIRECTORIES "${ZSTD_INC_DIR}"
-            )
+          # zstd：iOS 要用现场编的 iOS 静态库；但 xcodebuild 内部还有一次
+          # 嵌套的【native macOS】configure 用来产宿主工具（makesdna/msgfmt...），
+          # 它链的是 macOS 的 bf_blenlib —— 给它塞 iOS 的 .a 会报
+          #   building for 'macOS', but linking in object file built for 'iOS'
+          # 两次 configure 的差别只在 sysroot（iPhoneOS*.sdk vs MacOSX*.sdk），
+          # 所以按 sysroot 分支给库。
+          if(CMAKE_OSX_SYSROOT MATCHES "iPhoneOS|iphoneos")
+            set(ZSTD_LIBRARY "${ZSTD_LIB_FILE}" CACHE FILEPATH "" FORCE)
+            set(ZSTD_LIBRARIES "${ZSTD_LIB_FILE}" CACHE FILEPATH "" FORCE)
+            set(ZSTD_INCLUDE_DIR "${ZSTD_INC_DIR}" CACHE PATH "" FORCE)
+            set(ZSTD_FOUND TRUE CACHE BOOL "" FORCE)
+            if(NOT TARGET ZSTD::ZSTD)
+              add_library(ZSTD::ZSTD UNKNOWN IMPORTED)
+              set_target_properties(ZSTD::ZSTD PROPERTIES
+                IMPORTED_LOCATION "${ZSTD_LIB_FILE}"
+                INTERFACE_INCLUDE_DIRECTORIES "${ZSTD_INC_DIR}"
+              )
+            endif()
+          else()
+            set(ZSTD_LIBRARY "/opt/homebrew/lib/libzstd.dylib" CACHE FILEPATH "" FORCE)
+            set(ZSTD_LIBRARIES "/opt/homebrew/lib/libzstd.dylib" CACHE FILEPATH "" FORCE)
+            set(ZSTD_INCLUDE_DIR "/opt/homebrew/include" CACHE PATH "" FORCE)
+            set(ZSTD_FOUND TRUE CACHE BOOL "" FORCE)
+            if(NOT TARGET ZSTD::ZSTD)
+              add_library(ZSTD::ZSTD UNKNOWN IMPORTED)
+              set_target_properties(ZSTD::ZSTD PROPERTIES
+                IMPORTED_LOCATION "/opt/homebrew/lib/libzstd.dylib"
+                INTERFACE_INCLUDE_DIRECTORIES "/opt/homebrew/include"
+              )
+            endif()
           endif()
           # --- END PATCH ---
           EOF
