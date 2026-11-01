@@ -240,8 +240,44 @@ jobs:
           n=$(ls "$FMT_DIR/include/fmt" | wc -l | tr -d ' ')
           echo "fetched $n fmt headers"
           if [ "$n" -lt 14 ]; then echo "::error::incomplete fmt headers"; exit 1; fi
+          # 防止半截文件（curl -f 只挡 HTTP 错误，挡不住传输截断）
+          small=$(find "$FMT_DIR/include/fmt" -name "*.h" -size -2k | head -5)
+          if [ -n "$small" ]; then
+            echo "::error::suspiciously small fmt headers:"
+            echo "$small"
+            ls -l "$FMT_DIR/include/fmt"
+            exit 1
+          fi
           V=$(grep -m1 "define FMT_VERSION" "$FMT_DIR/include/fmt/base.h" | grep -oE "[0-9]+" || true)
           echo "FMT_VERSION=$V"
+          # base.h 必须真的定义 FMT_PRAGMA_CLANG / FMT_EXPORT，否则说明文件是坏的
+          for sym in FMT_PRAGMA_CLANG FMT_EXPORT FMT_BEGIN_NAMESPACE; do
+            if grep -q "define $sym" "$FMT_DIR/include/fmt/base.h"; then
+              echo "OK   base.h defines $sym"
+            else
+              echo "::error::base.h does not define $sym - header is broken"
+              exit 1
+            fi
+          done
+
+          # 关键：必须把 homebrew 的 fmt 头挪开。
+          # /opt/homebrew/include 会被 zstd 的 INTERFACE_INCLUDE_DIRECTORIES 带进
+          # 编译命令，而 runner 上预装/brew 装的是 fmt 12.2。两个版本的 fmt 混编时，
+          # base.h 的 include guard FMT_BASE_H_ 会先被 12.2 占住，我们 12.1 的
+          # base.h 整个被跳过，于是 ranges.h 里的 FMT_PRAGMA_CLANG / FMT_EXPORT
+          # 全都"未定义"，报一堆 unknown type name。
+          for p in /opt/homebrew/include/fmt /opt/homebrew/Cellar/fmt; do
+            if [ -e "$p" ]; then
+              mv "$p" "${p}.disabled" 2>/dev/null \
+                && echo "disabled homebrew fmt: $p" \
+                || echo "WARN: could not disable $p"
+            fi
+          done
+          if [ -e /opt/homebrew/include/fmt ]; then
+            echo "::error::homebrew fmt headers still visible - version mixing will break the build"
+            exit 1
+          fi
+
           cat > "$FMT_DIR/lib/cmake/fmt/fmt-config.cmake" <<'CFGEOF'
           set(fmt_FOUND TRUE)
           set(FMT_FOUND TRUE)
