@@ -634,28 +634,51 @@ jobs:
           EOF
           { cat /tmp/libmv_patch.txt; cat intern/libmv/CMakeLists.txt; } > intern/libmv/CMakeLists.txt.tmp && mv intern/libmv/CMakeLists.txt.tmp intern/libmv/CMakeLists.txt
 
-          # 4. 关键修正：不再改写 jacobiSvd 调用点。
-          #    ios 分支的源码本身是合法 C++（x.jacobiSvd<Opts>()）。
-          #    旧补丁先删 <> 再回头删 ()，顺序错了，实际产出
-          #        x.jacobiSvd(Opts)()
-          #    等于"取到 SVD 对象后又当函数调用一次"——非法 C++，libmv / dualcon 必然编译失败。
-          #    这就是 244 次运行全部倒在第 25 步 xcodebuild 的根因。
-          #    现在只做审计：一旦再出现这种坏写法立刻报错，防止被重新引入。
-          echo "=== jacobiSvd audit (informational) ==="
-          for f in intern/libmv/libmv/multiview/euclidean_resection.cc \
-                   intern/libmv/libmv/tracking/track_region.cc \
-                   intern/dualcon/intern/octree.cpp; do
-            echo "--- $f"
-            grep -n "jacobiSvd" "$f" || echo "  (none)"
-          done
+          # 4. jacobiSvd：ios_arm64 用的 Eigen 3.4 只提供运行时选项版本
+          #      MatrixBase::jacobiSvd(unsigned int computationOptions)
+          #    没有模板版本，所以源码里的 `.jacobiSvd<Opts>()` 必须改写成
+          #      `.jacobiSvd(Opts)`
+          #    关键是【一次性】同时吃掉 <...> 和后面的 ()：分两步做会留下
+          #      `.jacobiSvd(Opts)()`
+          #    clang 会报 "JacobiSVD does not provide a call operator"
+          #    （历次运行就是这么倒在第 25 步的）。
+          echo "=== Normalizing jacobiSvd (Eigen 3.4 runtime-options form) ==="
+          JACOBI='s/\.jacobiSvd<([^>]*)>\s*\(\)/.jacobiSvd($1)/g'
 
-          BAD=$(grep -rln -E "jacobiSvd\([^)]*\)[[:space:]]*\(\)" intern source/blender \
-                  --include="*.cc" --include="*.cpp" 2>/dev/null || true)
-          if [ -n "$BAD" ]; then
-            echo "::error::Malformed jacobiSvd(...)() found - invalid C++"
-            echo "$BAD"
+          perl -pi -e "$JACOBI" \
+            intern/libmv/libmv/multiview/euclidean_resection.cc \
+            intern/libmv/libmv/tracking/track_region.cc \
+            intern/dualcon/intern/octree.cpp
+          find intern source/blender -type f \( -name "*.cc" -o -name "*.cpp" \) -print0 \
+            | xargs -0 perl -pi -e "$JACOBI"
+
+          # octree.cpp 显式写了 Eigen::JacobiSVD<Eigen::Matrix3f, Options> svd = ...
+          # 运行时版本返回的是 JacobiSVD<PlainObject, 默认前置条件>，
+          # 两者是不同类型、无隐式转换，所以改用 auto 接收。
+          perl -pi -e 's/Eigen::JacobiSVD<\s*Eigen::Matrix3f\s*,\s*Options\s*>\s+svd\s*=/auto svd =/g' \
+            intern/dualcon/intern/octree.cpp
+
+          # 5. 审计（这一步必须真的干净，否则一定编译失败）
+          echo "--- 关键调用点改写结果 ---"
+          grep -n "jacobiSvd" intern/libmv/libmv/multiview/euclidean_resection.cc \
+                            intern/libmv/libmv/tracking/track_region.cc \
+                            intern/dualcon/intern/octree.cpp || true
+
+          RESID=$(grep -rln "jacobiSvd<" intern source/blender \
+                    --include="*.cc" --include="*.cpp" 2>/dev/null || true)
+          DOUBLECALL=$(grep -rln -E "jacobiSvd\([^)]*\)[[:space:]]*\(\)" intern source/blender \
+                    --include="*.cc" --include="*.cpp" 2>/dev/null || true)
+          if [ -n "$RESID" ]; then
+            echo "::error::Still using template form jacobiSvd<...> in:"
+            echo "$RESID"
             exit 1
           fi
+          if [ -n "$DOUBLECALL" ]; then
+            echo "::error::Malformed jacobiSvd(...)() (invalid C++) in:"
+            echo "$DOUBLECALL"
+            exit 1
+          fi
+          echo "jacobiSvd normalized and verified"
 
           echo "All patches applied"
 
