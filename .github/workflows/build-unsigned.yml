@@ -714,11 +714,30 @@ jobs:
           #     本身也必须在路径里。
           cat >> build_files/cmake/platform/platform_apple.cmake <<'CMEOF'
 
-          # --- iOS patch: Imath legacy flat headers for Alembic ---
+          # --- iOS patch: bundled 依赖头路径 ---
+          # lib/ios_arm64 里各依赖（openimageio / openexr / pugixml / opencolorio / ...）
+          # 都是预编译包。Blender 靠 find_package(...) 拿 INTERFACE_INCLUDE_DIRECTORIES，
+          # 但这套 iOS 的伪造 config 只补了部分变量，很多 target 拿不到头路径，
+          # 要编译到 source/blender/imbuf/intern/oiio 这种深层才会报 file not found。
+          # 统一把各依赖的 include 目录加进头搜索路径（AFTER，不抢系统头）。
+          file(GLOB _ios_dep_inc_dirs "${LIBDIR}/*/include")
+          foreach(_d ${_ios_dep_inc_dirs})
+            get_filename_component(_dep "${_d}" DIRECTORY)
+            get_filename_component(_depname "${_dep}" NAME)
+            # python 头由 PYTHON_INCLUDE_DIR 精确指定；zlib 有 zconf.h 冲突风险
+            if(_depname STREQUAL "python" OR _depname STREQUAL "zlib")
+              continue()
+            endif()
+            if(IS_DIRECTORY "${_d}")
+              include_directories(AFTER "${_d}")
+              message(STATUS "iOS patch: include ${_d}")
+            endif()
+          endforeach()
+
+          # Alembic 的头按 Imath 2.x 写（#include <half.h>），而 imath 是 3.x 布局；
+          # 且 half.h 内部用相对 include（"ImathExport.h"），所以 Imath/ 目录本身也要在路径里。
           if(EXISTS "${LIBDIR}/imath/include/Imath/half.h")
-            include_directories(BEFORE
-              "${LIBDIR}/imath/include"
-              "${LIBDIR}/imath/include/Imath")
+            include_directories(BEFORE "${LIBDIR}/imath/include/Imath")
             message(STATUS "iOS patch: Imath legacy headers <- ${LIBDIR}/imath/include/Imath")
           else()
             message(WARNING "iOS patch: ${LIBDIR}/imath/include/Imath/half.h not found")
@@ -885,6 +904,12 @@ jobs:
             grep -o "HEADER_SEARCH_PATHS = [^;]*;" "$PBX" | head -3
             exit 1
           fi
+          if grep -qi "openimageio" "$PBX"; then
+            echo "OK: openimageio include path present in project.pbxproj"
+          else
+            echo "::error::openimageio include path NOT in project.pbxproj - build would fail on <OpenImageIO/imageio.h>"
+            exit 1
+          fi
 
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
@@ -979,9 +1004,9 @@ jobs:
         run: |
           SZ=$(du -sm blender/build_ios 2>/dev/null | cut -f1); SZ=${SZ:-0}
           echo "build_ios size = ${SZ} MB"
-          if [ "$SZ" -ge 800 ] && [ -d blender/build_ios/build ]; then
+          if [ "$SZ" -ge 200 ] && [ -d blender/build_ios/build ]; then
             echo "save=true"  >> "$GITHUB_OUTPUT"
-            echo "worth caching (>=800MB of objects)"
+            echo "worth caching (>=200MB of objects)"
           else
             echo "save=false" >> "$GITHUB_OUTPUT"
             echo "too small / no objects - keep the existing cache instead"
