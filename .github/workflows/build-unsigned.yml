@@ -721,6 +721,40 @@ jobs:
               echo "ERROR: python stdlib (os.py) missing after copy"
               exit 1
             fi
+            # BeeWare 包不带 Modules/Setup*，CPython 找不到静态内置模块的
+            # 初始化表就会在 Py_Initialize 阶段静默 abort（iPad 上表现为闪退）。
+            # 用支持「静态模块」的自定义 Setup 覆盖，剩下的走 lib-dynload。
+            mkdir -p lib/ios_arm64/python/lib/python3.13/Modules
+            printf '%s\n' '*static*' \
+              '_abc _abc' \
+              '_ast _ast' \
+              '_codecs _codecs' \
+              '_collections _collections' \
+              '_functools _functools' \
+              '_imp _imp' \
+              '_io _io' \
+              '_locale _locale' \
+              '_operator _operator' \
+              '_signal _signal' \
+              '_sre _sre' \
+              '_stat _stat' \
+              '_string _string' \
+              '_symtable _symtable' \
+              '_thread _thread' \
+              '_tokenize _tokenize' \
+              '_tracemalloc _tracemalloc' \
+              '_typing _typing' \
+              '_weakref _weakref' \
+              'atexit atexit' \
+              'errno errno' \
+              'faulthandler faulthandler' \
+              'gc gc' \
+              'itertools itertools' \
+              'marshal marshal' \
+              'posix posix' \
+              'pwd pwd' \
+              'time time' \
+              > lib/ios_arm64/python/lib/python3.13/Modules/Setup.local
             echo "python stdlib installed:"
             du -sh lib/ios_arm64/python/lib/python3.13
             ls lib/ios_arm64/python/lib/python3.13 | head -20
@@ -1248,6 +1282,38 @@ jobs:
             exit 1
           fi
 
+      # Frameworks/ 是手写进 app bundle 的（Embed 步骤在 build 之后才跑）。
+      # 但如果它被当成「Folder reference」进了 Resources 阶段，xcodebuild 会用
+      # mkdir -p 建目录，再往里面 cp 我们手工放的 dylib，install_name 就全废。
+      - name: Ensure Frameworks/ is not bundled as a resource
+        run: |
+          cd blender/build_ios
+          PBX=Blender.xcodeproj/project.pbxproj
+          python3 - "$PBX" <<'PYEOF'
+          import re, sys
+          p = sys.argv[1]
+          src = open(p, encoding="utf-8", errors="replace").read()
+          # 资源阶段里每个 PBXBuildFile 形如  1234 /* X in Resources */ = {isa = PBXBuildFile; fileRef = ...}
+          res_buildfiles = re.findall(
+              r"([0-9A-F]{24}) /\* .*? in Resources \*/ = \{isa = PBXBuildFile; fileRef = ([0-9A-F]{24})",
+              src)
+          # folder reference 的 fileRef 长这样：... /* Frameworks */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ...
+          folder_refs = set(re.findall(
+              r"([0-9A-F]{24}) /\* Frameworks \*/ = \{isa = PBXFileReference;[^}]*?lastKnownFileType = folder;",
+              src, re.S))
+          hits = [bf for bf, ref in res_buildfiles if ref in folder_refs]
+          if not hits:
+              print("OK: Frameworks/ is not copied by the Resources phase")
+              sys.exit(0)
+          print("WARN: Frameworks/ is a Resources entry, removing %d build file(s)" % len(hits))
+          for bf in hits:
+              src = re.sub(r"\t\t%s /\* .*? in Resources \*/ = \{isa = PBXBuildFile;.*?\};\n" % bf,
+                           "", src)
+              src = re.sub(r"\t\t\t\t%s /\* .*? in Resources \*/,\n" % bf, "", src)
+          open(p, "w", encoding="utf-8").write(src)
+          print("patched", p)
+          PYEOF
+
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
         run: |
@@ -1354,15 +1420,37 @@ jobs:
                       return index[k]
               return None
 
-          copied, rewritten = [], []
-          queue = [binary]
+          # Assets/lib 里已经有一批 dylib（Blender 自带的 install 产物），也纳入闭包来源
+          extra_roots = []
+          for root, _dirs, files in os.walk(app):
+              if os.path.basename(root) == "lib":
+                  extra_roots.append(root)
+
+          def resolve_any(base):
+              src = resolve(base)
+              if src:
+                  return src
+              for r in extra_roots:
+                  p = os.path.join(r, base)
+                  if os.path.isfile(p):
+                      return p
+              return None
+
+          copied, rewritten, seen = [], [], set()
+          queue = [binary] + [os.path.join(r, f)
+                              for r in extra_roots
+                              for f in (os.listdir(r) if os.path.isdir(r) else [])
+                              if f.endswith(".dylib")]
           while queue:
               cur = queue.pop(0)
+              if cur in seen:
+                  continue
+              seen.add(cur)
               for dep in load_deps(cur):
                   if dep.startswith("/usr/lib") or dep.startswith("/System"):
                       continue
                   base = os.path.basename(dep)
-                  src = resolve(base)
+                  src = resolve_any(base)
                   if src is None:
                       print("  MISSING dylib:", dep)
                       continue
@@ -1380,18 +1468,81 @@ jobs:
           for base in copied:
               dst = os.path.join(fwdir, base)
               subprocess.run(["install_name_tool", "-id", "@rpath/" + base, dst], check=False)
-          for target in [binary] + [os.path.join(fwdir, b) for b in copied]:
+
+          # Python 是 PyApple-support 的 framework，install name 固定为
+          # @rpath/Python.framework/Python —— 必须按 framework 目录结构放，
+          # 不能只丢一个 libpython3.13.dylib 进 Frameworks/。
+          py_src = None
+          for cand in ("python/Python.framework/Python", "python/lib/libpython3.13.dylib"):
+              p = os.path.join(libroot, cand)
+              if os.path.isfile(p):
+                  py_src = p
+                  break
+          if py_src is None:
+              for root, _dirs, files in os.walk(libroot):
+                  if "Python.framework" in root and "Python" in files:
+                      py_src = os.path.join(root, "Python")
+                      break
+          if py_src is None:
+              print("ERROR: Python framework binary not found under", libroot)
+              sys.exit(1)
+          pyf = os.path.join(fwdir, "Python.framework")
+          os.makedirs(os.path.join(pyf, "Versions", "A"), exist_ok=True)
+          py_bin = os.path.join(pyf, "Versions", "A", "Python")
+          if not os.path.exists(py_bin):
+              shutil.copy2(py_src, py_bin)
+          os.chmod(py_bin, 0o755)
+          for link, tgt in (("Python", "Versions/A/Python"), ("Versions/Current", "A")):
+              lp = os.path.join(pyf, link)
+              if os.path.islink(lp) or os.path.exists(lp):
+                  os.remove(lp)
+              os.symlink(tgt, lp)
+          subprocess.run(["install_name_tool", "-id", "@rpath/Python.framework/Python", py_bin],
+                         check=False)
+          print("   Python.framework (src %s) -> Frameworks/Python.framework, %d bytes"
+                % (py_src, os.path.getsize(py_bin)))
+
+          for target in [binary] + [os.path.join(fwdir, b) for b in copied] + [py_bin]:
               subprocess.run(
                   ["install_name_tool", "-add_rpath", "@executable_path/Frameworks", target],
                   check=False, stderr=subprocess.DEVNULL)
+
+          # osxcross 的 install_name_tool -add_rpath 偶尔会因为空间不足失败；
+          # 缺 @executable_path/Frameworks 时 dyld 一定找不到 Python。
+          def has_rpath(path):
+              with open(path, "rb") as fh:
+                  b = fh.read()
+              if struct.unpack("<I", b[:4])[0] != 0xFEEDFACF:
+                  return True
+              ncmds = struct.unpack("<I", b[16:20])[0]
+              off = 32
+              for _ in range(ncmds):
+                  cmd, size = struct.unpack("<II", b[off:off + 8])
+                  if size == 0:
+                      break
+                  if cmd == 0x8000001C:
+                      nmoff = struct.unpack("<I", b[off + 8:off + 12])[0]
+                      name = b[off + nmoff:off + size].split(b"\x00")[0].decode("utf-8", "replace")
+                      if name == "@executable_path/Frameworks":
+                          return True
+                  off += size
+              return False
+
+          for target in [binary, py_bin]:
+              if not has_rpath(target):
+                  print("WARN: @executable_path/Frameworks rpath missing on", target)
 
           print("copied %d dylibs into Frameworks/:" % len(copied))
           for base in copied:
               print("   ", base, os.path.getsize(os.path.join(fwdir, base)))
           print("rewritten absolute deps: %d" % len(rewritten))
           PYEOF
+          echo "--- Frameworks tree ---"
+          find "$APP/Frameworks" -maxdepth 4 | sort | head -40
           echo "--- otool -L Blender (tail) ---"
           otool -L "$APP/Blender" | tail -20 || true
+          echo "--- python lib-dynload count ---"
+          ls "$APP/Assets/5.1/python/lib/python3.13/lib-dynload" 2>/dev/null | wc -l
           du -sh "$APP"
 
       - name: Package unsigned IPA
