@@ -1067,6 +1067,45 @@ jobs:
               endif()
             endforeach()
           endif()
+          # --- iOS: 补齐"兄弟库"的链接 ---
+          # 这套 iOS 依赖包只提供 .dylib，而上游 xxxConfig.cmake 没有把
+          # 兄弟库串进 INTERFACE_LINK_LIBRARIES，于是：
+          #   OpenImageIO 的 Filesystem/ParamValue/ustring -> 在 libOpenImageIO_Util
+          #   Iex_3_3 / _imath_half_to_float_table -> 在 libIex / libImath
+          #   ceres::* -> libceres.a 根本没被链（libmv 的
+          #              bf::dependencies::optional::ceres 是空壳）
+          # 这段代码跑在顶层 CMakeLists.txt 末尾（所有 subdir 之后、
+          # "Configuring done" 之前），target_link_libraries 在 generate
+          # 阶段才展开，所以此时追加是有效的。
+          if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+            set(_ios_extra "")
+            foreach(_n Iex Imath IlmThread OpenEXRCore)
+              file(GLOB _cand "${LIBDIR}/*/lib/lib${_n}.dylib")
+              if(_cand)
+                list(APPEND _ios_extra ${_cand})
+              endif()
+            endforeach()
+            file(GLOB _cand "${LIBDIR}/openimageio/lib/libOpenImageIO_Util.dylib")
+            if(_cand)
+              list(APPEND _ios_extra ${_cand})
+            endif()
+            list(REMOVE_DUPLICATES _ios_extra)
+            if(TARGET blender)
+              target_link_libraries(blender PRIVATE ${_ios_extra})
+              if(EXISTS "${LIBDIR}/ceres/lib/libceres.a")
+                target_link_libraries(blender PRIVATE "${LIBDIR}/ceres/lib/libceres.a")
+              endif()
+              message(STATUS "iOS patch: blender link extras: ${_ios_extra} + libceres.a")
+            else()
+              message(WARNING "iOS patch: target 'blender' not found, extras not linked")
+            endif()
+            # 顺带让这两个 imported target 也带上兄弟库，给其它消费者用
+            foreach(_t OpenImageIO::OpenImageIO OpenEXR::OpenEXR)
+              if(TARGET ${_t})
+                set_property(TARGET ${_t} APPEND PROPERTY INTERFACE_LINK_LIBRARIES ${_ios_extra})
+              endif()
+            endforeach()
+          endif()
           IOSEOF
 
           echo "All patches applied"
