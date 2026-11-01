@@ -158,20 +158,40 @@ jobs:
           cd ../..
           echo "iOS libraries cloned and OpenEXR LFS pulled"
 
-      - name: Remove iOS zstd and verify
+      - name: Build zstd for iOS (static arm64)
         run: |
           cd blender/lib/ios_arm64
-          if [ -d "zstd" ]; then
-            rm -rf zstd
-            echo "Removed iOS zstd directory"
-          else
-            echo "iOS zstd not present, skipping"
-          fi
-          if [ -d "zstd" ]; then
-            echo "ERROR: Failed to remove zstd!"
-            exit 1
-          fi
-          echo "zstd removal verified"
+          # 之前把 ZSTD_LIBRARY 指向 /opt/homebrew/lib/libzstd.dylib 是错的：
+          # 那是 macOS 的 dylib，链接 iOS App 时 ld 会报
+          #   building for 'iOS', but linking in dylib built for 'macOS'
+          # ios_arm64 自带的 zstd 目录又会和 homebrew 的头/库打架，所以
+          # 直接删掉，用源码现编一份 iOS arm64 静态库。
+          rm -rf zstd zstd-src
+          mkdir -p zstd/include zstd/lib
+          curl -sSL -o zstd.tar.gz https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+          tar xzf zstd.tar.gz
+          mv zstd-1.5.7 zstd-src
+          rm -f zstd.tar.gz
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          CC=$(xcrun --sdk iphoneos --find clang)
+          echo "iOS SDK: $SDK"
+          OBJ=$(mktemp -d)
+          i=0
+          for f in zstd-src/lib/common/*.c zstd-src/lib/compress/*.c \
+                   zstd-src/lib/decompress/*.c zstd-src/lib/dictBuilder/*.c; do
+            i=$((i+1))
+            "$CC" -c -target arm64-apple-ios15.0 -isysroot "$SDK" -O2 \
+              -I zstd-src/lib -I zstd-src/lib/common \
+              -o "$OBJ/$i-$(basename "$f" .c).o" "$f" || exit 1
+          done
+          ar rcs zstd/lib/libzstd.a "$OBJ"/*.o
+          rm -rf "$OBJ"
+          cp zstd-src/lib/zstd.h zstd-src/lib/zstd_errors.h zstd-src/lib/zdict.h zstd/include/ 2>/dev/null || true
+          rm -rf zstd-src
+          ls -l zstd/lib/libzstd.a zstd/include
+          lipo -info zstd/lib/libzstd.a || true
+          echo "ZSTD_LIB_FILE=$PWD/zstd/lib/libzstd.a" >> $GITHUB_ENV
+          echo "ZSTD_INC_DIR=$PWD/zstd/include" >> $GITHUB_ENV
 
       - name: Install Eigen 3.4 headers for iOS (missing from lib-ios_arm64)
         run: |
@@ -804,15 +824,15 @@ jobs:
           set(CERES_INCLUDE_DIRS "${IOS_LIB}/ceres/include" CACHE PATH "" FORCE)
           set(CERES_LIBRARY "${IOS_LIB}/ceres/lib/libceres.a" CACHE FILEPATH "" FORCE)
           set(CERES_LIBRARIES "${IOS_LIB}/ceres/lib/libceres.a" CACHE FILEPATH "" FORCE)
-          set(ZSTD_LIBRARY "/opt/homebrew/lib/libzstd.dylib" CACHE FILEPATH "" FORCE)
-          set(ZSTD_LIBRARIES "/opt/homebrew/lib/libzstd.dylib" CACHE FILEPATH "" FORCE)
-          set(ZSTD_INCLUDE_DIR "/opt/homebrew/include" CACHE PATH "" FORCE)
+          set(ZSTD_LIBRARY "${ZSTD_LIB_FILE}" CACHE FILEPATH "" FORCE)
+          set(ZSTD_LIBRARIES "${ZSTD_LIB_FILE}" CACHE FILEPATH "" FORCE)
+          set(ZSTD_INCLUDE_DIR "${ZSTD_INC_DIR}" CACHE PATH "" FORCE)
           set(ZSTD_FOUND TRUE CACHE BOOL "" FORCE)
           if(NOT TARGET ZSTD::ZSTD)
             add_library(ZSTD::ZSTD UNKNOWN IMPORTED)
             set_target_properties(ZSTD::ZSTD PROPERTIES
-              IMPORTED_LOCATION "/opt/homebrew/lib/libzstd.dylib"
-              INTERFACE_INCLUDE_DIRECTORIES "/opt/homebrew/include"
+              IMPORTED_LOCATION "${ZSTD_LIB_FILE}"
+              INTERFACE_INCLUDE_DIRECTORIES "${ZSTD_INC_DIR}"
             )
           endif()
           # --- END PATCH ---
@@ -821,6 +841,21 @@ jobs:
 
           # 2. Disable Epoxy find_package
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
+
+          # 2.1 FFmpeg：lib-ios_arm64 的 ffmpeg 包里没有 libavfilter.a。
+          #     platform_apple.cmake 的组件表是从 ffmpeg 官网"标准构建"抄来的
+          #     （源码注释明写），而 Blender 自己的代码并不引用 libavfilter 符号。
+          #     find_library 失败时会把 "FFMPEG_AVFILTER_LIBRARY-NOTFOUND"
+          #     原样塞进 FFMPEG_LIBRARIES，链接器于是报
+          #       library 'FFMPEG_AVFILTER_LIBRARY-NOTFOUND' not found
+          #     把 avfilter 从组件表移除即可（缺失项应当当可选，不能拿 NOTFOUND 占位）。
+          sed -i '' 's/avcodec avdevice avfilter avformat avutil/avcodec avdevice avformat avutil/' \
+            build_files/cmake/platform/platform_apple.cmake
+          if grep -q "avdevice avfilter" build_files/cmake/platform/platform_apple.cmake; then
+            echo "::error::avfilter still listed in FFMPEG_FIND_COMPONENTS"
+            exit 1
+          fi
+          echo "FFMPEG_FIND_COMPONENTS: avfilter removed"
 
           # 2.5 Alembic 需要 Imath 的旧式扁平头（#include <half.h>）
           #     lib/ios_arm64 里 alembic 是按 Imath 2.x 的头写的，而 imath 是 3.x
@@ -1039,7 +1074,7 @@ jobs:
             -DWITH_OPENIMAGEIO=ON \
             -DWITH_OPENMP=OFF \
             -DWITH_TBB=OFF \
-            -DZSTD_ROOT_DIR=/opt/homebrew \
+            -DZSTD_ROOT_DIR="$PWD/lib/ios_arm64/zstd" \
             -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
             -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
             -Dfmt_DIR="$PWD/lib/ios_arm64/fmt/lib/cmake/fmt" \
