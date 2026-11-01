@@ -268,30 +268,37 @@ jobs:
           # FMT_FORMAT_H_ 这个 include guard，于是我们的 12.1 format.h 被整段跳过，
           # base.h 也就不会被包含 —— 表现就是 ranges.h 里 FMT_PRAGMA_CLANG /
           # FMT_EXPORT 全部"未定义"，正是 run#253 的现象。
-          echo "=== scan for competing fmt copies (only lib-level include/fmt) ==="
-          # 只处理 <lib>/include/fmt 和 <lib>/fmt 这种"整库级"的 fmt 副本。
-          # 绝不能碰嵌套目录：OpenImageIO/detail/fmt 是 OIIO 自己的内部实现，
-          # 上一版用 `find -type d -name fmt` 把它当竞争库禁掉了，
-          # 结果 OIIO 的 detail/fmt.h 找不到自己的 format.h。
-          OTHERS=""
-          for d in lib/ios_arm64/*/include/fmt lib/ios_arm64/*/fmt; do
-            [ -d "$d" ] || continue
-            case "$d" in
-              lib/ios_arm64/fmt|lib/ios_arm64/fmt/*) continue ;;
-            esac
-            OTHERS="$OTHERS $d"
-          done
-          if [ -n "$OTHERS" ]; then
-            echo "found competing fmt dirs:$OTHERS"
-            for d in $OTHERS; do
-              mv "$d" "${d}.disabled" && echo "  disabled $d"
-            done
-          else
-            echo "no competing lib-level fmt dir"
+          echo "=== unify OIIO's vendored fmt with ours ==="
+          # 这才是 fmt 报错的真正原因（连查四轮才定位到）：
+          #   lib-macos_arm64 里 OIIO 自带 fmt 12.1，与 Blender 用的 12.1 完全同版本，
+          #   两个 format.h 的 include guard 都是 FMT_FORMAT_H_ —— 第二次 include
+          #   直接跳过，天然共用一份，所以 macOS 版从来不出问题。
+          #   但 lib-ios_arm64 里的 OIIO 是旧版，自带 fmt 9.1!
+          #   于是 OIIO 的 format.h 先把 FMT_FORMAT_H_ 占了，Blender 的
+          #   fmt/ranges.h 再 include format.h 时整段被跳过，base.h 根本没机会执行，
+          #   FMT_EXPORT / FMT_PRAGMA_CLANG / fmt::is_tuple_like 全部"未定义"。
+          #
+          # 处理：把 OIIO 的 fmt 引用改指向共用的一份 12.1，并移走它自带的 9.1 副本。
+          OIIO_FMT_H="lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt.h"
+          if [ -f "$OIIO_FMT_H" ]; then
+            perl -pi -e 's{#include <OpenImageIO/detail/fmt/(format|ostream|printf|core|chrono|std)\.h>}{#include <fmt/$1.h>}g' "$OIIO_FMT_H"
+            echo "OIIO detail/fmt.h now points at the shared fmt 12.1"
+            grep -n "include <fmt/" "$OIIO_FMT_H" | head -5
           fi
-          # OIIO 的 fmt 必须还在
-          if [ ! -f lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt/format.h ]; then
-            echo "::error::OpenImageIO detail/fmt got damaged - OIIO will not compile"
+          if [ -d lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt ]; then
+            mv lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt \
+               lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt.disabled
+            echo "moved OIIO's vendored fmt 9.1 aside"
+          fi
+          # 确认 OIIO 头里没有残留引用
+          LEFT=$(grep -rl "OpenImageIO/detail/fmt/" lib/ios_arm64/openimageio/include \
+                   --include="*.h" 2>/dev/null || true)
+          if [ -n "$LEFT" ]; then
+            echo "::warning::still referencing OIIO vendored fmt:"
+            echo "$LEFT"
+          fi
+          if [ ! -f lib/ios_arm64/fmt/include/fmt/format.h ]; then
+            echo "::error::shared fmt missing"
             exit 1
           fi
           # 仅报告，不做处理：OpenImageIO/detail/fmt 是 OIIO 内部实现，属正常
