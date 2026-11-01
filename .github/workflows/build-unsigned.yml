@@ -166,6 +166,34 @@ jobs:
           grep -m1 -E "define EIGEN_(WORLD|MAJOR|MINOR)_VERSION" "$EIGEN_PREFIX/include/eigen3/Eigen/src/Core/util/Macros.h" | head -1
           ls "$EIGEN_PREFIX"
 
+      - name: Imath 2.x flat-header compatibility for Alembic
+        run: |
+          # ios_arm64 里的 Alembic 头文件是按 Imath 2.x 写的（#include <half.h>），
+          # 但 imath/include 下只有 Imath/ 目录（3.x 布局），于是报
+          #   alembic/include/Alembic/Util/Foundation.h:45: 'half.h' file not found
+          # 这里给 imath/include 补一层扁平兼容链接，不动任何 lib 内容。
+          cd blender
+          IM="$PWD/lib/ios_arm64/imath/include"
+          if [ -d "$IM/Imath" ]; then
+            n=0
+            for h in "$IM"/Imath/*.h; do
+              if [ ! -f "$h" ]; then continue; fi
+              b=$(basename "$h")
+              if [ -e "$IM/$b" ]; then continue; fi
+              ln -s "Imath/$b" "$IM/$b"
+              n=$((n + 1))
+            done
+            echo "created $n flat compat headers in $IM"
+            ls "$IM" | head -8
+            if [ ! -f "$IM/half.h" ]; then
+              echo "::error::half.h compat symlink not created"
+              exit 1
+            fi
+            echo "half.h -> $(readlink "$IM/half.h")"
+          else
+            echo "WARN: $IM/Imath not found, skip"
+          fi
+
       - name: Ensure Ceres headers are present
         run: |
           cd blender
