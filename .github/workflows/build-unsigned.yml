@@ -1138,6 +1138,7 @@ jobs:
             -DWITH_DOCS=OFF \
             -DWITH_RUBBERBAND=OFF \
             -DWITH_OPENIMAGEIO=ON \
+            -DWITH_LIBMV=OFF \
             -DWITH_OPENMP=OFF \
             -DWITH_TBB=OFF \
             -DZSTD_ROOT_DIR="$PWD/lib/ios_arm64/zstd" \
