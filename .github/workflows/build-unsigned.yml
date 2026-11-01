@@ -1078,6 +1078,13 @@ jobs:
           # "Configuring done" 之前），target_link_libraries 在 generate
           # 阶段才展开，所以此时追加是有效的。
           if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+            # 这段在顶层目录，而 target blender 是在 source/creator 里建的，
+            # 跨目录 target_link_libraries 必须开 CMP0079 NEW，否则报
+            #   Attempt to add link library ... to target "blender" which is
+            #   not built in this directory
+            if(POLICY CMP0079)
+              cmake_policy(SET CMP0079 NEW)
+            endif()
             set(_ios_extra "")
             foreach(_n Iex Imath IlmThread OpenEXRCore)
               file(GLOB _cand "${LIBDIR}/*/lib/lib${_n}.dylib")
