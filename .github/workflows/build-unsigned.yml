@@ -104,6 +104,49 @@ jobs:
           echo "host python: $($HP -V 2>&1)"
           file "$HP" || true
 
+      - name: Record source revision
+        id: src
+        run: |
+          SHA=$(git -C blender rev-parse --short=12 HEAD)
+          echo "Blender (ios branch) HEAD = $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      # 增量编译缓存：build_ios 里是 CMake 生成的 Xcode 工程 + 全部 .o/.a。
+      # object 落在 blender/build_ios/build/<target>.build/Release-iphoneos/Objects-normal/arm64，
+      # 且 runner 工作目录固定为 /Users/runner/work/blender/blender，
+      # 所以恢复后 Xcode 的增量判定依然有效，只重编真正变化的文件。
+      # key 锚定 ios 分支提交 sha（不是 workflow 内容）：只要 Blender 源码没变，
+      # 改 CI 脚本不会再触发全量重编。
+      - name: Restore incremental build cache
+        id: cache-build
+        uses: actions/cache/restore@v4
+        with:
+          path: blender/build_ios
+          key: ios-build-v1-${{ steps.src.outputs.sha }}-${{ github.run_id }}
+          restore-keys: |
+            ios-build-v1-${{ steps.src.outputs.sha }}-
+
+      # 命中缓存时，build_ios 里的 .o 来自上一次运行，而源码是刚 clone 的
+      # （mtime = 现在）→ Xcode 会认为所有源文件都改过，直接全量重编，缓存白存。
+      # key 已经锚定源码 sha，内容必然一致，所以把源码 mtime 压到固定旧时间点，
+      # 让增量判定回到"文件未变"。build_ios / lib / .git 不动。
+      #
+      # 注意：不能用 steps.cache-build.outputs.cache-hit 判断。
+      # 那个输出只在 key 精确命中时为 true，而我们的 key 带了 run_id（为了保证
+      # 每轮都能写入新的一份），restore-keys 前缀命中的情况它仍然是 false。
+      # 所以直接看产物是否真的存在。
+      - name: Normalize source mtimes for incremental build
+        run: |
+          if [ -d blender/build_ios/build ]; then
+            N=$(find blender/build_ios/build -name "*.o" -type f 2>/dev/null | head -1)
+            echo "restored objects found, e.g. ${N:-<none>}"
+            find blender \( -path blender/build_ios -o -path blender/lib -o -path blender/.git \) -prune -o -type f -print0 \
+              | xargs -0 touch -t 202001010000 2>/dev/null || true
+            echo "source mtimes normalized to 2020-01-01 (cached objects are newer)"
+          else
+            echo "no cached objects - this run will build everything"
+          fi
+
       - name: Cache iOS libraries
         id: cache-ios
         uses: actions/cache@v4
@@ -166,32 +209,24 @@ jobs:
           grep -m1 -E "define EIGEN_(WORLD|MAJOR|MINOR)_VERSION" "$EIGEN_PREFIX/include/eigen3/Eigen/src/Core/util/Macros.h" | head -1
           ls "$EIGEN_PREFIX"
 
-      - name: Imath 2.x flat-header compatibility for Alembic
+      - name: Imath legacy-header compatibility for Alembic
         run: |
-          # ios_arm64 里的 Alembic 头文件是按 Imath 2.x 写的（#include <half.h>），
-          # 但 imath/include 下只有 Imath/ 目录（3.x 布局），于是报
-          #   alembic/include/Alembic/Util/Foundation.h:45: 'half.h' file not found
-          # 这里给 imath/include 补一层扁平兼容链接，不动任何 lib 内容。
+          # ios_arm64 里的 Alembic 头文件是按 Imath 2.x 的扁平布局写的
+          #   alembic/include/Alembic/Util/Foundation.h:45:  #include <half.h>
+          # 而同一个 lib 里的 imath 是 3.x 布局（只有 include/Imath/ 子目录）。
+          #
+          # 上一版试过在 imath/include 里建扁平软链，但没用：真正缺的不是文件，
+          # 而是 imath 目录压根不在编译器的头搜索路径里（FindAlembic.cmake 只
+          # 返回 alembic/include）。这一版改为在 CMake 侧加路径，见 patch 步骤。
+          # 这里只做前置校验，确认头文件确实存在、后续 patch 有东西可指。
           cd blender
-          IM="$PWD/lib/ios_arm64/imath/include"
-          if [ -d "$IM/Imath" ]; then
-            n=0
-            for h in "$IM"/Imath/*.h; do
-              if [ ! -f "$h" ]; then continue; fi
-              b=$(basename "$h")
-              if [ -e "$IM/$b" ]; then continue; fi
-              ln -s "Imath/$b" "$IM/$b"
-              n=$((n + 1))
-            done
-            echo "created $n flat compat headers in $IM"
-            ls "$IM" | head -8
-            if [ ! -f "$IM/half.h" ]; then
-              echo "::error::half.h compat symlink not created"
-              exit 1
-            fi
-            echo "half.h -> $(readlink "$IM/half.h")"
-          else
-            echo "WARN: $IM/Imath not found, skip"
+          for p in lib/ios_arm64/imath/include/Imath/half.h \
+                   lib/ios_arm64/alembic/include/Alembic/Util/Foundation.h; do
+            if [ -f "$p" ]; then echo "OK   $p"; else echo "MISS $p"; fi
+          done
+          if [ ! -f lib/ios_arm64/imath/include/Imath/half.h ]; then
+            echo "::error::Imath headers missing - cannot satisfy Alembic"
+            exit 1
           fi
 
       - name: Ensure Ceres headers are present
@@ -671,6 +706,45 @@ jobs:
           # 2. Disable Epoxy find_package
           sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
 
+          # 2.5 Alembic 需要 Imath 的旧式扁平头（#include <half.h>）
+          #     lib/ios_arm64 里 alembic 是按 Imath 2.x 的头写的，而 imath 是 3.x
+          #     布局（include/Imath/）。仅仅把文件软链过去不够用——imath 目录
+          #     根本不在头搜索路径里（FindAlembic 只返回 alembic/include）。
+          #     half.h 内部还用相对 include（"ImathExport.h"），所以 Imath/ 目录
+          #     本身也必须在路径里。
+          cat >> build_files/cmake/platform/platform_apple.cmake <<'CMEOF'
+
+          # --- iOS patch: Imath legacy flat headers for Alembic ---
+          if(EXISTS "${LIBDIR}/imath/include/Imath/half.h")
+            include_directories(BEFORE
+              "${LIBDIR}/imath/include"
+              "${LIBDIR}/imath/include/Imath")
+            message(STATUS "iOS patch: Imath legacy headers <- ${LIBDIR}/imath/include/Imath")
+          else()
+            message(WARNING "iOS patch: ${LIBDIR}/imath/include/Imath/half.h not found")
+          endif()
+          CMEOF
+
+          # 2.6 精准兜底：凡是用 Alembic 的 target 直接带上 Imath 头路径
+          python3 - <<'PYEOF'
+          from pathlib import Path
+          p = Path("build_files/cmake/Modules/FindAlembic.cmake")
+          s = p.read_text()
+          old = "set(ALEMBIC_INCLUDE_DIRS ${ALEMBIC_INCLUDE_DIR})"
+          new = (
+              "set(ALEMBIC_INCLUDE_DIRS ${ALEMBIC_INCLUDE_DIR})\n"
+              '  if(EXISTS "${ALEMBIC_INCLUDE_DIR}/../../imath/include/Imath/half.h")\n'
+              "    list(APPEND ALEMBIC_INCLUDE_DIRS\n"
+              '      "${ALEMBIC_INCLUDE_DIR}/../../imath/include"\n'
+              '      "${ALEMBIC_INCLUDE_DIR}/../../imath/include/Imath")\n'
+              "  endif()"
+          )
+          if old not in s:
+              raise SystemExit("FindAlembic.cmake: ALEMBIC_INCLUDE_DIRS assignment not found")
+          p.write_text(s.replace(old, new, 1))
+          print("FindAlembic.cmake patched (Imath include appended)")
+          PYEOF
+
           # 3. Force Ceres include in libmv
           cat > /tmp/libmv_patch.txt << 'EOF'
           # Added by iOS patch: force Ceres include path
@@ -787,6 +861,31 @@ jobs:
           fi
           echo "Blender.xcodeproj found"
 
+      # 头搜索路径要是没进 Xcode 工程，要等到 xcodebuild 跑十几分钟后才报
+      # 'half.h' file not found。这里做静态检查，秒级失败，省一轮 13 分钟。
+      - name: Verify Imath include path reached the Xcode project
+        run: |
+          if grep -q "iOS patch: Imath legacy headers" blender/cmake_output.txt 2>/dev/null; then
+            echo "OK: CMake patch ran ->"
+            grep "iOS patch" blender/cmake_output.txt | head -2
+          else
+            echo "::warning::CMake patch message not in configure output"
+          fi
+          PBX=blender/build_ios/Blender.xcodeproj/project.pbxproj
+          if [ ! -f "$PBX" ]; then
+            echo "::error::project.pbxproj missing"
+            exit 1
+          fi
+          if grep -qi "imath" "$PBX"; then
+            echo "OK: imath include path present in project.pbxproj"
+            grep -o "[^ \"\\]*imath[^ \"\\]*" "$PBX" | sort -u | head -5
+          else
+            echo "::error::imath include path NOT in project.pbxproj - xcodebuild would fail on <half.h>"
+            echo "--- HEADER_SEARCH_PATHS sample ---"
+            grep -o "HEADER_SEARCH_PATHS = [^;]*;" "$PBX" | head -3
+            exit 1
+          fi
+
       - name: Build cross compile tools first
         if: steps.cmake_config.outcome == 'success'
         run: |
@@ -871,3 +970,55 @@ jobs:
             blender/build_ios/CMakeCache.txt
             blender/build_ios/CMakeFiles/CMakeError.log
           retention-days: 7
+
+      # 构建失败也保存：这一版能编到 90%，下一版就从 90% 接着编。
+      # 只有真正产出了大量 object 时才占用缓存配额，避免"早期失败把大缓存挤掉"的倒退。
+      - name: Decide whether to refresh build cache
+        id: cachesave
+        if: always()
+        run: |
+          SZ=$(du -sm blender/build_ios 2>/dev/null | cut -f1); SZ=${SZ:-0}
+          echo "build_ios size = ${SZ} MB"
+          if [ "$SZ" -ge 800 ] && [ -d blender/build_ios/build ]; then
+            echo "save=true"  >> "$GITHUB_OUTPUT"
+            echo "worth caching (>=800MB of objects)"
+          else
+            echo "save=false" >> "$GITHUB_OUTPUT"
+            echo "too small / no objects - keep the existing cache instead"
+          fi
+
+      # 仓库缓存总额度是 10GB。上一版的大缓存必须先删，否则新版存不进去。
+      # 放在 save 之前，保证同一时刻只有一份 build_ios 缓存。
+      - name: Prune previous build cache
+        if: always() && steps.cachesave.outputs.save == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PREFIX="ios-build-v1-${{ steps.src.outputs.sha }}-"
+          KEEP="ios-build-v1-${{ steps.src.outputs.sha }}-${{ github.run_id }}"
+          echo "prefix=$PREFIX keep=$KEEP"
+          IDS=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+                    -H "Accept: application/vnd.github+json" \
+                    "https://api.github.com/repos/${{ github.repository }}/actions/caches?per_page=100" \
+                 | jq -r --arg p "$PREFIX" --arg k "$KEEP" \
+                     '.actions_caches[]? | select(.key | startswith($p)) | select(.key != $k) | .id')
+          if [ -z "$IDS" ]; then echo "no stale cache to prune"; fi
+          for id in $IDS; do
+            echo "deleting cache id=$id"
+            curl -s -o /dev/null -w "  http=%{http_code}\n" -X DELETE \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/caches/$id"
+          done
+
+      - name: Save incremental build cache
+        id: cache-save
+        # 缓存只是加速手段，绝不能因为它失败（超配额/超时）把成功的构建判成红
+        continue-on-error: true
+        timeout-minutes: 20
+        if: always() && steps.cachesave.outputs.save == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: blender/build_ios
+          key: ios-build-v1-${{ steps.src.outputs.sha }}-${{ github.run_id }}
