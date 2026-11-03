@@ -704,6 +704,21 @@ jobs:
             echo "ERROR: XCFramework not found!"
             exit 1
           fi
+          # 官方 Python.framework（扁平布局：Python + Info.plist）。
+          # iOS 的 installd 会校验 Frameworks/ 下每个 .framework 必须带
+          # Info.plist，缺了直接装不上：
+          #   Failed to load Info.plist from bundle at .../Python.framework
+          # Headers 不用拷，运行时不看。
+          if [ -f "$XCFRAMEWORK_BASE/Python.framework/Python" ]; then
+            rm -rf lib/ios_arm64/python/Python.framework
+            mkdir -p lib/ios_arm64/python/Python.framework
+            cp "$XCFRAMEWORK_BASE/Python.framework/Python" lib/ios_arm64/python/Python.framework/
+            if [ -f "$XCFRAMEWORK_BASE/Python.framework/Info.plist" ]; then
+              cp "$XCFRAMEWORK_BASE/Python.framework/Info.plist" lib/ios_arm64/python/Python.framework/
+            fi
+            echo "official Python.framework kept:"
+            ls -l lib/ios_arm64/python/Python.framework/
+          fi
           # 纯 Python 标准库在 xcframework/lib/python3.13（跨平台共享），
           # 架构相关的扩展模块在 ios-arm64/lib-arm64/python3.13/lib-dynload。
           # Blender 的 install 规则会把这个目录整份拷进 App，所以先拼好；
@@ -1373,7 +1388,7 @@ jobs:
           fi
           echo "app bundle: $APP"
           python3 - "$APP" "$PWD/lib/ios_arm64" <<'PYEOF'
-          import os, struct, shutil, subprocess, sys
+          import os, plistlib, struct, shutil, subprocess, sys
 
           app, libroot = sys.argv[1], sys.argv[2]
           binary = os.path.join(app, "Blender")
@@ -1469,9 +1484,16 @@ jobs:
               dst = os.path.join(fwdir, base)
               subprocess.run(["install_name_tool", "-id", "@rpath/" + base, dst], check=False)
 
-          # Python 是 PyApple-support 的 framework，install name 固定为
-          # @rpath/Python.framework/Python —— 必须按 framework 目录结构放，
-          # 不能只丢一个 libpython3.13.dylib 进 Frameworks/。
+          # Python 是 PyApple-support 的 framework，install name 固定写死为
+          # @rpath/Python.framework/Python。
+          # ★ 必须是「扁平」布局：Python.framework/Python + Info.plist。
+          #   iOS 的 installd 在安装阶段会校验 Frameworks/ 下每个 .framework
+          #   都带 Info.plist，缺了直接报
+          #     Failed to load Info.plist from bundle at .../Python.framework
+          #   而且 macOS 那种 Versions/A + 软链的布局在 zip 里会被压成
+          #   三份实体文件（白涨 10 MB），平铺同时解决这两个问题。
+          PY_VER = "3.13"
+
           py_src = None
           for cand in ("python/Python.framework/Python", "python/lib/libpython3.13.dylib"):
               p = os.path.join(libroot, cand)
@@ -1486,19 +1508,40 @@ jobs:
           if py_src is None:
               print("ERROR: Python framework binary not found under", libroot)
               sys.exit(1)
+
           pyf = os.path.join(fwdir, "Python.framework")
-          os.makedirs(os.path.join(pyf, "Versions", "A"), exist_ok=True)
-          py_bin = os.path.join(pyf, "Versions", "A", "Python")
-          if not os.path.exists(py_bin):
-              shutil.copy2(py_src, py_bin)
+          # 缓存复用场景下这里可能残留上一版的 Versions/A + 软链布局，
+          # copy2 会顺着软链写进去，所以先整个清掉，保证幂等。
+          if os.path.isdir(pyf):
+              shutil.rmtree(pyf, ignore_errors=True)
+          os.makedirs(pyf, exist_ok=True)
+          py_bin = os.path.join(pyf, "Python")
+          shutil.copy2(py_src, py_bin)
           os.chmod(py_bin, 0o755)
-          for link, tgt in (("Python", "Versions/A/Python"), ("Versions/Current", "A")):
-              lp = os.path.join(pyf, link)
-              if os.path.islink(lp) or os.path.exists(lp):
-                  os.remove(lp)
-              os.symlink(tgt, lp)
           subprocess.run(["install_name_tool", "-id", "@rpath/Python.framework/Python", py_bin],
                          check=False)
+
+          # Info.plist：优先照抄官方那份；拿不到就按 FMWK 模板生成。
+          py_plist = os.path.join(pyf, "Info.plist")
+          official = os.path.join(os.path.dirname(py_src), "Info.plist")
+          if os.path.isfile(official):
+              shutil.copy2(official, py_plist)
+              print("   Python.framework/Info.plist <- official")
+          else:
+              with open(py_plist, "wb") as fh:
+                  plistlib.dump({
+                      "CFBundleDevelopmentRegion": "en",
+                      "CFBundleExecutable": "Python",
+                      "CFBundleIdentifier": "org.python.python",
+                      "CFBundleInfoDictionaryVersion": "6.0",
+                      "CFBundleName": "Python",
+                      "CFBundlePackageType": "FMWK",
+                      "CFBundleShortVersionString": PY_VER,
+                      "CFBundleVersion": PY_VER,
+                      "CFBundleSupportedPlatforms": ["iPhoneOS"],
+                      "MinimumOSVersion": "13.0",
+                  }, fh)
+              print("   Python.framework/Info.plist <- generated (FMWK template)")
           print("   Python.framework (src %s) -> Frameworks/Python.framework, %d bytes"
                 % (py_src, os.path.getsize(py_bin)))
 
@@ -1544,6 +1587,97 @@ jobs:
           echo "--- python lib-dynload count ---"
           ls "$APP/Assets/5.1/python/lib/python3.13/lib-dynload" 2>/dev/null | wc -l
           du -sh "$APP"
+
+      - name: Validate app bundle is installable
+        if: steps.cmake_config.outcome == 'success'
+        run: |
+          cd blender
+          APP=$(find build_ios -name "Blender.app" -type d | head -1)
+          python3 - "$APP" <<'PYEOF'
+          import os, plistlib, sys
+
+          app = sys.argv[1]
+          bad = 0
+
+          # 1) 顶层 Info.plist
+          top = os.path.join(app, "Info.plist")
+          if not os.path.isfile(top):
+              print("::error::Blender.app has no Info.plist")
+              bad += 1
+          else:
+              p = plistlib.load(open(top, "rb"))
+              print("  app: %s  %s  minOS=%s"
+                    % (p.get("CFBundleIdentifier"), p.get("CFBundleShortVersionString"),
+                       p.get("MinimumOSVersion")))
+              exe = p.get("CFBundleExecutable")
+              if not exe or not os.path.isfile(os.path.join(app, exe)):
+                  print("::error::CFBundleExecutable %r missing" % exe)
+                  bad += 1
+
+          # 2) Frameworks/ 下每个 .framework 必须有 Info.plist，
+          #    且 CFBundleExecutable 指向的文件真实存在 —— 这正是 installd
+          #    装不上时的原始报错来源。
+          fwdir = os.path.join(app, "Frameworks")
+          if os.path.isdir(fwdir):
+              for name in sorted(os.listdir(fwdir)):
+                  fw = os.path.join(fwdir, name)
+                  if not (os.path.isdir(fw) and name.endswith(".framework")):
+                      continue
+                  pl = os.path.join(fw, "Info.plist")
+                  if not os.path.isfile(pl):
+                      print("::error::%s: missing Info.plist" % fw)
+                      bad += 1
+                      continue
+                  try:
+                      p = plistlib.load(open(pl, "rb"))
+                  except Exception as e:
+                      print("::error::%s: Info.plist unparsable (%s)" % (fw, e))
+                      bad += 1
+                      continue
+                  exe = p.get("CFBundleExecutable")
+                  binp = os.path.join(fw, exe or "\x00")
+                  if not exe or not os.path.isfile(binp):
+                      print("::error::%s: CFBundleExecutable %r missing on disk" % (fw, exe))
+                      bad += 1
+                      continue
+                  if p.get("CFBundlePackageType") != "FMWK":
+                      print("::warning::%s: CFBundlePackageType=%r (expect FMWK)"
+                            % (name, p.get("CFBundlePackageType")))
+                  if not os.access(binp, os.X_OK):
+                      print("::warning::%s: %s is not executable" % (name, exe))
+                  print("  framework OK: %s/%s  id=%s  minOS=%s"
+                        % (name, exe, p.get("CFBundleIdentifier"),
+                           p.get("MinimumOSVersion")))
+
+          # 3) 不允许出现断链（zip 打包后软链可能失效）
+          for root, dirs, files in os.walk(app):
+              for n in dirs + files:
+                  p = os.path.join(root, n)
+                  if os.path.islink(p) and not os.path.exists(p):
+                      print("::error::broken symlink: %s" % p)
+                      bad += 1
+
+          # 4) Python 标准库与静态模块表
+          pylib = os.path.join(app, "Assets", "5.1", "python", "lib", "python3.13")
+          if not os.path.isfile(os.path.join(pylib, "os.py")):
+              print("::error::python stdlib missing at %s" % pylib)
+              bad += 1
+          dyn = os.path.join(pylib, "lib-dynload")
+          n = len(os.listdir(dyn)) if os.path.isdir(dyn) else 0
+          print("  lib-dynload modules: %d" % n)
+          if n < 20:
+              print("::error::lib-dynload looks empty (%d)" % n)
+              bad += 1
+          if not os.path.isfile(os.path.join(pylib, "Modules", "Setup.local")):
+              print("::warning::Modules/Setup.local missing (Py_Initialize may abort)")
+          else:
+              print("  Modules/Setup.local: present")
+
+          if bad:
+              print("::error::bundle validation failed with %d problem(s)" % bad)
+              sys.exit(1)
+          print("bundle validation: OK")
+          PYEOF
 
       - name: Package unsigned IPA
         if: steps.cmake_config.outcome == 'success'
