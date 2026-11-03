@@ -1676,6 +1676,85 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             HOME="$HOME"
 
+      - name: Repair LFS stubs left in the cached app's Assets
+        run: |
+          cd blender
+          APP="build_ios/bin/Release/Blender.app"
+          if [ ! -d "$APP" ]; then
+            APP=$(find build_ios -path "build_ios/IPA" -prune -o -name "Blender.app" -type d -print | head -1)
+          fi
+          SCRIPTS=scripts
+          [ -d "$SCRIPTS/startup" ] || SCRIPTS=release/scripts
+          echo "app: $APP"
+          echo "scripts source: $SCRIPTS"
+
+          # 为什么需要这一步：
+          #   iOS 的 Blender.app/Assets 由三处 install 规则拼成（release/ios/Blender.app/Assets、
+          #   release/datafiles、scripts）。缓存里的 app 是从上一轮带回来的，而 CMake 的
+          #   install(DIRECTORY) 对"目标已存在"的文件会静默跳过，于是旧轮次留下的 130 字节
+          #   LFS 指针就一直躺在包里，源树明明已经还原干净也没用（#286：223 → 32 个残留）。
+          #   这里以源树为准，把 app 里仍是指针的资产就地替换；替换不了就立刻失败，
+          #   绝不让"格式不对的空壳"进到 IPA。
+          python3 - "$APP" "$SCRIPTS" <<'PYSYNC'
+          import os
+          import sys
+
+          app, scripts = sys.argv[1], sys.argv[2]
+          assets = os.path.join(app, "Assets")
+          if not os.path.isdir(assets):
+              sys.exit("::error::app has no Assets dir: " + assets)
+
+          # 前缀 → 源目录。""  放最后，否则会抢走所有匹配。
+          roots = [
+              ("5.1/datafiles/", "release/datafiles"),
+              ("5.1/scripts/", scripts),
+              ("", "release/ios/Blender.app/Assets"),
+          ]
+
+          MARK = b"version https://git-lfs"
+
+
+          def is_pointer(path):
+              try:
+                  if os.path.getsize(path) > 300:
+                      return False
+                  with open(path, "rb") as fh:
+                      return fh.read(40).startswith(MARK)
+              except OSError:
+                  return False
+
+
+          fixed, missing = 0, []
+          for root, _dirs, files in os.walk(assets):
+              for name in files:
+                  dst = os.path.join(root, name)
+                  if not is_pointer(dst):
+                      continue
+                  rel = os.path.relpath(dst, assets).replace(os.sep, "/")
+                  src = None
+                  for prefix, srcdir in roots:
+                      if rel.startswith(prefix):
+                          cand = os.path.join(srcdir, rel[len(prefix):])
+                          if os.path.isfile(cand) and not is_pointer(cand):
+                              src = cand
+                              break
+                  if src is None:
+                      missing.append(rel)
+                      continue
+                  with open(src, "rb") as fh:
+                      data = fh.read()
+                  with open(dst, "wb") as fh:
+                      fh.write(data)
+                  fixed += 1
+
+          print("assets repaired from source: %d" % fixed)
+          if missing:
+              for one in missing[:15]:
+                  print("::error::cannot repair %s (source missing or still a pointer)" % one)
+              print("::error::%d assets left as LFS stubs" % len(missing))
+              sys.exit(1)
+          PYSYNC
+
       - name: Embed iOS dylibs into app bundle
         if: steps.cmake_config.outcome == 'success'
         run: |
