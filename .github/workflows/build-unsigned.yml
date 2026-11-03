@@ -129,7 +129,10 @@ jobs:
         id: cache-build
         uses: actions/cache/restore@v4
         with:
-          path: blender/build_ios
+          path: |
+            blender/build_ios
+            !blender/build_ios/IPA
+            !blender/build_ios/Blender.ipa
           key: ios-build-v1-${{ steps.src.outputs.sha }}-${{ github.run_id }}
           restore-keys: |
             ios-build-v1-${{ steps.src.outputs.sha }}-
@@ -1714,18 +1717,32 @@ jobs:
         if: steps.cmake_config.outcome == 'success'
         run: |
           cd blender/build_ios
-          APP=$(find . -name "Blender.app" -type d | head -1)
+          # 增量缓存会把上一轮打好的 IPA/ 一起带回来（含 586MB 的 Payload）。
+          # 不清掉的话 find 先命中 ./IPA/Payload/Blender.app，接着
+          #   cp -r ./IPA/Payload/Blender.app IPA/Payload/
+          # 源 = 目的地，cp 直接报
+          #   cp: ... and ... are identical (not copied). exit 1
+          rm -rf IPA Blender.ipa
+          APP=$(find . -path ./IPA -prune -o -name "Blender.app" -type d -print | head -1)
           if [ -z "$APP" ]; then
             echo "ERROR: Blender.app not found!"
             find . -name "*.app" -type d
             exit 1
           fi
           echo "Found app at: $APP"
+          if [ ! -f "$APP/Frameworks/Python.framework/Info.plist" ]; then
+            echo "::error::$APP/Frameworks/Python.framework/Info.plist missing - package would not install"
+            exit 1
+          fi
           du -sh "$APP"
           mkdir -p IPA/Payload
-          cp -r "$APP" IPA/Payload/
-          cd IPA && zip -r ../Blender.ipa Payload/ && cd ..
+          cp -R "$APP" IPA/Payload/
+          cd IPA && zip -qry ../Blender.ipa Payload/ && cd ..
           ls -lh Blender.ipa
+          unzip -l Blender.ipa | grep -E "Python.framework/(Python|Info.plist)" || {
+            echo "::error::Python.framework incomplete inside the IPA"
+            exit 1
+          }
 
       - name: Upload IPA
         if: steps.cmake_config.outcome == 'success'
@@ -1796,5 +1813,8 @@ jobs:
         if: always() && steps.cachesave.outputs.save == 'true'
         uses: actions/cache/save@v4
         with:
-          path: blender/build_ios
+          path: |
+            blender/build_ios
+            !blender/build_ios/IPA
+            !blender/build_ios/Blender.ipa
           key: ios-build-v1-${{ steps.src.outputs.sha }}-${{ github.run_id }}
