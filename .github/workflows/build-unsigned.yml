@@ -91,6 +91,12 @@ jobs:
           #   2) 官方包不含的那几个（preview.blend / splash.png / 旧图标等）用 LFS
           #      batch 按 oid 逐个取回。
           # 只覆盖"当前是 LFS 指针"的文件，源码里本来就正常的资源不碰。
+          #
+          # 范围必须覆盖 ios 分支的**三处**来源，少一处就会漏：
+          #   release/datafiles                     → Assets/5.1/datafiles/*（ICC/图标/studio light）
+          #   release/ios/Blender.app/Assets        → Assets/*.pdf、blender_icon.icns（cursor 图）
+          #   scripts/（或 release/scripts/）        → Assets/5.1/scripts/*（含 App 模板 startup.blend）
+          # #280 就是只扫了第一处，包里留下 222 个 Assets/*.pdf 指针。
           VER=5.1.2
           PKG="blender-${VER}-linux-x64"
           URL="https://download.blender.org/release/Blender${VER%.*}/${PKG}.tar.xz"
@@ -196,7 +202,7 @@ jobs:
           #
           # 用 LFS batch 协议直接按 oid 取对象（不用 git lfs，省得再依赖本地
           # LFS 配置）。之前那次 422 是请求体格式不对，按规范补上 size 就能取。
-          python3 - release/datafiles "$SCRIPTS" <<'PYLFS'
+          python3 - release/datafiles release/ios "$SCRIPTS" <<'PYLFS'
           import hashlib
           import json
           import os
@@ -307,11 +313,11 @@ jobs:
           PYLFS
 
           remain=$(grep -rl "^version https://git-lfs.github.com/spec" \
-                   release/datafiles "$SCRIPTS" 2>/dev/null | wc -l | tr -d ' ')
+                   release/datafiles release/ios "$SCRIPTS" 2>/dev/null | wc -l | tr -d ' ')
           echo "remaining LFS pointers: $remain"
           if [ "$remain" != "0" ]; then
             echo "::error::$remain LFS pointers left - build inputs would be empty stubs"
-            grep -rl "^version https://git-lfs.github.com/spec" release/datafiles "$SCRIPTS" | head -10
+            grep -rl "^version https://git-lfs.github.com/spec" release/datafiles release/ios "$SCRIPTS" | head -10
             exit 1
           fi
 
@@ -319,6 +325,7 @@ jobs:
           for crit in release/datafiles/colormanagement/icc \
                       release/datafiles/icons \
                       release/datafiles/studiolights \
+                      release/ios/Blender.app/Assets \
                       "$TPLDST"; do
             if [ ! -d "$crit" ]; then
               echo "::error::critical asset dir missing: $crit"
@@ -1627,23 +1634,6 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             ARCHS=arm64 \
             HOME="$HOME"
-
-      - name: Purge stale installed assets from cached app
-        run: |
-          cd blender
-          # 缓存带回来的 Blender.app/Assets 是上一轮构建装好的副本。datafiles 还原用
-          # shutil.copy2（保留官方包里的旧 mtime），而 "Normalize source mtimes" 又把源文件
-          # 统一 touch 到 2020-01-01 —— CMake 的 file(INSTALL) 比较时间戳后认为"目标更新"，
-          # 直接跳过，于是 130 字节的空壳指针被原样带进 IPA（#280 就是这么挂的：
-          # 源树 remain=0，包里却有 222 个 Assets/*.pdf 指针）。
-          # 删掉已安装的 Assets，让 install 阶段无条件重铺一遍。
-          n=0
-          for d in $(find build_ios -type d -path "*Blender.app/Assets" 2>/dev/null); do
-            echo "purge $d"
-            rm -rf "$d"
-            n=$((n + 1))
-          done
-          echo "purged $n installed Assets dir(s)"
 
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
