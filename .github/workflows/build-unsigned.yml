@@ -189,50 +189,128 @@ jobs:
           print("app templates restored: %d" % m)
           PYRESTORE
 
-          # 官方 Linux 包不含的文件（macOS 专属，或上游已废弃、包里早就没有的旧
-          # 资源）还原不了。留着比删掉更糟：130 字节的指针文本会被当成 .dat /
-          # .blend 去解析。Blender 对"文件不存在"有兜底，对"文件损坏"没有。
-          # 所以剩下的指针一律删掉。
-          # blender_icon.icns 例外：iOS 不认 .icns，但它可能被 CMake 的显式
-          # install() 引用，删了会让 install 阶段报"找不到文件"。留个指针无害。
-          left=$(grep -rl "^version https://git-lfs.github.com/spec" \
-                  release/datafiles "$SCRIPTS" 2>/dev/null \
-                  | grep -v "blender_icon\\.icns" || true)
-          if [ -n "$left" ]; then
-            # icons/*.dat 是被 CMake 的显式 install(FILES ...) 逐个安装的，直接删会
-            # 让 install 阶段报"找不到文件"。拿同目录一个正常的 .dat 顶上：内容
-            # 不对（顶多是这个图标画错），但格式合法，比 130 字节文本安全得多。
-            DONOR=""
-            for f in release/datafiles/icons/*.dat; do
-              [ -f "$f" ] || continue
-              if [ "$(wc -c < "$f")" -gt 200 ]; then DONOR="$f"; break; fi
-            done
-            echo "--- 官方包不含的残留指针 ---"
-            printf '%s\n' "$left" | while IFS= read -r f; do
-              [ -n "$f" ] || continue
-              case "$f" in
-                */icons/*.dat)
-                  if [ -n "$DONOR" ]; then
-                    cp -f "$DONOR" "$f"
-                    echo "  placeholder: $f"
-                  else
-                    echo "::warning::no donor .dat for $f"
-                  fi
-                  ;;
-                *)
-                  echo "  removed: $f"
-                  rm -f "$f"
-                  ;;
-              esac
-            done
-          fi
+                    # 官方 Linux 包不含的那几个（preview.blend / splash.png / 旧图标 /
+          # blender_icon.icns）在这里补齐。这些不能删：preview.blend 是
+          # bf_editor_datafiles 的 PhaseScriptExecution 输入，要被 datatoc 编成
+          # .c；少了它构建直接 "Unable to open input"（#273 就是这么挂的）。
+          #
+          # 用 LFS batch 协议直接按 oid 取对象（不用 git lfs，省得再依赖本地
+          # LFS 配置）。之前那次 422 是请求体格式不对，按规范补上 size 就能取。
+          python3 - release/datafiles "$SCRIPTS" <<'PYLFS'
+          import hashlib
+          import json
+          import os
+          import sys
+          import time
+          import urllib.request
+
+          LFS_BATCH = ("https://projects.blender.org/blender/blender.git"
+                       "/info/lfs/objects/batch")
+          CHUNK = 40
+
+
+          def collect(roots):
+              """扫出所有仍是指针的文件，连同它声明的 oid / size。"""
+              found = []
+              for top in roots:
+                  for root, _dirs, files in os.walk(top):
+                      for name in files:
+                          path = os.path.join(root, name)
+                          try:
+                              if os.path.getsize(path) > 300:
+                                  continue
+                              with open(path, "rb") as fh:
+                                  head = fh.read(200).decode("utf-8", "replace")
+                          except OSError:
+                              continue
+                          if not head.startswith("version https://git-lfs"):
+                              continue
+                          oid = size = None
+                          for line in head.splitlines():
+                              if line.startswith("oid sha256:"):
+                                  oid = line.split(":", 1)[1].strip()
+                              elif line.startswith("size "):
+                                  try:
+                                      size = int(line.split()[1])
+                                  except (IndexError, ValueError):
+                                      size = None
+                          if oid and size is not None:
+                              found.append((path, oid, size))
+              return found
+
+
+          def batch(objs):
+              body = json.dumps({
+                  "operation": "download",
+                  "transfers": ["basic"],
+                  "objects": [{"oid": o, "size": s} for _p, o, s in objs],
+              }).encode()
+              req = urllib.request.Request(LFS_BATCH, data=body, headers={
+                  "Accept": "application/vnd.git-lfs+json",
+                  "Content-Type": "application/vnd.git-lfs+json",
+              })
+              with urllib.request.urlopen(req, timeout=60) as resp:
+                  return json.loads(resp.read().decode())
+
+
+          def download(href, path, oid, size):
+              for attempt in range(4):
+                  try:
+                      req = urllib.request.Request(
+                          href, headers={"Accept": "application/vnd.git-lfs+json"})
+                      with urllib.request.urlopen(req, timeout=300) as resp:
+                          data = resp.read()
+                      if len(data) != size:
+                          raise RuntimeError("size %d != %d" % (len(data), size))
+                      if hashlib.sha256(data).hexdigest() != oid:
+                          raise RuntimeError("sha256 mismatch")
+                      os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                      with open(path, "wb") as fh:
+                          fh.write(data)
+                      return True
+                  except Exception as exc:            # noqa: BLE001 - 网络抖动都重试
+                      print("  retry %d/4 %s (%s)" % (attempt + 1, path, exc))
+                      time.sleep(3 * (attempt + 1))
+              return False
+
+
+          todo = collect(sys.argv[1:])
+          print("LFS pointers to fetch: %d" % len(todo))
+          done = 0
+          failed = []
+          for k in range(0, len(todo), CHUNK):
+              part = todo[k:k + CHUNK]
+              try:
+                  reply = batch(part)
+              except Exception as exc:               # noqa: BLE001
+                  print("  batch request failed: %s" % exc)
+                  failed.extend(p for p, _o, _s in part)
+                  continue
+              hrefs = {o.get("oid"): (o.get("actions") or {}).get("download", {}).get("href")
+                       for o in reply.get("objects", [])}
+              for path, oid, size in part:
+                  href = hrefs.get(oid)
+                  if not href:
+                      print("  no download action for %s" % path)
+                      failed.append(path)
+                      continue
+                  if download(href, path, oid, size):
+                      done += 1
+                  else:
+                      failed.append(path)
+          print("restored via LFS: %d" % done)
+          if failed:
+              print("::error::%d LFS object(s) could not be fetched" % len(failed))
+              for p in failed[:10]:
+                  print((" " * 10) + p)
+              sys.exit(1)
+          PYLFS
 
           remain=$(grep -rl "^version https://git-lfs.github.com/spec" \
-                   release/datafiles "$SCRIPTS" 2>/dev/null \
-                   | grep -v "blender_icon\\.icns" | wc -l | tr -d ' ')
+                   release/datafiles "$SCRIPTS" 2>/dev/null | wc -l | tr -d ' ')
           echo "remaining LFS pointers: $remain"
           if [ "$remain" != "0" ]; then
-            echo "::error::$remain LFS pointers survived the cleanup"
+            echo "::error::$remain LFS pointers left - build inputs would be empty stubs"
             grep -rl "^version https://git-lfs.github.com/spec" release/datafiles "$SCRIPTS" | head -10
             exit 1
           fi
