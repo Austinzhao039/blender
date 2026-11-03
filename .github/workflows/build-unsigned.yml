@@ -1628,6 +1628,23 @@ jobs:
             ARCHS=arm64 \
             HOME="$HOME"
 
+      - name: Purge stale installed assets from cached app
+        run: |
+          cd blender
+          # 缓存带回来的 Blender.app/Assets 是上一轮构建装好的副本。datafiles 还原用
+          # shutil.copy2（保留官方包里的旧 mtime），而 "Normalize source mtimes" 又把源文件
+          # 统一 touch 到 2020-01-01 —— CMake 的 file(INSTALL) 比较时间戳后认为"目标更新"，
+          # 直接跳过，于是 130 字节的空壳指针被原样带进 IPA（#280 就是这么挂的：
+          # 源树 remain=0，包里却有 222 个 Assets/*.pdf 指针）。
+          # 删掉已安装的 Assets，让 install 阶段无条件重铺一遍。
+          n=0
+          for d in $(find build_ios -type d -path "*Blender.app/Assets" 2>/dev/null); do
+            echo "purge $d"
+            rm -rf "$d"
+            n=$((n + 1))
+          done
+          echo "purged $n installed Assets dir(s)"
+
       - name: Build Blender.app for iOS
         if: steps.cmake_config.outcome == 'success'
         run: |
@@ -1986,32 +2003,39 @@ jobs:
         run: |
           cd blender
           APP=$(find build_ios -name "Blender.app" -type d | head -1)
+          if [ -z "$APP" ]; then echo "::error::Blender.app not found"; exit 1; fi
+          echo "app bundle: $APP"
           python3 - "$APP" <<'PYEOF'
-          import os, plistlib, sys
+          import os
+          import plistlib
+          import sys
 
           app = sys.argv[1]
           bad = 0
 
-          # 1) 顶层 Info.plist。p 后面几步还要复用，先无条件建个空字典兜底，
-          #    免得 plist 缺失时抛 NameError 把真实报错盖掉。
-          p = {}
+
+          def err(msg):
+              global bad
+              print("::error::" + msg)
+              bad += 1
+
+
+          # 1) 顶层 Info.plist
+          info = {}
           top = os.path.join(app, "Info.plist")
           if not os.path.isfile(top):
-              print("::error::Blender.app has no Info.plist")
-              bad += 1
+              err("Blender.app has no Info.plist")
           else:
-              p = plistlib.load(open(top, "rb"))
+              info = plistlib.load(open(top, "rb"))
               print("  app: %s  %s  minOS=%s"
-                    % (p.get("CFBundleIdentifier"), p.get("CFBundleShortVersionString"),
-                       p.get("MinimumOSVersion")))
-              exe = p.get("CFBundleExecutable")
+                    % (info.get("CFBundleIdentifier"),
+                       info.get("CFBundleShortVersionString"),
+                       info.get("MinimumOSVersion")))
+              exe = info.get("CFBundleExecutable")
               if not exe or not os.path.isfile(os.path.join(app, exe)):
-                  print("::error::CFBundleExecutable %r missing" % exe)
-                  bad += 1
+                  err("CFBundleExecutable %r missing" % exe)
 
-          # 2) Frameworks/ 下每个 .framework 必须有 Info.plist，
-          #    且 CFBundleExecutable 指向的文件真实存在 —— 这正是 installd
-          #    装不上时的原始报错来源。
+          # 2) Frameworks/*.framework：installd 会逐个校验，缺 Info.plist 直接拒装
           fwdir = os.path.join(app, "Frameworks")
           if os.path.isdir(fwdir):
               for name in sorted(os.listdir(fwdir)):
@@ -2020,98 +2044,88 @@ jobs:
                       continue
                   pl = os.path.join(fw, "Info.plist")
                   if not os.path.isfile(pl):
-                      print("::error::%s: missing Info.plist" % fw)
-                      bad += 1
+                      err("%s: missing Info.plist" % name)
                       continue
                   try:
-                      p = plistlib.load(open(pl, "rb"))
-                  except Exception as e:
-                      print("::error::%s: Info.plist unparsable (%s)" % (fw, e))
-                      bad += 1
+                      fwinfo = plistlib.load(open(pl, "rb"))
+                  except Exception as exc:                      # noqa: BLE001
+                      err("%s: Info.plist unparsable (%s)" % (name, exc))
                       continue
-                  exe = p.get("CFBundleExecutable")
-                  binp = os.path.join(fw, exe or "\x00")
-                  if not exe or not os.path.isfile(binp):
-                      print("::error::%s: CFBundleExecutable %r missing on disk" % (fw, exe))
-                      bad += 1
+                  fexe = fwinfo.get("CFBundleExecutable")
+                  binp = os.path.join(fw, fexe or "\x00")
+                  if not fexe or not os.path.isfile(binp):
+                      err("%s: CFBundleExecutable %r missing on disk" % (name, fexe))
                       continue
-                  if p.get("CFBundlePackageType") != "FMWK":
+                  if fwinfo.get("CFBundlePackageType") != "FMWK":
                       print("::warning::%s: CFBundlePackageType=%r (expect FMWK)"
-                            % (name, p.get("CFBundlePackageType")))
+                            % (name, fwinfo.get("CFBundlePackageType")))
                   if not os.access(binp, os.X_OK):
-                      print("::warning::%s: %s is not executable" % (name, exe))
+                      print("::warning::%s: %s is not executable" % (name, fexe))
                   print("  framework OK: %s/%s  id=%s  minOS=%s"
-                        % (name, exe, p.get("CFBundleIdentifier"),
-                           p.get("MinimumOSVersion")))
+                        % (name, fexe, fwinfo.get("CFBundleIdentifier"),
+                           fwinfo.get("MinimumOSVersion")))
 
-          # 3) 不允许出现断链（zip 打包后软链可能失效）
+          # 3) 不允许断链（打包成 zip 后软链可能失效）
           for root, dirs, files in os.walk(app):
-              for n in dirs + files:
-                  p = os.path.join(root, n)
-                  if os.path.islink(p) and not os.path.exists(p):
-                      print("::error::broken symlink: %s" % p)
-                      bad += 1
+              for entry in dirs + files:
+                  path = os.path.join(root, entry)
+                  if os.path.islink(path) and not os.path.exists(path):
+                      err("broken symlink: %s" % os.path.relpath(path, app))
 
           # 4) Python 标准库与静态模块表
           pylib = os.path.join(app, "Assets", "5.1", "python", "lib", "python3.13")
           if not os.path.isfile(os.path.join(pylib, "os.py")):
-              print("::error::python stdlib missing at %s" % pylib)
-              bad += 1
+              err("python stdlib missing at %s" % pylib)
           dyn = os.path.join(pylib, "lib-dynload")
-          n = len(os.listdir(dyn)) if os.path.isdir(dyn) else 0
-          print("  lib-dynload modules: %d" % n)
-          if n < 20:
-              print("::error::lib-dynload looks empty (%d)" % n)
-              bad += 1
+          nmod = len(os.listdir(dyn)) if os.path.isdir(dyn) else 0
+          print("  lib-dynload modules: %d" % nmod)
+          if nmod < 20:
+              err("lib-dynload looks empty (%d)" % nmod)
           if not os.path.isfile(os.path.join(pylib, "Modules", "Setup.local")):
               print("::warning::Modules/Setup.local missing (Py_Initialize may abort)")
           else:
               print("  Modules/Setup.local: present")
 
-          # 3) LFS 空壳：clone 时 GIT_LFS_SKIP_SMUDGE=1，漏拉就会留下 130 字节
-          #    的指针文件。ICC 缺失会让 OCIO 初始化 throw，启动即退。
-          lfs_ptr = []
-          for root, _dirs, files in os.walk(os.path.join(app, "Assets")):
-              for f in files:
-                  if f == "blender_icon.icns":
-                      continue          # iOS 不认 .icns，由前面那步生成 PNG 顶替
-                  fp = os.path.join(root, f)
-                  if os.path.getsize(fp) > 200:
-                      continue
+          # 5) LFS 空壳：130 字节的指针文本会被当 .icc/.dat 解析，OCIO 直接 throw。
+          #    注意源树被还原干净还不够 —— 缓存里旧 Blender.app/Assets 的副本也得清掉。
+          assets = os.path.join(app, "Assets")
+          ptr = []
+          for root, _dirs, files in os.walk(assets):
+              for name in files:
+                  path = os.path.join(root, name)
                   try:
-                      with open(fp, "rb") as fh:
+                      if os.path.getsize(path) > 200:
+                          continue
+                      with open(path, "rb") as fh:
                           if fh.read(40).startswith(b"version https://git-lfs"):
-                              lfs_ptr.append(os.path.relpath(fp, app))
+                              ptr.append(os.path.relpath(path, app))
                   except OSError:
                       pass
-          print("  LFS pointer files: %d" % len(lfs_ptr))
-          if lfs_ptr:
-              for x in lfs_ptr[:10]:
-                  print("::error::LFS pointer (empty asset): %s" % x)
-              bad += 1
+          print("  LFS pointer files: %d" % len(ptr))
+          if ptr:
+              for one in ptr[:10]:
+                  err("LFS pointer (empty asset): %s" % one)
+              if len(ptr) > 10:
+                  print("::error::... and %d more" % (len(ptr) - 10))
 
-          # 4) 启动画面：UILaunchStoryboardName 指向的目录必须存在，否则黑屏
-          launch_sb = p.get("UILaunchStoryboardName")
-          if launch_sb:
-              d = os.path.join(app, launch_sb + ".storyboardc")
-              if not os.path.isdir(d):
-                  print("::error::UILaunchStoryboardName=%r but %s missing (black launch screen)"
-                        % (launch_sb, os.path.basename(d)))
-                  bad += 1
-          elif "UILaunchScreen" not in p:
-              print("::warning::no launch screen declared (UILaunchScreen / UILaunchStoryboardName)")
+          # 6) 启动画面：UILaunchStoryboardName 指向的 .storyboardc 必须真存在
+          launch = info.get("UILaunchStoryboardName")
+          if launch:
+              sb = os.path.join(app, launch + ".storyboardc")
+              if not os.path.isdir(sb):
+                  err("UILaunchStoryboardName=%r but %s missing (black launch screen)"
+                      % (launch, os.path.basename(sb)))
+          elif "UILaunchScreen" not in info:
+              print("::warning::no launch screen declared")
 
-          # 5) 图标：iOS 不认 .icns，必须有 CFBundleIcons + PNG
-          icons = p.get("CFBundleIcons") or p.get("CFBundleIcons~ipad")
-          print("  CFBundleIcons: %s" % ("present" if icons else "MISSING"))
+          # 7) 图标：iOS 不认 .icns，必须有 CFBundleIcons + 散装 PNG
+          icons = info.get("CFBundleIcons") or info.get("CFBundleIcons~ipad")
           if not icons:
-              print("::error::CFBundleIcons missing - SpringBoard shows no icon")
-              bad += 1
+              err("CFBundleIcons missing - SpringBoard shows no icon")
           else:
-              for name in ("AppIcon60x60@2x.png", "AppIcon60x60@3x.png"):
-                  if not os.path.isfile(os.path.join(app, name)):
-                      print("::error::app icon %s missing" % name)
-                      bad += 1
+              for key in ("AppIcon60x60@2x.png", "AppIcon60x60@3x.png"):
+                  if not os.path.isfile(os.path.join(app, key)):
+                      err("app icon %s missing" % key)
               print("  app icon png: present")
 
           if bad:
