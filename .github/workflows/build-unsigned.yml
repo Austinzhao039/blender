@@ -85,12 +85,11 @@ jobs:
       - name: Restore datafiles from official Blender release
         run: |
           cd blender
-          # clone 用了 GIT_LFS_SKIP_SMUDGE=1，release/datafiles 下有近 200 个文件
-          # 只剩 130 字节的指针文本。projects.blender.org 的 LFS batch 接口对这些
-          # oid 一律回 {"code":422,"message":"Oid or size are invalid"}，git lfs pull
-          # 也拿不到 —— 对象根本不在可公开下载的 LFS 存储里。
-          #
-          # 改从官方 5.1.2 发行包提取同名文件：官方包就是从同一份源码打的。
+          # clone 用了 GIT_LFS_SKIP_SMUDGE=1，release/datafiles 下近 200 个文件只剩
+          # 130 字节的指针文本。两段式补齐，兼顾速度和完整性：
+          #   1) 官方 5.1.2 发行包（~380MB，一次下载）覆盖同名文件 —— 量大、走 CDN；
+          #   2) 官方包不含的那几个（preview.blend / splash.png / 旧图标等）用 LFS
+          #      batch 按 oid 逐个取回。
           # 只覆盖"当前是 LFS 指针"的文件，源码里本来就正常的资源不碰。
           VER=5.1.2
           PKG="blender-${VER}-linux-x64"
@@ -189,8 +188,9 @@ jobs:
           print("app templates restored: %d" % m)
           PYRESTORE
 
-                    # 官方 Linux 包不含的那几个（preview.blend / splash.png / 旧图标 /
-          # blender_icon.icns）在这里补齐。这些不能删：preview.blend 是
+          # 官方 Linux 包不含的那几个（preview.blend / splash.png / 旧图标 .dat /
+          # DejaVuSans-Lite.sfd.bz2 / icons_blend/toolbar.blend）在这里补齐。
+          # 这些不能删：preview.blend 是
           # bf_editor_datafiles 的 PhaseScriptExecution 输入，要被 datatoc 编成
           # .c；少了它构建直接 "Unable to open input"（#273 就是这么挂的）。
           #
