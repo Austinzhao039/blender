@@ -199,9 +199,32 @@ jobs:
                   release/datafiles "$SCRIPTS" 2>/dev/null \
                   | grep -v "blender_icon\\.icns" || true)
           if [ -n "$left" ]; then
-            echo "--- 官方包不含、已删除的残留指针 ---"
-            echo "$left" | head -20 | sed 's/^/  /'
-            echo "$left" | tr '\n' '\0' | xargs -0 rm -f
+            # icons/*.dat 是被 CMake 的显式 install(FILES ...) 逐个安装的，直接删会
+            # 让 install 阶段报"找不到文件"。拿同目录一个正常的 .dat 顶上：内容
+            # 不对（顶多是这个图标画错），但格式合法，比 130 字节文本安全得多。
+            DONOR=""
+            for f in release/datafiles/icons/*.dat; do
+              [ -f "$f" ] || continue
+              if [ "$(wc -c < "$f")" -gt 200 ]; then DONOR="$f"; break; fi
+            done
+            echo "--- 官方包不含的残留指针 ---"
+            printf '%s\n' "$left" | while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              case "$f" in
+                */icons/*.dat)
+                  if [ -n "$DONOR" ]; then
+                    cp -f "$DONOR" "$f"
+                    echo "  placeholder: $f"
+                  else
+                    echo "::warning::no donor .dat for $f"
+                  fi
+                  ;;
+                *)
+                  echo "  removed: $f"
+                  rm -f "$f"
+                  ;;
+              esac
+            done
           fi
 
           remain=$(grep -rl "^version https://git-lfs.github.com/spec" \
