@@ -414,6 +414,15 @@ jobs:
             echo "no cached objects - this run will build everything"
           fi
 
+      - name: Drop stale IPA left by an older cache
+        run: |
+          # save 时的 "!blender/build_ios/IPA" 只管"写"，管不了"读"：restore-keys 一旦
+          # 回退到更老的缓存，上一轮打好的 IPA/（含整个旧 Blender.app）就跟着回来了。
+          # 不清掉的话 find 会命中它 —— #285 就是这么把校验搞崩的。
+          rm -rf blender/build_ios/IPA blender/build_ios/Blender.ipa
+          echo "build_ios now:"
+          ls -1 blender/build_ios | sed 's/^/  /'
+
       - name: Cache iOS libraries
         id: cache-ios
         uses: actions/cache@v4
@@ -1671,7 +1680,14 @@ jobs:
         if: steps.cmake_config.outcome == 'success'
         run: |
           cd blender
-          APP=$(find build_ios -name "Blender.app" -type d | head -1)
+          # 只认这次真正构建出来的 app。缓存 restore-keys 会回退匹配到更老的
+          # ios-build-v1-<sha>-*，而那里面带着上一轮的 build_ios/IPA/Payload/Blender.app。
+          # find 按目录遍历顺序会先命中 "IPA"（大写排在小写前），于是嵌 dylib / 校验
+          # 全部作用在旧产物上，报出一堆早已修好的错（#285）。
+          APP="build_ios/bin/Release/Blender.app"
+          if [ ! -d "$APP" ]; then
+            APP=$(find build_ios -path "build_ios/IPA" -prune -o -name "Blender.app" -type d -print | head -1)
+          fi
           if [ -z "$APP" ]; then
             echo "ERROR: Blender.app missing"
             exit 1
@@ -1992,7 +2008,13 @@ jobs:
         if: steps.cmake_config.outcome == 'success'
         run: |
           cd blender
-          APP=$(find build_ios -name "Blender.app" -type d | head -1)
+          # 只认这次真正构建出来的 app。缓存 restore-keys 会回退匹配到更老的
+          # ios-build-v1-<sha>-*，而那里带着上一轮的 build_ios/IPA/Payload/Blender.app；
+          # find 按目录序会先命中 "IPA"（大写排在小写前），校验就会去查旧产物（#285）。
+          APP="build_ios/bin/Release/Blender.app"
+          if [ ! -d "$APP" ]; then
+            APP=$(find build_ios -path "build_ios/IPA" -prune -o -name "Blender.app" -type d -print | head -1)
+          fi
           if [ -z "$APP" ]; then echo "::error::Blender.app not found"; exit 1; fi
           echo "app bundle: $APP"
           python3 - "$APP" <<'PYEOF'
@@ -2092,6 +2114,25 @@ jobs:
                   except OSError:
                       pass
           print("  LFS pointer files: %d" % len(ptr))
+          # 5b) Assets/*.pdf 是 iOS 的鼠标光标图（eyedropper/pen/arrow*）。它们是 LFS 对象，
+          #     官方 Linux 包里没有，只能从 projects.blender.org 的 LFS 取。真的 PDF 以 %PDF 开头，
+          #     130 字节的指针则是 "version https://git-lfs"。
+          pdfbad = []
+          if os.path.isdir(assets):
+              for name in sorted(os.listdir(assets)):
+                  if not name.endswith(".pdf"):
+                      continue
+                  path = os.path.join(assets, name)
+                  try:
+                      with open(path, "rb") as fh:
+                          if not fh.read(5).startswith(b"%PDF"):
+                              pdfbad.append(name)
+                  except OSError:
+                      pdfbad.append(name)
+          if pdfbad:
+              err("%d Assets/*.pdf are not real PDFs (e.g. %s)" % (len(pdfbad), pdfbad[0]))
+          else:
+              print("  Assets/*.pdf: all real PDFs")
           if ptr:
               for one in ptr[:10]:
                   err("LFS pointer (empty asset): %s" % one)
