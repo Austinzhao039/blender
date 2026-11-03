@@ -46,7 +46,7 @@ jobs:
         run: |
           cd blender
           mkdir -p release/datafiles
-          curl -L -o startup.zip https://github.com/Austinzhao039/blender/releases/download/main2/startup.zip
+          curl -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o startup.zip https://github.com/Austinzhao039/blender/releases/download/main2/startup.zip
           unzip -o startup.zip
           rm startup.zip
           if [ -f "startup.blend" ]; then
@@ -74,7 +74,7 @@ jobs:
         run: |
           cd blender
           mkdir -p lib/macos_arm64/python/bin
-          curl -fsSL -o macos-python.zip \
+          curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o macos-python.zip \
             https://github.com/Austinzhao039/blender/releases/download/mainly/macos-python.zip || true
           unzip -oq macos-python.zip || true
           rm -f macos-python.zip
@@ -168,7 +168,7 @@ jobs:
           # 直接删掉，用源码现编一份 iOS arm64 静态库。
           rm -rf zstd zstd-src
           mkdir -p zstd/include zstd/lib
-          curl -sSL -o zstd.tar.gz https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+          curl -sSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o zstd.tar.gz https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
           tar xzf zstd.tar.gz
           mv zstd-1.5.7 zstd-src
           rm -f zstd.tar.gz
@@ -206,7 +206,7 @@ jobs:
             echo "Eigen already installed at $EIGEN_PREFIX"
           else
             rm -rf "$EIGEN_PREFIX" /tmp/eigen-src /tmp/eigen-build
-            curl -fsSL -o /tmp/eigen.tgz "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz"
+            curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o /tmp/eigen.tgz "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz"
             mkdir -p /tmp/eigen-src
             tar xzf /tmp/eigen.tgz -C /tmp/eigen-src --strip-components=1
             cmake -S /tmp/eigen-src -B /tmp/eigen-build \
@@ -252,9 +252,23 @@ jobs:
           FMT_DIR="$PWD/lib/ios_arm64/fmt"
           mkdir -p "$FMT_DIR/include/fmt" "$FMT_DIR/lib/cmake/fmt"
           BASE="https://projects.blender.org/api/v1/repos/blender/lib-macos_arm64/raw/fmt/include/fmt"
+          # projects.blender.org 走 HTTP/2 偶发 "stream 1 was not closed cleanly:
+          # INTERNAL_ERROR"，curl 的 --retry 默认不重试传输层错误，必须
+          # --retry-all-errors；再强制 --http1.1 兜底。踩过一次整轮白等。
+          fetch() {
+            for attempt in 1 2 3 4; do
+              if curl -fsSL --http1.1 --retry 3 --retry-all-errors --retry-delay 2 \
+                   --connect-timeout 20 -o "$2" "$1"; then
+                return 0
+              fi
+              echo "  retry $attempt for $1"
+              sleep $((attempt * 3))
+            done
+            return 1
+          }
           for h in args.h base.h chrono.h color.h compile.h core.h \
                    format-inl.h format.h os.h ostream.h printf.h ranges.h std.h xchar.h; do
-            curl -fsSL --retry 3 -o "$FMT_DIR/include/fmt/$h" "$BASE/$h?ref=main" \
+            fetch "$BASE/$h?ref=main" "$FMT_DIR/include/fmt/$h" \
               || { echo "::error::failed to fetch fmt/$h"; exit 1; }
           done
           n=$(ls "$FMT_DIR/include/fmt" | wc -l | tr -d ' ')
@@ -387,7 +401,7 @@ jobs:
             else
               echo "LFS failed, downloading from Ceres official and creating missing files..."
               CERES_VERSION="2.1.0"
-              curl -L -o /tmp/ceres-solver.tar.gz \
+              curl -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o /tmp/ceres-solver.tar.gz \
                 https://github.com/ceres-solver/ceres-solver/archive/refs/tags/${CERES_VERSION}.tar.gz
               tar -xzf /tmp/ceres-solver.tar.gz -C /tmp
               mkdir -p "$CERES_DIR/include"
@@ -452,7 +466,7 @@ jobs:
       - name: Download OpenImageIO from Release (main)
         run: |
           cd blender/lib/ios_arm64/openimageio/lib/
-          curl -L -o openimageio-libs.zip https://github.com/Austinzhao039/blender/releases/download/main/openimageio-libs.zip
+          curl -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o openimageio-libs.zip https://github.com/Austinzhao039/blender/releases/download/main/openimageio-libs.zip
           unzip -o openimageio-libs.zip
           rm openimageio-libs.zip
           ls -lh libOpenImageIO*.dylib
@@ -466,7 +480,7 @@ jobs:
         run: |
           cd blender
           echo "Downloading Eigen 3.4.0 from official repository..."
-          curl -L -o eigen.tar.gz https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+          curl -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o eigen.tar.gz https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
           tar -xzf eigen.tar.gz
           mkdir -p extern/quadriflow/src/Eigen
           cp -r eigen-3.4.0/Eigen/* extern/quadriflow/src/Eigen/
@@ -682,7 +696,7 @@ jobs:
           cd blender
           mkdir -p lib/ios_arm64/python/lib
           mkdir -p lib/ios_arm64/python/include
-          curl -L -o python-ios.tar.gz \
+          curl -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o python-ios.tar.gz \
             https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-iOS-support.b14.tar.gz
           mkdir -p python_temp
           tar -xzf python-ios.tar.gz -C python_temp/
