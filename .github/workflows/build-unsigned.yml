@@ -85,14 +85,13 @@ jobs:
       - name: Restore datafiles from official Blender release
         run: |
           cd blender
-          # clone 用了 GIT_LFS_SKIP_SMUDGE=1，release/datafiles 下有 199 个文件只剩
-          # 130 字节的指针文本。而 projects.blender.org 的 LFS batch 接口对这些 oid
-          # 一律返回 {"code":422,"message":"Oid or size are invalid"}，git lfs pull
+          # clone 用了 GIT_LFS_SKIP_SMUDGE=1，release/datafiles 下有近 200 个文件
+          # 只剩 130 字节的指针文本。projects.blender.org 的 LFS batch 接口对这些
+          # oid 一律回 {"code":422,"message":"Oid or size are invalid"}，git lfs pull
           # 也拿不到 —— 对象根本不在可公开下载的 LFS 存储里。
           #
-          # 所以改从官方 5.1.2 发行包提取同名文件：官方包就是从同一份源码打的，
-          # datafiles / app 模板都在里面。只覆盖"当前是 LFS 指针"的文件，不会碰
-          # 源码里本来就正常的资源。
+          # 改从官方 5.1.2 发行包提取同名文件：官方包就是从同一份源码打的。
+          # 只覆盖"当前是 LFS 指针"的文件，源码里本来就正常的资源不碰。
           VER=5.1.2
           PKG="blender-${VER}-linux-x64"
           URL="https://download.blender.org/release/Blender${VER%.*}/${PKG}.tar.xz"
@@ -111,14 +110,10 @@ jobs:
           [ "$ok" = "1" ] || { echo "::error::cannot download $URL"; exit 1; }
           ls -lh /tmp/bpkg.tar.xz
 
-          # 包里版本目录是 major.minor（5.1），不写死，用通配符匹配后归一化，
-          # 免得哪天上游改了目录层级整步崩掉。
-          # 直接整包解开（解压后约 1GB 临时空间），再挑出 datafiles。
-          # 不用 --wildcards：macOS runner 的 tar 是 bsdtar，不认 GNU 的这个选项；
-          # 用 -T 列成员列表又要先解压一遍。整包解一次最省事也最不容易出错。
+          # 整包解开（约 1GB 临时空间）再挑目录。不用 --wildcards：macOS runner 的
+          # tar 是 bsdtar，不认 GNU 的这个选项；用 -T 列成员列表又要先扫一遍。
           rm -rf /tmp/bpkg && mkdir -p /tmp/bpkg/raw
           tar -xJf /tmp/bpkg.tar.xz -C /tmp/bpkg/raw
-          ls /tmp/bpkg/raw
 
           DATADIR=$(find /tmp/bpkg/raw -maxdepth 3 -type d -name datafiles | head -1)
           TMPLDIR=$(find /tmp/bpkg/raw -maxdepth 6 -type d -name bl_app_templates_system | head -1)
@@ -127,26 +122,41 @@ jobs:
             find /tmp/bpkg/raw -maxdepth 3 -type d | head -20
             exit 1
           fi
+          if [ -z "$TMPLDIR" ]; then
+            echo "::error::bl_app_templates_system not found inside the release tarball"
+            find /tmp/bpkg/raw -maxdepth 6 -type d -name "startup*" | head -20
+            exit 1
+          fi
           echo "datafiles: $DATADIR"
           echo "templates: $TMPLDIR"
-          mkdir -p /tmp/bpkg/pkg
-          rm -rf /tmp/bpkg/pkg/datafiles /tmp/bpkg/pkg/scripts
-          cp -R "$DATADIR" /tmp/bpkg/pkg/datafiles
-          if [ -n "$TMPLDIR" ]; then
-            mkdir -p /tmp/bpkg/pkg/scripts/startup
-            cp -R "$TMPLDIR" /tmp/bpkg/pkg/scripts/startup/bl_app_templates_system
-          fi
-          du -sh /tmp/bpkg/pkg/datafiles
+          du -sh "$DATADIR"
 
-          python3 - release/datafiles /tmp/bpkg/pkg/datafiles \
-                     release/scripts /tmp/bpkg/pkg/scripts/startup/bl_app_templates_system <<'PYRESTORE'
+          # 脚本目录的位置随分支而变：ios 分支在仓库根的 scripts/，主线在
+          # release/scripts/。第 272 轮写死 release/scripts，结果 python 在 dst
+          # 不存在时直接 makedirs，把模板塞进了一个凭空的 release/scripts 里，
+          # 真正的 scripts/startup/bl_app_templates_system 一个都没补上。
+          if [ -d release/scripts/startup ]; then
+            SCRIPTS=release/scripts
+          elif [ -d scripts/startup ]; then
+            SCRIPTS=scripts
+          else
+            echo "::error::cannot locate scripts/startup in the source tree"
+            ls -d release/* scripts 2>/dev/null | head
+            exit 1
+          fi
+          TPLDST="$SCRIPTS/startup/bl_app_templates_system"
+          echo "scripts dir: $SCRIPTS  (templates -> $TPLDST)"
+
+          python3 - "$DATADIR" "$TMPLDIR" "$SCRIPTS" <<'PYRESTORE'
           import os
           import shutil
           import sys
 
+          data_src, tpl_src, scripts_dst = sys.argv[1], sys.argv[2], sys.argv[3]
+
 
           def is_lfs(path):
-              """目标不存在，或者它只是个 git-lfs 指针 —— 都需要被官方文件覆盖。"""
+              """不存在，或者只是个 git-lfs 指针 —— 都该被官方文件覆盖。"""
               if not os.path.exists(path):
                   return True
               if os.path.getsize(path) > 300:
@@ -155,61 +165,70 @@ jobs:
                   return fh.read(40).startswith(b"version https://git-lfs")
 
 
-          pairs = [(sys.argv[1], sys.argv[2]), (sys.argv[3], sys.argv[4])]
-          total = 0
-          for dst_root, src_root in pairs:
-              if not os.path.isdir(src_root):
-                  print("skip (missing): %s" % src_root)
-                  continue
-              for root, _dirs, files in os.walk(src_root):
-                  for name in files:
-                      src = os.path.join(root, name)
-                      rel = os.path.relpath(src, src_root)
-                      dst = os.path.join(dst_root, rel)
-                      if is_lfs(dst):
-                          os.makedirs(os.path.dirname(dst), exist_ok=True)
-                          shutil.copy2(src, dst)
-                          total += 1
-          print("restored %d files from official release" % total)
+          n = 0
+          for root, _dirs, files in os.walk(data_src):
+              for name in files:
+                  src = os.path.join(root, name)
+                  dst = os.path.join("release/datafiles", os.path.relpath(src, data_src))
+                  if is_lfs(dst):
+                      os.makedirs(os.path.dirname(dst), exist_ok=True)
+                      shutil.copy2(src, dst)
+                      n += 1
+          print("datafiles restored: %d" % n)
+
+          tpl_dst = os.path.join(scripts_dst, "startup", "bl_app_templates_system")
+          m = 0
+          for root, _dirs, files in os.walk(tpl_src):
+              for name in files:
+                  src = os.path.join(root, name)
+                  dst = os.path.join(tpl_dst, os.path.relpath(src, tpl_src))
+                  if is_lfs(dst):
+                      os.makedirs(os.path.dirname(dst), exist_ok=True)
+                      shutil.copy2(src, dst)
+                      m += 1
+          print("app templates restored: %d" % m)
           PYRESTORE
 
-          # 官方 Linux 包里不一定含 macOS 专属文件（blender_icon.icns 等），
-          # 所以只有"缺了就一定崩"的关键资源才硬失败，其余报警告。
-          # blender_icon.icns 已由后面的图标步骤兜底生成 PNG，不算问题。
-          echo "--- 关键资源 LFS 终检 ---"
-          crit_bad=0
-          for crit in release/datafiles/colormanagement/icc \
-                      release/datafiles/icons \
-                      release/datafiles/studiolights \
-                      release/scripts/startup/bl_app_templates_system; do
-            if [ ! -e "$crit" ]; then
-              echo "::error::critical asset dir missing: $crit"
-              crit_bad=1
-              continue
-            fi
-            hit=$(grep -rl "^version https://git-lfs.github.com/spec" "$crit" 2>/dev/null | wc -l | tr -d ' ')
-            echo "  $crit -> $hit pointer(s)"
-            if [ "$hit" != "0" ]; then
-              echo "::error::$crit still has $hit LFS pointer(s) - app would abort at init"
-              grep -rl "^version https://git-lfs.github.com/spec" "$crit" | head -5
-              crit_bad=1
-            fi
-          done
-          other=$(grep -rl "^version https://git-lfs.github.com/spec" release/datafiles release/scripts 2>/dev/null \
-                  | grep -v "blender_icon\.icns" | wc -l | tr -d ' ')
-          if [ "$other" != "0" ]; then
-            echo "::warning::$other non-critical LFS pointer(s) remain (ignored):"
-            grep -rl "^version https://git-lfs.github.com/spec" release/datafiles release/scripts \
-              | grep -v "blender_icon\.icns" | head -10
+          # 官方 Linux 包不含的文件（macOS 专属，或上游已废弃、包里早就没有的旧
+          # 资源）还原不了。留着比删掉更糟：130 字节的指针文本会被当成 .dat /
+          # .blend 去解析。Blender 对"文件不存在"有兜底，对"文件损坏"没有。
+          # 所以剩下的指针一律删掉。
+          # blender_icon.icns 例外：iOS 不认 .icns，但它可能被 CMake 的显式
+          # install() 引用，删了会让 install 阶段报"找不到文件"。留个指针无害。
+          left=$(grep -rl "^version https://git-lfs.github.com/spec" \
+                  release/datafiles "$SCRIPTS" 2>/dev/null \
+                  | grep -v "blender_icon\\.icns" || true)
+          if [ -n "$left" ]; then
+            echo "--- 官方包不含、已删除的残留指针 ---"
+            echo "$left" | head -20 | sed 's/^/  /'
+            echo "$left" | tr '\n' '\0' | xargs -0 rm -f
           fi
-          if [ "$crit_bad" != "0" ]; then
+
+          remain=$(grep -rl "^version https://git-lfs.github.com/spec" \
+                   release/datafiles "$SCRIPTS" 2>/dev/null \
+                   | grep -v "blender_icon\\.icns" | wc -l | tr -d ' ')
+          echo "remaining LFS pointers: $remain"
+          if [ "$remain" != "0" ]; then
+            echo "::error::$remain LFS pointers survived the cleanup"
+            grep -rl "^version https://git-lfs.github.com/spec" release/datafiles "$SCRIPTS" | head -10
             exit 1
           fi
 
+          # 关键资源目录必须真的存在：OCIO 缺 ICC 会 throw，图标表缺 .dat 会告警
+          for crit in release/datafiles/colormanagement/icc \
+                      release/datafiles/icons \
+                      release/datafiles/studiolights \
+                      "$TPLDST"; do
+            if [ ! -d "$crit" ]; then
+              echo "::error::critical asset dir missing: $crit"
+              exit 1
+            fi
+          done
+
           echo "--- 关键资源抽样 ---"
           ls -l release/datafiles/colormanagement/icc
-          ls -l release/datafiles/icons | head -3
-          du -sh release/datafiles
+          echo "icons: $(ls release/datafiles/icons | wc -l | tr -d ' ') files"
+          du -sh release/datafiles "$TPLDST"
 
       - name: Setup host Python 3.13
         uses: actions/setup-python@v5
@@ -1953,6 +1972,8 @@ jobs:
           lfs_ptr = []
           for root, _dirs, files in os.walk(os.path.join(app, "Assets")):
               for f in files:
+                  if f == "blender_icon.icns":
+                      continue          # iOS 不认 .icns，由前面那步生成 PNG 顶替
                   fp = os.path.join(root, f)
                   if os.path.getsize(fp) > 200:
                       continue
