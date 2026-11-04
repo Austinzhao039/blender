@@ -44,6 +44,13 @@ jobs:
             exit 1
           fi
           cd blender
+          # --- step-normalize-mtime-v1 ---
+          # A fresh clone stamps every file with "now". The build cache we
+          # restore later holds objects built days ago, so make would treat the
+          # whole tree as stale and do a full rebuild (~40 min of macOS time).
+          # Backdate the tree so only files we patch afterwards look newer.
+          find . -path ./.git -prune -o -type f -print0 | xargs -0 touch -t 202001010000
+          echo "source mtimes normalized (patched files will be newer on purpose)"
 
       - name: Fix submodule URLs
         run: |
@@ -58,6 +65,20 @@ jobs:
             exit 1
           fi
           echo "blender directory exists"
+
+      # --- step-gizmo-null-guard-v2 ---
+      # Upstream view3d_gizmo_navigate.cc carries an explicit IOS_FIXME: the
+      # operator lookup "sometimes returns NULL on iOS". The guard right after
+      # it is `#ifndef WITH_PYTHON if (ot != nullptr) #endif`, so WITH_PYTHON
+      # builds never check. NULL then reaches WM_gizmo_operator_set() ->
+      # WM_operator_properties_create_ptr() -> EXC_BAD_ACCESS at +0x88.
+      # Patch guards all four call sites (idempotent, marker based).
+      - name: Patch iOS NULL operator crash in navigate gizmo
+        run: |
+          cd blender
+          python3 "$GITHUB_WORKSPACE/.github/scripts/patch_ios_gizmo.py"
+          grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
+            source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
 
       - name: Download startup.blend from Release (main2)
         run: |
