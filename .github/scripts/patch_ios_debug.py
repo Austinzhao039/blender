@@ -110,10 +110,7 @@ def patch(path: Path, old: str, new: str, marker: str) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: patch_ios_debug.py <blender source root>")
-        return 2
-    root = Path(sys.argv[1])
+    root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
 
     targets = [
         (root / "intern/ghost/intern/GHOST_SystemIOS.mm", OLD_UIKIT, NEW_UIKIT, MARK_WM_INC),
