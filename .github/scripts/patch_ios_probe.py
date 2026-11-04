@@ -47,9 +47,11 @@ OVERLAY = r'''
  * A label in the bottom-left corner mirrors what each input layer last saw, so
  * a screenshot is enough to tell where an event is dropped.  `iosdbg_slot` is
  * called from the window-manager layer as well, hence C linkage. */
-#define IOSDBG_SLOTS 6
+#define IOSDBG_SLOTS 7
 static char iosdbg_lines[IOSDBG_SLOTS][192];
 static UILabel *iosdbg_label = nil;
+static int iosdbg_taps = 0;
+static int iosdbg_presses = 0;
 
 /* Fixed captions: an untouched slot must still occupy its own row, otherwise
  * the rows shift and a screenshot becomes ambiguous. */
@@ -60,6 +62,7 @@ static const char *const iosdbg_caps[IOSDBG_SLOTS] = {
     "3 WM EVENT ",
     "4 DRAG     ",
     "5 LOG      ",
+    "6 VIEW     ",
 };
 
 static void iosdbg_repaint(void)
@@ -88,12 +91,26 @@ extern "C" void iosdbg_slot(int idx, const char *text)
   iosdbg_repaint();
 }
 
-static void iosdbg_install(UIWindow *iosdbg_root, CGSize iosdbg_size)
+static void iosdbg_install(UIWindow *iosdbg_root,
+                           CGSize iosdbg_size,
+                           CGFloat iosdbg_view_scale,
+                           CGFloat iosdbg_screen_scale)
 {
   if (iosdbg_root == nil || iosdbg_label != nil) {
     return;
   }
-  const CGFloat iosdbg_h = 80.0;
+  {
+    char iosdbg_buf[192];
+    snprintf(iosdbg_buf,
+             sizeof(iosdbg_buf),
+             "VIEW %dx%d view=%.2f screen=%.2f",
+             int(iosdbg_size.width),
+             int(iosdbg_size.height),
+             double(iosdbg_view_scale),
+             double(iosdbg_screen_scale));
+    iosdbg_slot(6, iosdbg_buf);
+  }
+  const CGFloat iosdbg_h = 94.0;
   iosdbg_label = [[UILabel alloc]
       initWithFrame:CGRectMake(4.0, iosdbg_size.height - iosdbg_h - 4.0, iosdbg_size.width - 8.0,
                                iosdbg_h)];
@@ -114,16 +131,21 @@ INSTALL_ANCHOR = """  pencil_interaction = [[UIPencilInteraction alloc] init];
 
 INSTALL_NEW = INSTALL_ANCHOR + """
   /* IOS-PROBE: create the diagnostic read-out once the view exists. */
-  iosdbg_install(window->rootWindow, [window->getView() bounds].size);"""
+  iosdbg_install(window->rootWindow,
+                 [window->getView() bounds].size,
+                 [window->getView() contentScaleFactor],
+                 [[UIScreen mainScreen] scale]);"""
 
 # slot 0: handleTap
 TAP_ANCHOR = "  last_tap_with_pencil = current_pencil_touch ? true : false;"
 TAP_NEW = TAP_ANCHOR + """
   {
     char iosdbg_buf[192];
+    iosdbg_taps++;
     snprintf(iosdbg_buf,
              sizeof(iosdbg_buf),
-             "TAP  xy=(%d,%d) st=%d pencil=%d",
+             "TAP n=%d xy=(%d,%d) st=%d pencil=%d",
+             iosdbg_taps,
              int(touch_point.x),
              int(touch_point.y),
              int(sender.state),
@@ -141,9 +163,11 @@ PRESS_ANCHOR = """      fprintf(stderr, "[IOSGEST] press-begin n=%lu\\n", (unsig
 PRESS_NEW = PRESS_ANCHOR + """
       {
         char iosdbg_buf[192];
+        iosdbg_presses++;
         snprintf(iosdbg_buf,
                  sizeof(iosdbg_buf),
-                 "PRESS xy=(%d,%d) n=%lu type=%d",
+                 "PRESS n=%d xy=(%d,%d) touch=%lu type=%d",
+                 iosdbg_presses,
                  int(iosdrag_p.x),
                  int(iosdrag_p.y),
                  (unsigned long)touches.count,
@@ -292,9 +316,9 @@ def main():
 
     n = apply(win, [
         (INSTALL_ANCHOR, INSTALL_NEW, "install overlay", "iosdbg_install(window->rootWindow"),
-        (TAP_ANCHOR, TAP_NEW, "tap slot", "TAP  xy=(%d,%d) st=%d"),
+        (TAP_ANCHOR, TAP_NEW, "tap slot", "TAP n=%d xy=(%d,%d) st=%d"),
         (PAN_ANCHOR, PAN_NEW, "pan slot", "PAN  indirect -> suppressed"),
-        (PRESS_ANCHOR, PRESS_NEW, "press slot", "PRESS xy=(%d,%d) n=%lu type=%d"),
+        (PRESS_ANCHOR, PRESS_NEW, "press slot", "PRESS n=%d xy=(%d,%d) touch=%lu type=%d"),
         (MOVE_ANCHOR, MOVE_NEW, "move slot", "MOVE xy=(%d,%d) armed=%d active=%d d=%d"),
         (DRAG_BEGIN_ANCHOR, DRAG_BEGIN_NEW, "drag begin slot", "DRAG begin -> MMB down"),
         (DRAG_END_ANCHOR, DRAG_END_NEW, "drag end slot", "DRAG end -> MMB up", 2),
