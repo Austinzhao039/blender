@@ -225,12 +225,14 @@ WM_PROBE_NEW = """  if (iosdbg_log) {
                                 (event->type == LEFTMOUSE)   ? "LMB" :
                                 (event->type == MIDDLEMOUSE) ? "MMB" :
                                 (event->type == RIGHTMOUSE)  ? "RMB" :
-                                                               "MOUSEPAN";
+                                (event->type == MOUSEPAN)    ? "PAN" :
+                                                               "KEY";
       char iosdbg_buf[192];
       snprintf(iosdbg_buf,
                sizeof(iosdbg_buf),
-               "WM %s v=%d xy=(%d,%d) area=%d rgn=%d act=%d",
+               "WM %s ev=%d v=%d xy=(%d,%d) area=%d rgn=%d act=%d",
                iosdbg_name,
+               int(event->type),
                int(event->val),
                event->xy[0],
                event->xy[1],
