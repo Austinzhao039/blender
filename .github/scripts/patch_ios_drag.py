@@ -81,16 +81,14 @@ TOUCH_MOVED = '''
 TOUCH_ENDED = '''
   /* IOS-DRAG: finish the middle-button drag, if one is running. */
   if (iosdrag_active) {
-    UITouch *iosdrag_last = nil;
+    CGPoint iosdrag_p = iosdrag_start;
     for (UITouch *iosdrag_touch in touches) {
       if (iosdrag_touch.type == UITouchTypeIndirectPointer) {
-        iosdrag_last = iosdrag_touch;
+        CGPoint iosdrag_q = [iosdrag_touch locationInView:window->getView()];
+        iosdrag_p = window->scalePointToWindow(iosdrag_q);
         break;
       }
     }
-    CGPoint iosdrag_p = iosdrag_last ? [iosdrag_last locationInView:window->getView()] :
-                                       iosdrag_start;
-    iosdrag_p = window->scalePointToWindow(iosdrag_p);
     UserInputEvent iosdrag_up(&iosdrag_p, nullptr, nullptr, false);
     iosdrag_up.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
     iosdrag_up.add_event(UserInputEvent::EventTypes::MIDDLE_BUTTON_UP);
