@@ -51,6 +51,17 @@ OVERLAY = r'''
 static char iosdbg_lines[IOSDBG_SLOTS][192];
 static UILabel *iosdbg_label = nil;
 
+/* Fixed captions: an untouched slot must still occupy its own row, otherwise
+ * the rows shift and a screenshot becomes ambiguous. */
+static const char *const iosdbg_caps[IOSDBG_SLOTS] = {
+    "0 PRESS/TAP",
+    "1 MOVE     ",
+    "2 WM MOVE  ",
+    "3 WM EVENT ",
+    "4 DRAG     ",
+    "5 LOG      ",
+};
+
 static void iosdbg_repaint(void)
 {
   if (iosdbg_label == nil) {
@@ -58,12 +69,14 @@ static void iosdbg_repaint(void)
   }
   NSMutableString *iosdbg_all = [NSMutableString string];
   for (int iosdbg_i = 0; iosdbg_i < IOSDBG_SLOTS; iosdbg_i++) {
-    if (iosdbg_lines[iosdbg_i][0] == '\0') {
-      continue;
-    }
-    [iosdbg_all appendFormat:@"%s\n", iosdbg_lines[iosdbg_i]];
+    [iosdbg_all appendFormat:@"%s %s\n",
+                             iosdbg_caps[iosdbg_i],
+                             iosdbg_lines[iosdbg_i][0] ? iosdbg_lines[iosdbg_i] : "-"];
   }
   iosdbg_label.text = iosdbg_all;
+  /* The root view controller's view may be attached to the window after this
+   * label is created; keep the read-out on top of it. */
+  [iosdbg_label.superview bringSubviewToFront:iosdbg_label];
 }
 
 extern "C" void iosdbg_slot(int idx, const char *text)
