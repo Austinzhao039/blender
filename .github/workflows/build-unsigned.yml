@@ -92,12 +92,16 @@ jobs:
       # alias MOUSEPAN / MOUSEZOOM (see rna_wm.cc, rna_enum_event_type_items).
       # There is no such C identifier, so the two events are already bound in
       # the default key map and renaming them is a no-op.
-      - name: Patch iOS sources (gizmo guard + mouse input + drag nav + event log + probe)
+      #
+      # patch_ios_keyboard.py: the port has no hardware-keyboard path at all
+      # (no pressesBegan, no HID table, handleKeyEvent is an ASSERT(FALSE)), so
+      # every shortcut was dropped. Generate GHOST key events from UIKit presses.
+      - name: Patch iOS sources (gizmo + mouse input + drag nav + event log + probe + keyboard)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py patch_ios_drag.py patch_ios_probe.py; do
+          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py patch_ios_drag.py patch_ios_probe.py patch_ios_keyboard.py; do
             curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.raw" \
@@ -117,6 +121,7 @@ jobs:
           python3 /tmp/patch_ios_debug.py
           python3 /tmp/patch_ios_drag.py
           python3 /tmp/patch_ios_probe.py
+          python3 /tmp/patch_ios_keyboard.py
           grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
             source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
           grep -n "UITouchTypeIndirectPointer" intern/ghost/intern/GHOST_WindowIOS.mm
@@ -127,6 +132,9 @@ jobs:
           grep -c "IOS-PROBE" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "iosdbg_slot" source/blender/windowmanager/intern/wm_event_system.cc
           grep -c "iosdbg_slot" intern/ghost/intern/GHOST_SystemIOS.mm
+          grep -c "IOS-KEYBOARD" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "ioskbd_mod_state" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "pressesBegan" intern/ghost/intern/GHOST_WindowIOS.mm
 
       - name: Download startup.blend from Release (main2)
         run: |
