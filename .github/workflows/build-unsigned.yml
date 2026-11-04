@@ -87,12 +87,12 @@ jobs:
       # nothing, which means the pan recognizer never fires for
       # UITouchTypeIndirectPointer either. Generate the drag from the view's own
       # touch callbacks instead, which no recognizer can gate.
-      - name: Patch iOS sources (gizmo guard + mouse input + drag nav + event log)
+      - name: Patch iOS sources (gizmo guard + mouse input + drag nav + event log + probe)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py patch_ios_drag.py; do
+          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py patch_ios_drag.py patch_ios_probe.py; do
             curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.raw" \
@@ -111,6 +111,7 @@ jobs:
           python3 /tmp/patch_ios_nav.py
           python3 /tmp/patch_ios_debug.py
           python3 /tmp/patch_ios_drag.py
+          python3 /tmp/patch_ios_probe.py
           grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
             source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
           grep -n "UITouchTypeIndirectPointer" intern/ghost/intern/GHOST_WindowIOS.mm
@@ -118,6 +119,9 @@ jobs:
           grep -c "IOSDBG" source/blender/windowmanager/intern/wm_event_system.cc
           grep -c "IOS-DRAG" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "iosdrag_active" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-PROBE" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iosdbg_slot" source/blender/windowmanager/intern/wm_event_system.cc
+          grep -c "iosdbg_slot" intern/ghost/intern/GHOST_SystemIOS.mm
 
       - name: Download startup.blend from Release (main2)
         run: |
