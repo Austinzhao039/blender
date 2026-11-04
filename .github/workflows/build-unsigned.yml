@@ -76,27 +76,36 @@ jobs:
       #
       # NOTE: there is no actions/checkout in this workflow, so
       # $GITHUB_WORKSPACE only holds the cloned upstream tree. Fetch the helper
-      # script from this repository through the contents API instead.
-      - name: Patch iOS NULL operator crash in navigate gizmo
+      # scripts from this repository through the contents API instead.
+      #
+      # patch_ios_input.py: mouse clicks never reached Blender because UIKit
+      # does not deliver UITouchTypeIndirectPointer touches to a gesture
+      # recognizer that omits the type from allowedTouchTypes. Also wires the
+      # scroll wheel (UIEventType.scroll carries no touches at all).
+      - name: Patch iOS sources (NULL gizmo guard + mouse input)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github.raw" \
-            -o /tmp/patch_ios_gizmo.py \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/.github/scripts/patch_ios_gizmo.py?ref=main"
-          if ! head -c 200 /tmp/patch_ios_gizmo.py | grep -q "python3"; then
-            echo "::error::failed to fetch patch script"
-            head -c 400 /tmp/patch_ios_gizmo.py
-            exit 1
-          fi
+          for s in patch_ios_gizmo.py patch_ios_input.py; do
+            curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github.raw" \
+              -o "/tmp/$s" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/.github/scripts/$s?ref=main"
+            if ! head -c 200 "/tmp/$s" | grep -q "python3"; then
+              echo "::error::failed to fetch $s"
+              head -c 400 "/tmp/$s"
+              exit 1
+            fi
+          done
           mkdir -p blender
           cd blender
           python3 /tmp/patch_ios_gizmo.py
+          python3 /tmp/patch_ios_input.py
           grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
             source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
+          grep -n "UITouchTypeIndirectPointer" intern/ghost/intern/GHOST_WindowIOS.mm
 
       - name: Download startup.blend from Release (main2)
         run: |
@@ -443,7 +452,7 @@ jobs:
       # 所以直接看产物是否真的存在。
       - name: Normalize source mtimes for incremental build
         run: |
-          PATCHED="blender/source/blender/editors/space_view3d/view3d_gizmo_navigate.cc"
+          PATCHED_FILES="source/blender/editors/space_view3d/view3d_gizmo_navigate.cc intern/ghost/intern/GHOST_WindowIOS.mm"
           if [ -d blender/build_ios/build ]; then
             N=$(find blender/build_ios/build -name "*.o" -type f 2>/dev/null | head -1)
             echo "restored objects found, e.g. ${N:-<none>}"
@@ -453,20 +462,27 @@ jobs:
           else
             echo "no cached objects - this run will build everything"
           fi
-          # --- step-force-rebuild-patched-v1 ---
-          # The backdate above also hits the file we patched in an earlier step,
-          # which would make its cached object look up to date and silently drop
-          # the patch. Delete the stale object and give the source a fresh mtime.
-          if [ -f "$PATCHED" ]; then
-            CNT=$(find blender/build_ios -name "*view3d_gizmo_navigate*" -type f 2>/dev/null | wc -l | tr -d ' ')
-            find blender/build_ios -name "*view3d_gizmo_navigate*" -type f -delete 2>/dev/null || true
-            touch "$PATCHED"
-            echo "dropped ${CNT} stale object/dep file(s) for view3d_gizmo_navigate, source re-stamped"
-          else
-            echo "::error::patched source missing: $PATCHED"
-            exit 1
-          fi
-          grep -c "IOS_FIXME: WM_operatortype_find() is documented" "$PATCHED"
+          # --- step-force-rebuild-patched-v2 ---
+          # The backdate above also hits the files we patched in an earlier step,
+          # which would make their cached objects look up to date and silently
+          # drop the patches. Delete the stale objects and re-stamp the sources.
+          for f in $PATCHED_FILES; do
+            p="blender/$f"
+            if [ ! -f "$p" ]; then
+              echo "::error::patched source missing: $p"
+              exit 1
+            fi
+            base=$(basename "$f")
+            base="${base%.*}"
+            CNT=$(find blender/build_ios -name "*${base}*" -type f 2>/dev/null | wc -l | tr -d ' ')
+            find blender/build_ios -name "*${base}*" -type f -delete 2>/dev/null || true
+            touch "$p"
+            echo "dropped ${CNT} stale object/dep file(s) for ${base}, source re-stamped"
+          done
+          grep -c "IOS_FIXME: WM_operatortype_find() is documented" \
+            blender/source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
+          grep -c "UITouchTypeIndirectPointer" blender/intern/ghost/intern/GHOST_WindowIOS.mm
+
 
       - name: Drop stale IPA left by an older cache
         run: |
