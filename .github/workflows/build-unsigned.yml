@@ -82,12 +82,12 @@ jobs:
       # does not deliver UITouchTypeIndirectPointer touches to a gesture
       # recognizer that omits the type from allowedTouchTypes. Also wires the
       # scroll wheel (UIEventType.scroll carries no touches at all).
-      - name: Patch iOS sources (NULL gizmo guard + mouse input)
+      - name: Patch iOS sources (NULL gizmo guard + mouse input + event log)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          for s in patch_ios_gizmo.py patch_ios_input.py; do
+          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_debug.py; do
             curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.raw" \
@@ -103,9 +103,11 @@ jobs:
           cd blender
           python3 /tmp/patch_ios_gizmo.py
           python3 /tmp/patch_ios_input.py
+          python3 /tmp/patch_ios_debug.py
           grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
             source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
           grep -n "UITouchTypeIndirectPointer" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOSDBG" source/blender/windowmanager/intern/wm_event_system.cc
 
       - name: Download startup.blend from Release (main2)
         run: |
@@ -452,7 +454,7 @@ jobs:
       # 所以直接看产物是否真的存在。
       - name: Normalize source mtimes for incremental build
         run: |
-          PATCHED_FILES="source/blender/editors/space_view3d/view3d_gizmo_navigate.cc intern/ghost/intern/GHOST_WindowIOS.mm"
+          PATCHED_FILES="source/blender/editors/space_view3d/view3d_gizmo_navigate.cc intern/ghost/intern/GHOST_WindowIOS.mm intern/ghost/intern/GHOST_SystemIOS.mm source/blender/windowmanager/intern/wm_event_system.cc"
           if [ -d blender/build_ios/build ]; then
             N=$(find blender/build_ios/build -name "*.o" -type f 2>/dev/null | head -1)
             echo "restored objects found, e.g. ${N:-<none>}"
@@ -482,6 +484,7 @@ jobs:
           grep -c "IOS_FIXME: WM_operatortype_find() is documented" \
             blender/source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
           grep -c "UITouchTypeIndirectPointer" blender/intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOSDBG" blender/source/blender/windowmanager/intern/wm_event_system.cc
 
 
       - name: Drop stale IPA left by an older cache
