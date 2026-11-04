@@ -82,12 +82,12 @@ jobs:
       # does not deliver UITouchTypeIndirectPointer touches to a gesture
       # recognizer that omits the type from allowedTouchTypes. Also wires the
       # scroll wheel (UIEventType.scroll carries no touches at all).
-      - name: Patch iOS sources (NULL gizmo guard + mouse input + event log)
+      - name: Patch iOS sources (gizmo guard + mouse input + middle-drag nav + event log)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_debug.py; do
+          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py; do
             curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.raw" \
@@ -103,10 +103,12 @@ jobs:
           cd blender
           python3 /tmp/patch_ios_gizmo.py
           python3 /tmp/patch_ios_input.py
+          python3 /tmp/patch_ios_nav.py
           python3 /tmp/patch_ios_debug.py
           grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
             source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
           grep -n "UITouchTypeIndirectPointer" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-NAV-MIDDLE" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "IOSDBG" source/blender/windowmanager/intern/wm_event_system.cc
 
       - name: Download startup.blend from Release (main2)
