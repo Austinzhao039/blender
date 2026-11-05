@@ -1879,6 +1879,40 @@ jobs:
               print("::error::%d assets left as LFS stubs" % len(missing))
               sys.exit(1)
           PYSYNC
+      - name: Force-sync patched python data into app bundle (cache bypass)
+        run: |
+          cd blender
+          # 为什么需要这一步（#305 实测）：
+          #   CMake 的 install(DIRECTORY) 对"目标已存在"的文件是静默跳过的，而
+          #   Blender.app 是从构建缓存里恢复出来的 —— 于是源树里改过的 .py 永远不会
+          #   进包。上一轮 `patch_ios_preset.py` 明明打印了 "patched ..."、grep 断言
+          #   也通过了，可包里的 blender_default.py 还是上游原版（440058 字节、无
+          #   IOS-NAV-DRAG 标记），3D 视图的"左键拖动旋转"因此完全没生效。
+          #   这里以源树为准，把补丁链改过的 .py 强制覆盖进 app bundle，并断言标记。
+          APP="build_ios/bin/Release/Blender.app"
+          if [ ! -d "$APP" ]; then
+            APP=$(find build_ios -path "build_ios/IPA" -prune -o -name "Blender.app" -type d -print | head -1)
+          fi
+          SCRIPTS=scripts
+          [ -d "$SCRIPTS/startup" ] || SCRIPTS=release/scripts
+          DST="$APP/Assets/5.1/scripts"
+          echo "app: $APP"
+          echo "scripts source: $SCRIPTS"
+
+          for f in presets/keyconfig/keymap_data/blender_default.py; do
+            if [ -f "$DST/$f" ]; then
+              cp -f "$SCRIPTS/$f" "$DST/$f"
+              echo "synced $f"
+            else
+              echo "::error::missing in app bundle: $f"
+              exit 1
+            fi
+          done
+
+          grep -q "IOS-NAV-DRAG" "$DST/presets/keyconfig/keymap_data/blender_default.py" \
+            || { echo "::error::keymap preset not synced into app bundle"; exit 1; }
+          ls -l "$DST/presets/keyconfig/keymap_data/blender_default.py"
+
 
       - name: Embed iOS dylibs into app bundle
         if: steps.cmake_config.outcome == 'success'
