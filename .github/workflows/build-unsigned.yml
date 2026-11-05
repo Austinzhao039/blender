@@ -102,12 +102,12 @@ jobs:
       # so "Save As"/export pre-filled an unwritable directory and File > Open
       # started in a folder the user cannot put anything into. Point the default
       # directory at Documents/ (visible in the Files app, UIFileSharingEnabled).
-      - name: Patch iOS sources (gizmo + mouse input + pointer drag + event log + probe + keyboard + files)
+      - name: Patch iOS sources (gizmo + pointer gesture + wheel + rotate drag + language + probe + keyboard + files)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py patch_ios_pointer.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py; do
+          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py patch_ios_pointer.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py patch_ios_wheel.py patch_ios_preset.py patch_ios_lang.py; do
             curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.raw" \
@@ -129,6 +129,9 @@ jobs:
           python3 /tmp/patch_ios_probe.py
           python3 /tmp/patch_ios_keyboard.py
           python3 /tmp/patch_ios_files.py
+          python3 /tmp/patch_ios_wheel.py
+          python3 /tmp/patch_ios_preset.py
+          python3 /tmp/patch_ios_lang.py
           grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
             source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
           grep -n "UITouchTypeIndirectPointer" intern/ghost/intern/GHOST_WindowIOS.mm
@@ -150,6 +153,13 @@ jobs:
           grep -c "IOS-FILES-HOME" source/blender/blenkernel/intern/appdir.cc
           grep -c "px=%dx%d" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "win=%dx%d" source/blender/windowmanager/intern/wm_event_system.cc
+          grep -c "IOS-WHEEL" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-NAV-DRAG" scripts/presets/keyconfig/keymap_data/blender_default.py
+          grep -c "iosptr_dragging" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "delaysTouchesBegan = NO" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-LANG" source/blender/windowmanager/intern/wm_init_exit.cc
+          grep -c "ios_language_autodetect" source/blender/windowmanager/intern/wm_init_exit.cc
+          grep -c "ios_system_locale" intern/ghost/intern/GHOST_SystemIOS.mm
 
       - name: Download startup.blend from Release (main2)
         run: |
@@ -496,7 +506,7 @@ jobs:
       # 所以直接看产物是否真的存在。
       - name: Normalize source mtimes for incremental build
         run: |
-          PATCHED_FILES="source/blender/editors/space_view3d/view3d_gizmo_navigate.cc intern/ghost/intern/GHOST_WindowIOS.mm intern/ghost/intern/GHOST_SystemIOS.mm source/blender/windowmanager/intern/wm_event_system.cc source/blender/blenkernel/intern/appdir.cc"
+          PATCHED_FILES="source/blender/editors/space_view3d/view3d_gizmo_navigate.cc intern/ghost/intern/GHOST_WindowIOS.mm intern/ghost/intern/GHOST_SystemIOS.mm source/blender/windowmanager/intern/wm_event_system.cc source/blender/blenkernel/intern/appdir.cc source/blender/windowmanager/intern/wm_init_exit.cc"
           if [ -d blender/build_ios/build ]; then
             N=$(find blender/build_ios/build -name "*.o" -type f 2>/dev/null | head -1)
             echo "restored objects found, e.g. ${N:-<none>}"
