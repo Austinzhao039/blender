@@ -101,12 +101,12 @@ jobs:
       # so "Save As"/export pre-filled an unwritable directory and File > Open
       # started in a folder the user cannot put anything into. Point the default
       # directory at Documents/ (visible in the Files app, UIFileSharingEnabled).
-      - name: Patch iOS sources (gizmo + mouse input + drag nav + event log + probe + keyboard + files)
+      - name: Patch iOS sources (gizmo + mouse input + drag nav + event log + probe + keyboard + files + coords)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py patch_ios_drag.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py; do
+          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py patch_ios_drag.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py patch_ios_coords.py; do
             curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.raw" \
@@ -128,6 +128,7 @@ jobs:
           python3 /tmp/patch_ios_probe.py
           python3 /tmp/patch_ios_keyboard.py
           python3 /tmp/patch_ios_files.py
+          python3 /tmp/patch_ios_coords.py
           grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
             source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
           grep -n "UITouchTypeIndirectPointer" intern/ghost/intern/GHOST_WindowIOS.mm
@@ -146,6 +147,9 @@ jobs:
           grep -c "IOS-FILES-DEFAULT" source/blender/blenkernel/intern/appdir.cc
           grep -c "IOS-FILES-ORROOT" source/blender/blenkernel/intern/appdir.cc
           grep -c "IOS-FILES-HOME" source/blender/blenkernel/intern/appdir.cc
+          grep -c "IOS-COORDS" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "px=%dx%d" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "win=%dx%d" source/blender/windowmanager/intern/wm_event_system.cc
 
       - name: Download startup.blend from Release (main2)
         run: |
