@@ -83,10 +83,11 @@ jobs:
       # recognizer that omits the type from allowedTouchTypes. Also wires the
       # scroll wheel (UIEventType.scroll carries no touches at all).
       #
-      # patch_ios_drag.py: the synthetic middle-button drag inside handlePan did
-      # nothing, which means the pan recognizer never fires for
-      # UITouchTypeIndirectPointer either. Generate the drag from the view's own
-      # touch callbacks instead, which no recognizer can gate.
+      # patch_ios_pointer.py: upstream only emits a click when the finger LIFTS
+      # (handleTap: on state Ended), so nothing can ever be dragged - scrollbars,
+      # sliders, panel borders, box select all need the button held while the
+      # pointer moves. Drive a real press/drag/release from the view's own touch
+      # callbacks, which no gesture recognizer can gate.
       #
       # NOTE: 'TRACKPADPAN' / 'TRACKPADZOOM' are only RNA *display* names that
       # alias MOUSEPAN / MOUSEZOOM (see rna_wm.cc, rna_enum_event_type_items).
@@ -101,12 +102,12 @@ jobs:
       # so "Save As"/export pre-filled an unwritable directory and File > Open
       # started in a folder the user cannot put anything into. Point the default
       # directory at Documents/ (visible in the Files app, UIFileSharingEnabled).
-      - name: Patch iOS sources (gizmo + mouse input + drag nav + event log + probe + keyboard + files + coords)
+      - name: Patch iOS sources (gizmo + mouse input + pointer drag + event log + probe + keyboard + files)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py patch_ios_drag.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py patch_ios_coords.py; do
+          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py patch_ios_pointer.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py; do
             curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.raw" \
@@ -124,18 +125,18 @@ jobs:
           python3 /tmp/patch_ios_input.py
           python3 /tmp/patch_ios_nav.py
           python3 /tmp/patch_ios_debug.py
-          python3 /tmp/patch_ios_drag.py
+          python3 /tmp/patch_ios_pointer.py
           python3 /tmp/patch_ios_probe.py
           python3 /tmp/patch_ios_keyboard.py
           python3 /tmp/patch_ios_files.py
-          python3 /tmp/patch_ios_coords.py
           grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
             source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
           grep -n "UITouchTypeIndirectPointer" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "IOS-NAV-MIDDLE" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "IOSDBG" source/blender/windowmanager/intern/wm_event_system.cc
-          grep -c "IOS-DRAG" intern/ghost/intern/GHOST_WindowIOS.mm
-          grep -c "iosdrag_active" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-PTR" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iosptr_down" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iosPointerUpdate:touches phase" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "IOS-PROBE" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "iosdbg_slot" source/blender/windowmanager/intern/wm_event_system.cc
           grep -c "iosdbg_slot" intern/ghost/intern/GHOST_SystemIOS.mm
@@ -147,7 +148,6 @@ jobs:
           grep -c "IOS-FILES-DEFAULT" source/blender/blenkernel/intern/appdir.cc
           grep -c "IOS-FILES-ORROOT" source/blender/blenkernel/intern/appdir.cc
           grep -c "IOS-FILES-HOME" source/blender/blenkernel/intern/appdir.cc
-          grep -c "IOS-COORDS" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "px=%dx%d" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "win=%dx%d" source/blender/windowmanager/intern/wm_event_system.cc
 
