@@ -141,6 +141,8 @@ jobs:
           grep -c "IOS-KEYBOARD" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "ioskbd_mod_state" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "pressesBegan" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "canBecomeFirstResponder" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iosKeyboardReclaimFocus" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "IOS-FILES-DEFAULT" source/blender/blenkernel/intern/appdir.cc
           grep -c "IOS-FILES-ORROOT" source/blender/blenkernel/intern/appdir.cc
           grep -c "IOS-FILES-HOME" source/blender/blenkernel/intern/appdir.cc
