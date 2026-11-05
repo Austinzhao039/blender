@@ -60,7 +60,7 @@ static const char *const iosdbg_caps[IOSDBG_SLOTS] = {
     "1 MOVE     ",
     "2 WM MOVE  ",
     "3 WM EVENT ",
-    "4 DRAG     ",
+    "4 PTR      ",
     "5 LOG      ",
     "6 VIEW     ",
 };
@@ -157,52 +157,65 @@ TAP_NEW = TAP_ANCHOR + """
     iosdbg_slot(0, iosdbg_buf);
   }"""
 
-# slot 4: handlePan guard already returns for indirect pointer, mark it.
-PAN_ANCHOR = """    fprintf(stderr, "[IOSGEST] pan(indirect) suppressed\\n");"""
+# slot 4: handlePan returns while our left-button drag is running, mark it.
+PAN_ANCHOR = """  if (iosptr_down) {
+    /* IOS-PTR: the same single finger is already driving a left-button drag.
+     * Letting this also emit a MOUSEPAN scroll would fight it. */
+    return;
+  }"""
 PAN_NEW = PAN_ANCHOR + """
-    iosdbg_slot(4, "PAN  indirect -> suppressed");"""
+  iosdbg_slot(4, "PAN suppressed (drag running)");"""
 
-# slot 0: raw press from the view touch callbacks
-PRESS_ANCHOR = """      fprintf(stderr, "[IOSGEST] press-begin n=%lu\\n", (unsigned long)touches.count);"""
+# slot 0: a real press reached the view touch callbacks
+PRESS_ANCHOR = """    fprintf(stderr, "[IOSPTR] down n=%d type=%d\\n", iosptr_presses, int(iosptr_touch.type));"""
 PRESS_NEW = PRESS_ANCHOR + """
-      {
-        char iosdbg_buf[192];
-        iosdbg_presses++;
-        snprintf(iosdbg_buf,
-                 sizeof(iosdbg_buf),
-                 "PRESS n=%d xy=(%d,%d) touch=%lu type=%d",
-                 iosdbg_presses,
-                 int(iosdrag_p.x),
-                 int(iosdrag_p.y),
-                 (unsigned long)touches.count,
-                 int(iosdrag_touch.type));
-        iosdbg_slot(0, iosdbg_buf);
-      }"""
-
-# slot 1: live move
-MOVE_ANCHOR = """    CGPoint iosdrag_p = [iosdrag_touch locationInView:window->getView()];
-    iosdrag_p = window->scalePointToWindow(iosdrag_p);"""
-MOVE_NEW = MOVE_ANCHOR + """
     {
       char iosdbg_buf[192];
       snprintf(iosdbg_buf,
                sizeof(iosdbg_buf),
-               "MOVE xy=(%d,%d) armed=%d active=%d d=%d",
-               int(iosdrag_p.x),
-               int(iosdrag_p.y),
-               int(iosdrag_armed) != 0,
-               int(iosdrag_active) != 0,
-               int(iosdrag_p.x - iosdrag_start.x));
-      iosdbg_slot(1, iosdbg_buf);
+               "PRESS n=%d xy=(%d,%d) type=%d",
+               iosptr_presses,
+               int(iosptr_p.x),
+               int(iosptr_p.y),
+               int(iosptr_touch.type));
+      iosdbg_slot(0, iosdbg_buf);
     }"""
 
-DRAG_BEGIN_ANCHOR = """      fprintf(stderr, "[IOSGEST] drag-begin\\n");"""
-DRAG_BEGIN_NEW = DRAG_BEGIN_ANCHOR + """
-      iosdbg_slot(4, "DRAG begin -> MMB down");"""
+# slot 1: live drag read-out
+MOVE_ANCHOR = """    iosptr_last = iosptr_p;
 
-DRAG_END_ANCHOR = """    fprintf(stderr, "[IOSGEST] drag-end\\n");"""
-DRAG_END_NEW = DRAG_END_ANCHOR + """
-    iosdbg_slot(4, "DRAG end -> MMB up");"""
+    UserInputEvent iosptr_move(&iosptr_p, nullptr, nullptr, false);"""
+MOVE_NEW = """    iosptr_last = iosptr_p;
+    {
+      char iosdbg_buf[192];
+      snprintf(iosdbg_buf,
+               sizeof(iosdbg_buf),
+               "MOVE xy=(%d,%d) d=%d hold=%d",
+               int(iosptr_p.x),
+               int(iosptr_p.y),
+               int(iosptr_p.x - iosptr_start.x),
+               int(iosptr_down) != 0);
+      iosdbg_slot(1, iosdbg_buf);
+    }
+
+    UserInputEvent iosptr_move(&iosptr_p, nullptr, nullptr, false);"""
+
+RELEASE_ANCHOR = """  fprintf(stderr, "[IOSPTR] up moved=%d\\n", int(iosptr_moved));"""
+RELEASE_NEW = RELEASE_ANCHOR + """
+  {
+    char iosdbg_buf[192];
+    snprintf(iosdbg_buf,
+             sizeof(iosdbg_buf),
+             "UP xy=(%d,%d) moved=%d",
+             int(iosptr_p.x),
+             int(iosptr_p.y),
+             int(iosptr_moved));
+    iosdbg_slot(4, iosdbg_buf);
+  }"""
+
+MULTI_ANCHOR = """      fprintf(stderr, "[IOSPTR] up (multi-touch)\\n");"""
+MULTI_NEW = MULTI_ANCHOR + """
+      iosdbg_slot(4, "UP  multi-touch, drag aborted");"""
 
 # ---------------------------------------------------------------------------
 # 2. the window-manager probe (wm_event_system.cc)
@@ -244,8 +257,8 @@ WM_PROBE_NEW = """  if (iosdbg_log) {
                int(area->spacetype),
                region_hovered ? int(region_hovered->regiontype) : -1,
                int(iosdbg_action),
-               iosdbg_win ? iosdbg_win->winrct.xmax : 0,
-               iosdbg_win ? iosdbg_win->winrct.ymax : 0);
+               iosdbg_win ? int(iosdbg_win->sizex) : 0,
+               iosdbg_win ? int(iosdbg_win->sizey) : 0);
       iosdbg_slot(2, iosdbg_buf);
       if (event->type != MOUSEMOVE) {
         iosdbg_slot(3, iosdbg_buf);
@@ -327,10 +340,10 @@ def main():
         (INSTALL_ANCHOR, INSTALL_NEW, "install overlay", "iosdbg_install(window->rootWindow"),
         (TAP_ANCHOR, TAP_NEW, "tap slot", "TAP n=%d xy=(%d,%d) st=%d"),
         (PAN_ANCHOR, PAN_NEW, "pan slot", "PAN  indirect -> suppressed"),
-        (PRESS_ANCHOR, PRESS_NEW, "press slot", "PRESS n=%d xy=(%d,%d) touch=%lu type=%d"),
-        (MOVE_ANCHOR, MOVE_NEW, "move slot", "MOVE xy=(%d,%d) armed=%d active=%d d=%d"),
-        (DRAG_BEGIN_ANCHOR, DRAG_BEGIN_NEW, "drag begin slot", "DRAG begin -> MMB down"),
-        (DRAG_END_ANCHOR, DRAG_END_NEW, "drag end slot", "DRAG end -> MMB up", 2),
+        (PRESS_ANCHOR, PRESS_NEW, "press slot", "PRESS n=%d xy=(%d,%d) type=%d"),
+        (MOVE_ANCHOR, MOVE_NEW, "move slot", "MOVE xy=(%d,%d) d=%d hold=%d"),
+        (RELEASE_ANCHOR, RELEASE_NEW, "release slot", "UP xy=(%d,%d) moved=%d"),
+        (MULTI_ANCHOR, MULTI_NEW, "multi-touch slot", "UP  multi-touch, drag aborted"),
     ])
     print("  patched %s (%d rules)" % (win, n))
 
