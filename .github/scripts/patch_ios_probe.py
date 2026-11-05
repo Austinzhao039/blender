@@ -93,6 +93,7 @@ extern "C" void iosdbg_slot(int idx, const char *text)
 
 static void iosdbg_install(UIWindow *iosdbg_root,
                            CGSize iosdbg_size,
+                           CGSize iosdbg_px,
                            CGFloat iosdbg_view_scale,
                            CGFloat iosdbg_screen_scale)
 {
@@ -103,9 +104,11 @@ static void iosdbg_install(UIWindow *iosdbg_root,
     char iosdbg_buf[192];
     snprintf(iosdbg_buf,
              sizeof(iosdbg_buf),
-             "VIEW %dx%d view=%.2f screen=%.2f",
+             "VIEW %dx%d px=%dx%d view=%.2f screen=%.2f",
              int(iosdbg_size.width),
              int(iosdbg_size.height),
+             int(iosdbg_px.width),
+             int(iosdbg_px.height),
              double(iosdbg_view_scale),
              double(iosdbg_screen_scale));
     iosdbg_slot(6, iosdbg_buf);
@@ -133,6 +136,7 @@ INSTALL_NEW = INSTALL_ANCHOR + """
   /* IOS-PROBE: create the diagnostic read-out once the view exists. */
   iosdbg_install(window->rootWindow,
                  [window->getView() bounds].size,
+                 window->getNativeWindowSize(),
                  [window->getView() contentScaleFactor],
                  [[UIScreen mainScreen] scale]);"""
 
@@ -227,10 +231,11 @@ WM_PROBE_NEW = """  if (iosdbg_log) {
                                 (event->type == RIGHTMOUSE)  ? "RMB" :
                                 (event->type == MOUSEPAN)    ? "PAN" :
                                                                "KEY";
+      const wmWindow *iosdbg_win = CTX_wm_window(C);
       char iosdbg_buf[192];
       snprintf(iosdbg_buf,
                sizeof(iosdbg_buf),
-               "WM %s ev=%d v=%d xy=(%d,%d) area=%d rgn=%d act=%d",
+               "WM %s ev=%d v=%d xy=(%d,%d) a=%d r=%d act=%d win=%dx%d",
                iosdbg_name,
                int(event->type),
                int(event->val),
@@ -238,7 +243,9 @@ WM_PROBE_NEW = """  if (iosdbg_log) {
                event->xy[1],
                int(area->spacetype),
                region_hovered ? int(region_hovered->regiontype) : -1,
-               int(iosdbg_action));
+               int(iosdbg_action),
+               iosdbg_win ? iosdbg_win->winrct.xmax : 0,
+               iosdbg_win ? iosdbg_win->winrct.ymax : 0);
       iosdbg_slot(2, iosdbg_buf);
       if (event->type != MOUSEMOVE) {
         iosdbg_slot(3, iosdbg_buf);
