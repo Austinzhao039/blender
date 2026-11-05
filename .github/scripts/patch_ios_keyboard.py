@@ -48,7 +48,12 @@ IFACE_NEW = IFACE_ANCHOR + """
 
   /* IOS-KEYBOARD: hardware keyboard.  UIKit delivers key presses through the
    * responder chain, which reaches this window while no text field is focused. */
-  - (void)iosKeyboardHandlePresses:(NSSet<UIPress *> *)presses down:(BOOL)down;"""
+  - (void)iosKeyboardHandlePresses:(NSSet<UIPress *> *)presses down:(BOOL)down;
+
+  /* IOS-KEYBOARD: keep this window in the first-responder slot so the responder chain
+   * has an entry point at all.  Declared here because it is also called from
+   * `hideOnscreenKeyboard` and from the notification handlers further down. */
+  - (void)iosKeyboardReclaimFocus;"""
 
 # ------------------------------------------------------------------ C helpers
 
@@ -321,7 +326,33 @@ static void ioskbd_sync_modifiers(GHOST_SystemIOS *system,
 
 METHODS_ANCHOR = "/* Override touch methods to capture the UITouch object. */"
 
-METHODS = '''/* IOS-KEYBOARD: turn a UIKit press set into Blender key events.
+METHODS = '''/* IOS-KEYBOARD: UIKit walks the responder chain to deliver `UIPress` objects, and the
+ * chain has no starting point unless *something* is the first responder.  Blender keeps no
+ * text field focused most of the time, so the window itself takes that role -- otherwise
+ * every hardware key press is silently dropped before `pressesBegan` is ever called.
+ *
+ * `becomeFirstResponder` on a UIWindow does **not** bring up the on-screen keyboard (a
+ * plain window has no `inputView`), so this does not interfere with text editing: while
+ * `text_field` is first responder UIKit keeps the presses there on purpose. */
+- (BOOL)canBecomeFirstResponder
+{
+  return YES;
+}
+
+/* IOS-KEYBOARD: take the first-responder slot back once the on-screen keyboard is gone.
+ * Also called when the window becomes key, because a window that is not on screen yet
+ * cannot become first responder. */
+- (void)iosKeyboardReclaimFocus
+{
+  if (text_field != nil && [text_field isFirstResponder]) {
+    return;
+  }
+  if (![self isFirstResponder]) {
+    [self becomeFirstResponder];
+  }
+}
+
+/* IOS-KEYBOARD: turn a UIKit press set into Blender key events.
  *
  * Two passes on purpose: the modifier state has to be updated (and the modifier
  * key events emitted) *before* the key that relies on them, otherwise
@@ -431,6 +462,34 @@ METHODS = '''/* IOS-KEYBOARD: turn a UIKit press set into Blender key events.
 
 METHODS_NEW = METHODS_ANCHOR + "\n" + METHODS
 
+# ------------------------------------------------------- first-responder upkeep
+
+OBSERVER_ANCHOR = """  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(keyboardWillChange:)
+                                               name:UIKeyboardWillHideNotification
+                                             object:nil];"""
+
+OBSERVER_NEW = OBSERVER_ANCHOR + """
+
+  /* IOS-KEYBOARD: the window has to keep the first-responder slot, otherwise UIKit has no
+   * place to start the responder chain from and hardware key presses are dropped before
+   * `pressesBegan` runs. */
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(iosKeyboardReclaimFocus)
+                                               name:UIKeyboardDidHideNotification
+                                             object:nil];
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(iosKeyboardReclaimFocus)
+                                               name:UIWindowDidBecomeKeyNotification
+                                             object:self];"""
+
+RESIGN_ANCHOR = "      [text_field resignFirstResponder];"
+
+RESIGN_NEW = RESIGN_ANCHOR + """
+      /* IOS-KEYBOARD: hand focus straight back to the window after the on-screen keyboard
+       * closed, so the next hardware key press still reaches the responder chain. */
+      [self iosKeyboardReclaimFocus];"""
+
 
 def read(path):
     with open(path, encoding="utf-8") as f:
@@ -470,7 +529,9 @@ def main():
     n = apply(win,
               [(IFACE_ANCHOR, IFACE_NEW, "keyboard method declaration"),
                (HELPERS_ANCHOR, HELPERS + HELPERS_ANCHOR, "keyboard helpers"),
-               (METHODS_ANCHOR, METHODS_NEW, "keyboard presses")])
+               (METHODS_ANCHOR, METHODS_NEW, "keyboard presses"),
+               (OBSERVER_ANCHOR, OBSERVER_NEW, "keyboard focus observers"),
+               (RESIGN_ANCHOR, RESIGN_NEW, "keyboard focus reclaim")])
     print("  patched %s (%d rules)" % (win, n))
 
 
