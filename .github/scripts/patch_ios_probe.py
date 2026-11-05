@@ -167,7 +167,7 @@ PAN_NEW = PAN_ANCHOR + """
   iosdbg_slot(4, "PAN suppressed (drag running)");"""
 
 # slot 0: a real press reached the view touch callbacks
-PRESS_ANCHOR = """    fprintf(stderr, "[IOSPTR] down n=%d type=%d\\n", iosptr_presses, int(iosptr_touch.type));"""
+PRESS_ANCHOR = """    fprintf(stdout, "[IOSPTR] down n=%d type=%d\\n", iosptr_presses, int(iosptr_touch.type));"""
 PRESS_NEW = PRESS_ANCHOR + """
     {
       char iosdbg_buf[192];
@@ -200,7 +200,7 @@ MOVE_NEW = """    iosptr_last = iosptr_p;
 
     UserInputEvent iosptr_move(&iosptr_p, nullptr, nullptr, false);"""
 
-RELEASE_ANCHOR = """  fprintf(stderr, "[IOSPTR] up moved=%d\\n", int(iosptr_moved));"""
+RELEASE_ANCHOR = """  fprintf(stdout, "[IOSPTR] up moved=%d\\n", int(iosptr_moved));"""
 RELEASE_NEW = RELEASE_ANCHOR + """
   {
     char iosdbg_buf[192];
@@ -213,7 +213,7 @@ RELEASE_NEW = RELEASE_ANCHOR + """
     iosdbg_slot(4, iosdbg_buf);
   }"""
 
-MULTI_ANCHOR = """      fprintf(stderr, "[IOSPTR] up (multi-touch)\\n");"""
+MULTI_ANCHOR = """      fprintf(stdout, "[IOSPTR] up (multi-touch)\\n");"""
 MULTI_NEW = MULTI_ANCHOR + """
       iosdbg_slot(4, "UP  multi-touch, drag aborted");"""
 
@@ -262,8 +262,9 @@ WM_PROBE_NEW = """  if (iosdbg_log) {
       iosdbg_slot(2, iosdbg_buf);
       if (event->type != MOUSEMOVE) {
         iosdbg_slot(3, iosdbg_buf);
+        /* Only non-motion events reach the log, mouse-moves would flood it. */
+        fprintf(stdout, "[IOSPROBE] %s\\n", iosdbg_buf);
       }
-      fprintf(stderr, "[IOSPROBE] %s\\n", iosdbg_buf);
     }
 #endif
   }
