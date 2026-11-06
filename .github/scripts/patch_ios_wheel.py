@@ -104,6 +104,57 @@ SCROLL_NEW = """  /* IOS-WHEEL: turn the continuous scroll into discrete wheel n
   fprintf(stdout, "[IOSWHEEL] notches=%d\\n", iOswheel_notches);"""
 
 
+PAN2F_OLD = """    /* Generate pan event if translation is non zero. */
+    if (!CGPointEqualToPoint(relative_translation, CGPointMake(0.0f, 0.0f))) {
+      CGPoint touch_point = [sender getScaledTouchPoint:window];
+      bool pencil_pan = current_pencil_touch ? true : false;
+      UserInputEvent event_info(&touch_point, &relative_translation, nullptr, pencil_pan);
+      event_info.add_event(UserInputEvent::EventTypes::PAN_GESTURE_TWO_FINGERS);
+      [self generateUserInputEvents:event_info];
+    }"""
+
+PAN2F_NEW = """    /* Generate pan event if translation is non zero. */
+    if (!CGPointEqualToPoint(relative_translation, CGPointMake(0.0f, 0.0f))) {
+      CGPoint touch_point = [sender getScaledTouchPoint:window];
+      bool pencil_pan = current_pencil_touch ? true : false;
+      UserInputEvent event_info(&touch_point, &relative_translation, nullptr, pencil_pan);
+      /* IOS-WHEEL: a mostly vertical two-finger drag scrolls the panel under the
+       * fingers.
+       *
+       * Panels, the outliner and the preferences window only consume wheel
+       * events; a trackpad scroll (MOUSEPAN) is read by the 3D view alone.  So
+       * a finger could never scroll anything on the device, no matter what the
+       * single-finger path did. */
+      if (fabs(relative_translation.y) > fabs(relative_translation.x)) {
+        static CGFloat iOswheel2f_rest = 0.0f;
+        const CGFloat iOswheel2f_step = 16.0f;
+        int iOswheel2f_notches = 0;
+        iOswheel2f_rest += relative_translation.y;
+        while (iOswheel2f_rest <= -iOswheel2f_step && iOswheel2f_notches > -4) {
+          iOswheel2f_notches -= 1;
+          iOswheel2f_rest += iOswheel2f_step;
+        }
+        while (iOswheel2f_rest >= iOswheel2f_step && iOswheel2f_notches < 4) {
+          iOswheel2f_notches += 1;
+          iOswheel2f_rest -= iOswheel2f_step;
+        }
+        if (iOswheel2f_notches != 0) {
+          const int iOswheel2f_count =
+              (iOswheel2f_notches > 0) ? iOswheel2f_notches : -iOswheel2f_notches;
+          for (int i = 0; i < iOswheel2f_count; i++) {
+            event_info.add_event(iOswheel2f_notches > 0 ? UserInputEvent::EventTypes::WHEEL_UP
+                                                        : UserInputEvent::EventTypes::WHEEL_DOWN);
+          }
+          [self generateUserInputEvents:event_info];
+          fprintf(stdout, "[IOSWHEEL] 2f notches=%d\\n", iOswheel2f_notches);
+          return;
+        }
+      }
+      event_info.add_event(UserInputEvent::EventTypes::PAN_GESTURE_TWO_FINGERS);
+      [self generateUserInputEvents:event_info];
+    }"""
+
+
 def main() -> int:
     target = Path(sys.argv[1] if len(sys.argv) > 1
                   else "intern/ghost/intern/GHOST_WindowIOS.mm")
@@ -123,6 +174,7 @@ def main() -> int:
         (DESC_ANCHOR, DESC_NEW, "enum description"),
         (EMIT_ANCHOR, EMIT_NEW, "event emission"),
         (SCROLL_OLD, SCROLL_NEW, "scroll wheel handler"),
+        (PAN2F_OLD, PAN2F_NEW, "two finger scroll"),
     ]
     for old, new, what in rules:
         if text.count(old) != 1:
