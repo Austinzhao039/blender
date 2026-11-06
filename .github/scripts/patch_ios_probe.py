@@ -60,8 +60,8 @@ static const char *const iosdbg_caps[IOSDBG_SLOTS] = {
     "1 MOVE     ",
     "2 WM MOVE  ",
     "3 WM EVENT ",
-    "4 PTR      ",
-    "5 LOG      ",
+    "4 DRAG     ",
+    "5 CLICK    ",
     "6 VIEW     ",
     "7 BUILD    ",
 };
@@ -117,7 +117,7 @@ static void iosdbg_install(UIWindow *iosdbg_root,
   /* IOS-PROBE: build tag.  A screenshot now proves which build is running,
    * which v11 could not - four broken behaviours looked exactly like "the
    * patches never made it into the binary". */
-  iosdbg_slot(7, "V12 ptr2 wheel2 lang2 savepref");
+  iosdbg_slot(7, "V14 tapclick middrag dedupe350");
   const CGFloat iosdbg_h = 106.0;
   iosdbg_label = [[UILabel alloc]
       initWithFrame:CGRectMake(4.0, iosdbg_size.height - iosdbg_h - 4.0, iosdbg_size.width - 8.0,
@@ -162,14 +162,23 @@ TAP_NEW = TAP_ANCHOR + """
     iosdbg_slot(0, iosdbg_buf);
   }"""
 
-# slot 4: handlePan returns while our left-button drag is running, mark it.
-PAN_ANCHOR = """  if (iosptr_down) {
-    /* IOS-PTR: the same single finger is already driving a left-button drag.
-     * Letting this also emit a MOUSEPAN scroll would fight it. */
-    return;
-  }"""
-PAN_NEW = PAN_ANCHOR + """
-  iosdbg_slot(4, "PAN suppressed (drag running)");"""
+# slot 4: the pan recogniser is what drives drags now (it sends MIDDLEMOUSE),
+# so its state is the thing to watch: no `MID` line at all means the drag never
+# reached Blender.
+PAN_ANCHOR = """- (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender
+{
+"""
+PAN_NEW = PAN_ANCHOR + """  {
+    char iosdbg_buf[192];
+    snprintf(iosdbg_buf,
+             sizeof(iosdbg_buf),
+             "MID st=%d xy=(%d,%d)",
+             int(sender.state),
+             int([sender getScaledTouchPoint:window].x),
+             int([sender getScaledTouchPoint:window].y));
+    iosdbg_slot(4, iosdbg_buf);
+  }
+"""
 
 # slot 0: a real press reached the view touch callbacks
 PRESS_ANCHOR = """    fprintf(stdout, "[IOSPTR] down n=%d type=%d\\n", iosptr_presses, int(iosptr_touch.type));"""
@@ -218,9 +227,6 @@ RELEASE_NEW = RELEASE_ANCHOR + """
     iosdbg_slot(4, iosdbg_buf);
   }"""
 
-MULTI_ANCHOR = """      fprintf(stdout, "[IOSPTR] up (multi-touch)\\n");"""
-MULTI_NEW = MULTI_ANCHOR + """
-      iosdbg_slot(4, "UP  multi-touch, drag aborted");"""
 
 # ---------------------------------------------------------------------------
 # 2. the window-manager probe (wm_event_system.cc)
@@ -345,11 +351,10 @@ def main():
     n = apply(win, [
         (INSTALL_ANCHOR, INSTALL_NEW, "install overlay", "iosdbg_install(window->rootWindow"),
         (TAP_ANCHOR, TAP_NEW, "tap slot", "GEST tap n=%d xy=(%d,%d) st=%d"),
-        (PAN_ANCHOR, PAN_NEW, "pan slot", "PAN suppressed (drag running)"),
+        (PAN_ANCHOR, PAN_NEW, "pan slot", "MID st=%d xy=(%d,%d)"),
         (PRESS_ANCHOR, PRESS_NEW, "press slot", "PTR press n=%d xy=(%d,%d) type=%d"),
         (MOVE_ANCHOR, MOVE_NEW, "move slot", "MOVE xy=(%d,%d) d=%d hold=%d"),
         (RELEASE_ANCHOR, RELEASE_NEW, "release slot", "UP xy=(%d,%d) moved=%d"),
-        (MULTI_ANCHOR, MULTI_NEW, "multi-touch slot", "UP  multi-touch, drag aborted"),
     ])
     print("  patched %s (%d rules)" % (win, n))
 
