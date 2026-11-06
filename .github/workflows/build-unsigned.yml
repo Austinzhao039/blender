@@ -539,6 +539,13 @@ jobs:
             touch "$p"
             echo "dropped ${CNT} stale object/dep file(s) for ${base}, source re-stamped"
           done
+          # --- ffmpeg off: drop the objects that were built with -DWITH_FFMPEG ---
+          # 这一轮把 WITH_CODEC_FFMPEG 关了。#306 从缓存恢复出来的 movie_*.o 是
+          # 带 ffmpeg 编的，链接时正是它们的 av_* 引用没处解。Xcode 的增量构建
+          # 认不认"编译宏变了"不好赌，直接把这批 .o 删掉强制重编（只有 7 个文件）。
+          rm -rf blender/build_ios/build/bf_imbuf_movie.build/Release-iphoneos/Objects-normal 2>/dev/null || true
+          find blender/build_ios -name "*ffmpeg*" -type f -delete 2>/dev/null || true
+          echo "dropped ffmpeg-dependent objects (bf_imbuf_movie + bpy_app_ffmpeg)"
           grep -c "IOS_FIXME: WM_operatortype_find() is documented" \
             blender/source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
           grep -c "UITouchTypeIndirectPointer" blender/intern/ghost/intern/GHOST_WindowIOS.mm
@@ -1620,6 +1627,28 @@ jobs:
 
           echo "All patches applied"
 
+      # #306 的教训：链接阶段 85 个 av*/avcodec_* 符号全部 undefined ——
+      # libav*.a 一个都没进 Blender 这个 target 的链接行，可是 configure 明明
+      # 打印了 Found FFmpeg。开关是 WITH_CODEC_FFMPEG（WITH_FFMPEG 只是它产生
+      # 的编译宏），而本轮 build_ios 是从 #305 结束时的缓存恢复出来的，
+      # CMakeCache 里的 FFMPEG_* 与工程的 OTHER_LDFLAGS 对不上：编译带
+      # -DWITH_FFMPEG（于是 movie_*.o 引用了 av_*），链接却没有那几个 .a。
+      # 这一轮先把 FFmpeg 整段关掉：iOS 端要验证的是触摸/滚轮/语言，不需要
+      # 视频编解码，而链接问题是二选一的死结，不该拿 45 分钟机时去赌。
+      # 顺手把静态库体检结果打进日志，将来要恢复 FFmpeg 时不用再猜库坏没坏。
+      - name: Diagnose FFmpeg static libraries (informational)
+        run: |
+          cd blender
+          L=lib/ios_arm64/ffmpeg/lib
+          for a in libavcodec.a libavutil.a libavformat.a libswscale.a; do
+            if [ -f "$L/$a" ]; then
+              echo "$a size=$(stat -f%z "$L/$a") members=$(ar t "$L/$a" 2>/dev/null | wc -l | tr -d ' ') arch=$(lipo -info "$L/$a" 2>&1 | tail -1)"
+            else
+              echo "$a MISSING"
+            fi
+          done
+          nm -gm "$L/libavcodec.a" 2>/dev/null | grep -c "_avcodec_open2" || true
+
       - name: Generate Xcode project
         id: cmake_config
         run: |
@@ -1642,6 +1671,7 @@ jobs:
             -DWITH_RUBBERBAND=OFF \
             -DWITH_OPENIMAGEIO=ON \
             -DWITH_LIBMV=OFF \
+            -DWITH_CODEC_FFMPEG=OFF \
             -DWITH_OPENMP=OFF \
             -DWITH_TBB=OFF \
             -DZSTD_ROOT_DIR="$PWD/lib/ios_arm64/zstd" \
@@ -1726,6 +1756,21 @@ jobs:
             echo "::error::homebrew Cellar fmt leaked into the Xcode project"
             exit 1
           fi
+          # #306 的链接失败是 ffmpeg 半开半关造成的（编译引用 av_*，链接没有
+          # libav*.a）。这一轮显式关掉，就在这里用秒级断言确认它真的关了 ——
+          # 否则要等到 27 分钟编译完的 Ld 才暴露。
+          if grep -q "^WITH_CODEC_FFMPEG:BOOL=ON" blender/build_ios/CMakeCache.txt; then
+            echo "::error::WITH_CODEC_FFMPEG is still ON - the cached CMakeCache overrode it"
+            grep -i "ffmpeg" blender/build_ios/CMakeCache.txt | head -10 || true
+            exit 1
+          fi
+          echo "OK: WITH_CODEC_FFMPEG is off"
+          if grep -qi "libavcodec" "$PBX"; then
+            echo "::error::libavcodec.a still referenced by the Xcode project while FFmpeg is off"
+            grep -i "libavcodec" "$PBX" | head -5
+            exit 1
+          fi
+          echo "OK: no ffmpeg archive in the link"
 
       # Frameworks/ 是手写进 app bundle 的（Embed 步骤在 build 之后才跑）。
       # 但如果它被当成「Folder reference」进了 Resources 阶段，xcodebuild 会用
