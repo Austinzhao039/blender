@@ -156,7 +156,12 @@ jobs:
           grep -c "win=%dx%d" source/blender/windowmanager/intern/wm_event_system.cc
           grep -c "IOS-WHEEL" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "IOS-NAV-DRAG" scripts/presets/keyconfig/keymap_data/blender_default.py
-          grep -c "iosptr_dragging" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iosptr_active" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iosptr_report_clicks" intern/ghost/intern/GHOST_WindowIOS.mm
+          if grep -q "already driving a left-button drag" intern/ghost/intern/GHOST_WindowIOS.mm; then
+            echo "::error::handlePan is still blocked, no drag can ever reach Blender"
+            exit 1
+          fi
           grep -c "delaysTouchesBegan = NO" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "IOS-LANG" source/blender/windowmanager/intern/wm_init_exit.cc
           grep -c "ios_language_autodetect" source/blender/windowmanager/intern/wm_init_exit.cc
@@ -165,7 +170,7 @@ jobs:
           grep -c "ios_wm_request_save" source/blender/windowmanager/intern/wm_event_system.cc
           grep -c "iosptr_click_allowed" intern/ghost/intern/GHOST_WindowIOS.mm
           grep -c "iOswheel2f_notches" intern/ghost/intern/GHOST_WindowIOS.mm
-          grep -c "V12 ptr2" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "V14 tapclick" intern/ghost/intern/GHOST_WindowIOS.mm
 
       - name: Download startup.blend from Release (main2)
         run: |
