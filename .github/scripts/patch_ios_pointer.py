@@ -1,40 +1,40 @@
 #!/usr/bin/env python3
-"""One complete left-button gesture per single touch, driven by the view's own
-touch callbacks.
+"""One clean click per single finger, and get out of the way of drags.
 
-Upstream only emits a click when the finger LIFTS (`handleTap:` on state
-``Ended``), so the button is never held while the pointer moves - every drag in
-Blender (sliders, scroll-bars, panel borders, box select, transforms) is
-impossible by construction.
+Why drags are not done here
+---------------------------
+`LEFTMOUSE CLICK_DRAG` cannot work in this port, no matter what the key map
+says: `wm_handlers_do()` only arms `event_queue_check_drag` for a press that was
+*not* handled, and `view3d.select` handles every press in the viewport, so the
+drag branch at the top of that function is unreachable.  v11 inserted
+`("view3d.rotate", LEFTMOUSE + CLICK_DRAG)` at the head of `km_view3d` and it
+could never have fired.
 
-This patch replaces that with a real gesture:
+Drags therefore go through `handlePan:` instead, which sends MIDDLEMOUSE (see
+`patch_ios_nav.py`).  That is the binding `view3d.rotate` (`MIDDLEMOUSE`,
+`PRESS`) and `view2d.pan` listen to, so one finger rotates the viewport and pans
+2D editors and panels.  v12 blocked exactly that with `if (iosptr_down) return;`
+in `handlePan:` - `iosptr_down` is set on every touch-down, so the pan
+recogniser never ran and nothing on the device could be dragged.
 
-  press                  -> CURSOR_MOVE only (hover / hit-testing stays correct)
-  move, > threshold      -> CURSOR_MOVE(start) + LEFT_BUTTON_DOWN, then moves
-  release after a drag   -> CURSOR_MOVE + LEFT_BUTTON_UP
-  release without a drag -> CURSOR_MOVE + LEFT_BUTTON_DOWN + LEFT_BUTTON_UP
+What is left here is the tap:
 
-A tap therefore stays a click (selection keeps working) while a drag is a real
-press-drag-release, which is what ``view2d.scroller_activate``, ``ui_but``
-dragging and ``view3d.rotate`` (see patch_ios_preset.py) all consume.
+  down                   -> CURSOR_MOVE only (hover / hit-testing)
+  move                   -> CURSOR_MOVE (so gizmos, cursors and tooltips follow)
+  up, moved < 14 px      -> CURSOR_MOVE + LEFT_BUTTON_DOWN + LEFT_BUTTON_UP
+  up, moved >= 14 px     -> nothing, `handlePan:` already drove the drag
 
-v12 changes, all three fixing a "needs two taps" / "drag does nothing" class of
-bug that survived v11:
+A press and its release at the same point is what Blender turns into a
+#KM_CLICK, and that is what selection, buttons, menus and the top bar consume.
 
-* A gesture that never receives its release (a popup closed under the finger, the
-  touch was cancelled, the app was covered) left ``iosptr_down`` set forever.
-  Every later press then bailed out at ``if (iosptr_down) return;`` and only the
-  release path ran, against a start point from the previous gesture.  A new
-  press now closes the stale gesture first, so the state matches reality.
-
-* ``handleTap:`` and this callback can both produce a click for the same touch.
-  v11 tried to fix that by restricting the recogniser to the pencil, which
-  assumes these touch callbacks always run - when UIKit does not deliver them,
-  *no* tap produces a click at all, which is worse than the duplicate.  Both
-  sources stay enabled and a shared 80 ms guard drops whichever fires second.
-
-* ``delaysTouchesBegan`` on the two/three/four finger tap recognisers delays the
-  delivery of a single-finger touch to the view until the recogniser fails.
+Duplicate clicks
+----------------
+`handleTap:` runs for the same touch and emits its own click.  The old guard was
+an 80 ms window, which is shorter than the delay between `touchesEnded` and a
+gesture action on a main thread that is busy rendering - so both clicks landed,
+the first opened a menu and the second closed it again ("everything needs two
+taps").  The guard is now 350 ms *and* position-based, and it counts what it
+does so the on-screen read-out can prove whether a duplicate still happens.
 
 Idempotent: guarded by the ``IOS-PTR`` marker.
 """
@@ -51,33 +51,64 @@ STATE_ANCHOR = ("/* GHOSTUITapGesture interface for capturing taps. */\n"
                 "@interface GHOSTUITapGestureRecognizer")
 
 STATE_NEW = """/* IOS-PTR: state */
-/* IOS-PTR: state of the left-button gesture driven by the view touch callbacks. */
+/* IOS-PTR: state of the tap driven by the view touch callbacks. */
 static BOOL iosptr_down = NO;
-static BOOL iosptr_dragging = NO;
 static BOOL iosptr_moved = NO;
 static CGPoint iosptr_start = {0.0f, 0.0f};
 static CGPoint iosptr_last = {0.0f, 0.0f};
 static uintptr_t iosptr_token = 0;
-static int iosptr_presses = 0;
-static int iosptr_drags = 0;
 static int iosptr_active = 0;
+static int iosptr_presses = 0;
+static int iosptr_clicks = 0;
+static int iosptr_gesture_clicks = 0;
+static int iosptr_click_drops = 0;
+static CGPoint iosptr_last_click_xy = {0.0f, 0.0f};
 static double iosptr_last_click = 0.0;
 
-/* IOS-PTR: exactly one click per physical tap.
+/* IOS-PTR: painted by the on-screen read-out (patch_ios_probe.py). */
+extern "C" void iosdbg_slot(int idx, const char *text);
+
+/* IOS-PTR: one click per physical tap, from whichever source gets there first.
  *
- * Both the touch callbacks below and `handleTap:` can deliver the click for the
- * same touch.  Two clicks in a row is what made a top-bar menu need two taps -
- * the first one opened the popup and the second closed it again.  The guard is
- * shared by both sources, so it does not matter which one runs first, and it
- * stays harmless when only one of them is reachable at all. */
-static BOOL iosptr_click_allowed(void)
+ * `handleTap:` and the touch callbacks below both produce a click for the same
+ * touch.  A time-only window failed: the gesture action is dispatched after
+ * `touchesEnded`, and on a main thread that is also rendering Blender that can
+ * take far longer than the 80 ms v12 allowed - so the second click survived,
+ * opened a menu and closed it again.  350 ms plus "same spot" catches it without
+ * swallowing two deliberate taps. */
+static BOOL iosptr_click_allowed(CGPoint iosptr_p, BOOL iosptr_from_gesture)
 {
   const double iosptr_now = [NSDate timeIntervalSinceReferenceDate];
-  if (iosptr_now - iosptr_last_click < 0.08) {
+  const CGFloat iosptr_dx = iosptr_p.x - iosptr_last_click_xy.x;
+  const CGFloat iosptr_dy = iosptr_p.y - iosptr_last_click_xy.y;
+  if (((iosptr_now - iosptr_last_click) < 0.35) &&
+      ((iosptr_dx * iosptr_dx) + (iosptr_dy * iosptr_dy)) < 144.0f)
+  {
+    iosptr_click_drops++;
     return NO;
   }
   iosptr_last_click = iosptr_now;
+  iosptr_last_click_xy = iosptr_p;
+  if (iosptr_from_gesture) {
+    iosptr_gesture_clicks++;
+  }
+  else {
+    iosptr_clicks++;
+  }
   return YES;
+}
+
+/* IOS-PTR: keep the counters on screen, they are how a duplicate is spotted. */
+static void iosptr_report_clicks(void)
+{
+  char iosptr_buf[192];
+  snprintf(iosptr_buf,
+           sizeof(iosptr_buf),
+           "CLK touch=%d gest=%d drop=%d",
+           iosptr_clicks,
+           iosptr_gesture_clicks,
+           iosptr_click_drops);
+  iosdbg_slot(5, iosptr_buf);
 }
 
 """ + STATE_ANCHOR
@@ -126,19 +157,20 @@ TOUCH_CALLS = [
      "touchesCancelled"),
 ]
 
-# --- 3. the gesture itself --------------------------------------------------
+# --- 3. the tap -------------------------------------------------------------
 METHOD_ANCHOR = """- (void)handleTap:(GHOSTUITapGestureRecognizer *)sender
 {"""
 
-METHOD_NEW = """/* IOS-PTR: one complete left-button gesture per single non-pencil touch.
+METHOD_NEW = """/* IOS-PTR: tap = click, drag = `handlePan:` (MIDDLEMOUSE).
  *
  * phase: 0 = began, 1 = moved, 2 = ended, 3 = cancelled.
  *
- * The press is only sent once the pointer has travelled far enough to be a
- * drag: a tap stays a clean click (selection, menus, buttons) while a drag is
- * a real press-drag-release, which is what sliders, scroll-bars, panel borders
- * and `view3d.rotate` need.  Pressing at touch-down would also start a
- * transform on every tap. */
+ * No LEFTMOUSE is emitted while the finger moves.  In this port a left-drag has
+ * nowhere to go (see the module docstring: `event_queue_check_drag` is never
+ * armed), and pressing at touch-down used to start `view3d.select` on every tap.
+
+ * The pan recogniser owns the drag: it fires after ~10 px and sends a
+ * MIDDLEMOUSE drag, which rotates the viewport and pans 2D views. */
 - (void)iosPointerUpdate:(NSSet<UITouch *> *)touches phase:(int)phase
 {
   const int iosptr_n = int(touches.count);
@@ -153,23 +185,15 @@ METHOD_NEW = """/* IOS-PTR: one complete left-button gesture per single non-penc
   }
 
   if ((iosptr_n != 1) || ((phase == 0) && (iosptr_active > 1))) {
-    /* Not a single-finger gesture: the recognisers own it now (two fingers
-     * scroll, pinch zooms).
-     *
-     * `touches` holds only the touches that CHANGED, so the second finger of a
-     * two-finger gesture arrives as a set of one and used to look exactly like
-     * a new press - which then fired a click when those fingers lifted, right
-     * in the middle of a scroll.  `iosptr_active` is what tells the two apart.
-     * Finish any drag we had started so the button cannot stay stuck down. */
+    /* Not a single-finger gesture: two fingers scroll and zoom through the
+     * recognisers.  `touches` only holds the touches that CHANGED, so the
+     * second finger arrives as a set of one and looks exactly like a new press
+     * - `iosptr_active` is what tells the two apart, otherwise a scroll fired a
+     * stray click when those fingers lifted. */
     if (iosptr_down) {
       iosptr_down = NO;
-      iosptr_dragging = NO;
       iosptr_token = 0;
-      UserInputEvent iosptr_up(&iosptr_last, nullptr, nullptr, false);
-      iosptr_up.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
-      iosptr_up.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
-      [self generateUserInputEvents:iosptr_up];
-      fprintf(stdout, "[IOSPTR] up (multi-touch)\\n");
+      iosptr_moved = NO;
     }
     return;
   }
@@ -188,30 +212,15 @@ METHOD_NEW = """/* IOS-PTR: one complete left-button gesture per single non-penc
       /* The same press delivered twice, nothing to do. */
       return;
     }
-    if (iosptr_down) {
-      /* A gesture that never got its release - a popup closed under the finger,
-       * the touch was cancelled, the app went to the background.  Without this
-       * the next press bailed out here and only the release ran, using a start
-       * point from minutes ago: that is the "first tap does nothing" symptom. */
-      iosptr_down = NO;
-      iosptr_dragging = NO;
-      iosptr_token = 0;
-      UserInputEvent iosptr_stale(&iosptr_last, nullptr, nullptr, false);
-      iosptr_stale.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
-      iosptr_stale.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
-      [self generateUserInputEvents:iosptr_stale];
-      fprintf(stdout, "[IOSPTR] up (stale gesture closed)\\n");
-    }
     iosptr_down = YES;
-    iosptr_dragging = NO;
     iosptr_moved = NO;
     iosptr_token = (uintptr_t)iosptr_touch;
     iosptr_start = iosptr_p;
     iosptr_last = iosptr_p;
     iosptr_presses++;
 
-    /* Only move the cursor: Blender takes the hit-test position from this, and
-     * nothing must be pressed yet - press or click is decided on release. */
+    /* Hover only: Blender takes the hit-test position from this and nothing
+     * must be pressed yet - press or click is decided on release. */
     UserInputEvent iosptr_event(&iosptr_p, nullptr, nullptr, false);
     iosptr_event.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
     [self generateUserInputEvents:iosptr_event];
@@ -225,30 +234,22 @@ METHOD_NEW = """/* IOS-PTR: one complete left-button gesture per single non-penc
   }
 
   if (phase == 1) {
-    if (!iosptr_dragging) {
-      const CGFloat iosptr_dx = iosptr_p.x - iosptr_start.x;
-      const CGFloat iosptr_dy = iosptr_p.y - iosptr_start.y;
-      if ((iosptr_dx * iosptr_dx + iosptr_dy * iosptr_dy) <= 144.0f) {
-        /* Still inside the click radius, keep waiting. */
-        return;
-      }
-      /* Crossed the threshold: this is a drag.  Press at the point where the
-       * gesture started, that is where the widget under the finger is. */
-      iosptr_dragging = YES;
-      iosptr_moved = YES;
-      iosptr_drags++;
-      UserInputEvent iosptr_begin(&iosptr_start, nullptr, nullptr, false);
-      iosptr_begin.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
-      iosptr_begin.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_DOWN);
-      [self generateUserInputEvents:iosptr_begin];
-      fprintf(stdout, "[IOSPTR] drag begin\\n");
-    }
-
     iosptr_last = iosptr_p;
 
     UserInputEvent iosptr_move(&iosptr_p, nullptr, nullptr, false);
     iosptr_move.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
     [self generateUserInputEvents:iosptr_move];
+
+    {
+      const CGFloat iosptr_dx = iosptr_p.x - iosptr_start.x;
+      const CGFloat iosptr_dy = iosptr_p.y - iosptr_start.y;
+      if (!iosptr_moved &&
+          ((iosptr_dx * iosptr_dx) + (iosptr_dy * iosptr_dy)) > 196.0f)
+      {
+        /* 14 px: past a tap, `handlePan:` already turned this into a drag. */
+        iosptr_moved = YES;
+      }
+    }
     return;
   }
 
@@ -258,18 +259,24 @@ METHOD_NEW = """/* IOS-PTR: one complete left-button gesture per single non-penc
 
   UserInputEvent iosptr_end(&iosptr_p, nullptr, nullptr, false);
   iosptr_end.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
-  if (iosptr_dragging) {
-    iosptr_end.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
-  }
-  else if (iosptr_click_allowed()) {
-    /* A tap: one press and one release at the same position, so Blender turns
-     * it into a #KM_CLICK exactly like a mouse click. */
+  if ((phase == 2) && !iosptr_moved && iosptr_click_allowed(iosptr_p, NO)) {
+    /* One press and one release at the same point: Blender turns that into a
+     * #KM_CLICK, exactly like a mouse click. */
     iosptr_end.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_DOWN);
     iosptr_end.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_UP);
   }
   [self generateUserInputEvents:iosptr_end];
   fprintf(stdout, "[IOSPTR] up moved=%d\\n", int(iosptr_moved));
-  iosptr_dragging = NO;
+
+  if (!iosptr_moved) {
+    /* Trailing hover after the click: Blender re-runs hit-testing on the next
+     * move, and without it the button under the finger stays "cold" until a
+     * second tap - the "top bar needs two taps" symptom. */
+    UserInputEvent iosptr_hover(&iosptr_p, nullptr, nullptr, false);
+    iosptr_hover.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
+    [self generateUserInputEvents:iosptr_hover];
+  }
+  iosptr_report_clicks();
   iosptr_moved = NO;
 }
 
@@ -278,51 +285,42 @@ METHOD_NEW = """/* IOS-PTR: one complete left-button gesture per single non-penc
 # --- 4. interface declaration ----------------------------------------------
 IFACE_ANCHOR = """/* On screen keyboard handling */
 - (UITextField *)getUITextField;"""
-IFACE_NEW = """/* IOS-PTR: gesture driver, see the implementation for why. */
+IFACE_NEW = """/* IOS-PTR: tap driver, see the implementation for why. */
 - (void)iosPointerUpdate:(NSSet<UITouch *> *)touches phase:(int)phase;
 
 """ + IFACE_ANCHOR
 
-# --- 5. handlePan: hands off while our gesture owns the touch --------------
-PAN_ANCHOR = """- (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender
-{"""
-PAN_NEW = PAN_ANCHOR + """
-  if (iosptr_down) {
-    /* IOS-PTR: the same single finger is already driving a left-button drag.
-     * Letting this also emit a MOUSEPAN scroll would fight it. */
-    return;
-  }
-"""
-
-# --- 6. touch delays --------------------------------------------------------
+# --- 5. touch delays --------------------------------------------------------
 DELAYS = [
     ("tap2f_gesture_recognizer", "two fingers"),
     ("tap3f_gesture_recognizer", "three fingers"),
     ("tap4f_gesture_recognizer", "four fingers"),
 ]
 
-# --- 7. the recogniser keeps every touch type ------------------------------
+# --- 6. the recogniser keeps every touch type ------------------------------
 TAP_TYPES_OLD = """  tap_gesture_recognizer.allowedTouchTypes = @[
     @(UITouchTypePencil), @(UITouchTypeDirect), @(UITouchTypeIndirectPointer)
   ];"""
 TAP_TYPES_NEW = """  /* IOS-PTR: keep every touch type here.
    *
    * v11 narrowed this to the pencil, assuming `iosPointerUpdate:phase:` always
-   * runs.  If UIKit does not deliver the window's touch callbacks the app then
-   * has no click source at all, which is worse than the duplicate it removed.
-   * The duplicate is dropped by `iosptr_click_allowed()` instead, and that
-   * guard works regardless of which of the two sources is reachable. */
+   * runs.  If UIKit ever stops delivering the window's touch callbacks the app
+   * then has no click source at all, which is worse than the duplicate it
+   * removed.  The duplicate is dropped by `iosptr_click_allowed()` instead, and
+   * that guard works regardless of which of the two sources is reachable. */
   tap_gesture_recognizer.allowedTouchTypes = @[
     @(UITouchTypePencil), @(UITouchTypeDirect), @(UITouchTypeIndirectPointer)
   ];"""
 
-# --- 8. the same guard inside handleTap ------------------------------------
+# --- 7. the same guard inside handleTap ------------------------------------
 TAP_CLICK_OLD = """  /* Send events to indicate a 'click' on event end. */
   if (sender.state == UIGestureRecognizerStateEnded) {"""
 TAP_CLICK_NEW = """  /* Send events to indicate a 'click' on event end. */
   /* IOS-PTR: `iosptr_click_allowed()` drops this click when the touch callbacks
    * already delivered one for the same tap. */
-  if ((sender.state == UIGestureRecognizerStateEnded) && iosptr_click_allowed()) {"""
+  if ((sender.state == UIGestureRecognizerStateEnded) &&
+      iosptr_click_allowed(touch_point, YES))
+  {"""
 
 
 def main() -> int:
@@ -333,15 +331,14 @@ def main() -> int:
         return 1
 
     text = target.read_text(encoding="utf-8")
-    if "/* IOS-PTR: state of the left-button gesture" in text:
+    if "/* IOS-PTR: state of the tap" in text:
         print(f"  already  {target}")
         return 0
 
     rules = [
         (STATE_ANCHOR, STATE_NEW, "pointer state"),
         (IFACE_ANCHOR, IFACE_NEW, "interface"),
-        (METHOD_ANCHOR, METHOD_NEW, "gesture method"),
-        (PAN_ANCHOR, PAN_NEW, "pan hands off"),
+        (METHOD_ANCHOR, METHOD_NEW, "tap method"),
         (TAP_TYPES_OLD, TAP_TYPES_NEW, "tap recogniser types"),
         (TAP_CLICK_OLD, TAP_CLICK_NEW, "tap click guard"),
     ]
