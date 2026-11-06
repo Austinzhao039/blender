@@ -107,7 +107,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py patch_ios_pointer.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py patch_ios_wheel.py patch_ios_preset.py patch_ios_lang.py; do
+          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_debug.py patch_ios_pointer.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py patch_ios_wheel.py patch_ios_preset.py patch_ios_lang.py patch_ios_savepref.py; do
             curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.raw" \
@@ -132,6 +132,7 @@ jobs:
           python3 /tmp/patch_ios_wheel.py
           python3 /tmp/patch_ios_preset.py
           python3 /tmp/patch_ios_lang.py
+          python3 /tmp/patch_ios_savepref.py
           grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
             source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
           grep -n "UITouchTypeIndirectPointer" intern/ghost/intern/GHOST_WindowIOS.mm
@@ -160,6 +161,11 @@ jobs:
           grep -c "IOS-LANG" source/blender/windowmanager/intern/wm_init_exit.cc
           grep -c "ios_language_autodetect" source/blender/windowmanager/intern/wm_init_exit.cc
           grep -c "ios_system_locale" intern/ghost/intern/GHOST_SystemIOS.mm
+          grep -c "IOS-SAVEPREF" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "ios_wm_request_save" source/blender/windowmanager/intern/wm_event_system.cc
+          grep -c "iosptr_click_allowed" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iOswheel2f_notches" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "V12 ptr2" intern/ghost/intern/GHOST_WindowIOS.mm
 
       - name: Download startup.blend from Release (main2)
         run: |
