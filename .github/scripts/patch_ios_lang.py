@@ -180,12 +180,12 @@ static void ios_language_autodetect()
     return;
   }
 
-  /* A directory in the user config folder is the "already decided" marker; it
-   * needs no file handling and survives for as long as the install does. */
-  const bool already_done = BKE_appdir_folder_id(BLENDER_USER_CONFIG, "ios_lang_v1").has_value();
-  if (!is_auto && already_done) {
-    return;
-  }
+  /* IOS-LANG v2: a previous attempt is NOT treated as final any more.
+   *
+   * v11 created the marker directory below even when no locale matched, and the
+   * marker then suppressed every later start: the UI stayed English forever and
+   * there was no way back short of wiping the app.  Retrying is cheap (one
+   * Foundation call) and idempotent, so only the preference value decides. */
 
   char sys_locale[64];
   ios_system_locale(sys_locale, sizeof(sys_locale));
@@ -205,8 +205,12 @@ static void ios_language_autodetect()
           match != nullptr ? match->value : -1,
           int(is_auto));
 
-  if (!is_auto && !already_done) {
+  if (!is_auto && (match != nullptr)) {
+    /* Only a successful match counts: the marker means "this install decided",
+     * not "this install tried".  Mark the preferences dirty so the next save
+     * (see patch_ios_savepref.py) persists the language. */
     BKE_appdir_folder_id_create(BLENDER_USER_CONFIG, "ios_lang_v1");
+    U.runtime.is_dirty = true;
   }
 }
 #endif /* IOS_LANG_SUPPORTED */
