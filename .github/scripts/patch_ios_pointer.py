@@ -60,6 +60,7 @@ static CGPoint iosptr_last = {0.0f, 0.0f};
 static uintptr_t iosptr_token = 0;
 static int iosptr_presses = 0;
 static int iosptr_drags = 0;
+static int iosptr_active = 0;
 static double iosptr_last_click = 0.0;
 
 /* IOS-PTR: exactly one click per physical tap.
@@ -140,9 +141,26 @@ METHOD_NEW = """/* IOS-PTR: one complete left-button gesture per single non-penc
  * transform on every tap. */
 - (void)iosPointerUpdate:(NSSet<UITouch *> *)touches phase:(int)phase
 {
-  if (touches.count != 1) {
-    /* A second finger joined: the gesture recognisers own it now.  Finish any
-     * drag we started so the button cannot stay stuck down. */
+  const int iosptr_n = int(touches.count);
+  if (phase == 0) {
+    iosptr_active += iosptr_n;
+  }
+  else if (phase >= 2) {
+    iosptr_active -= iosptr_n;
+    if (iosptr_active < 0) {
+      iosptr_active = 0;
+    }
+  }
+
+  if ((iosptr_n != 1) || ((phase == 0) && (iosptr_active > 1))) {
+    /* Not a single-finger gesture: the recognisers own it now (two fingers
+     * scroll, pinch zooms).
+     *
+     * `touches` holds only the touches that CHANGED, so the second finger of a
+     * two-finger gesture arrives as a set of one and used to look exactly like
+     * a new press - which then fired a click when those fingers lifted, right
+     * in the middle of a scroll.  `iosptr_active` is what tells the two apart.
+     * Finish any drag we had started so the button cannot stay stuck down. */
     if (iosptr_down) {
       iosptr_down = NO;
       iosptr_dragging = NO;
