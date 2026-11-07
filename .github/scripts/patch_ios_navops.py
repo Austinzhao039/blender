@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Let the 3D-view navigation operators run on iOS (IOS-NAVOPS).
+"""Let the 3D-view navigation operators and view2d.pan run on iOS (IOS-NAVOPS).
 
 Why this exists
 ---------------
@@ -24,6 +24,11 @@ never carries it, so `viewrotate_invoke()` returned `OPERATOR_FINISHED` before
 `view3d_navigate_invoke_impl()` ever ran -- the operator existed, matched the
 key map, and did nothing.  That is exactly the "the middle of the screen never
 moves" symptom.
+
+`view_pan_invoke()` in `interface/view2d/view2d_ops.cc` carries the same style
+of guard, scoped to File Browser / Asset Shelf.  It has the identical defect:
+a synthesized MIDDLEMOUSE drag is filtered out, so the file list cannot be
+panned with one finger or a mouse drag.  The fix is the same.
 
 The fix keeps the original intent (a one-finger *trackpad scroll* must scroll UI
 lists instead of orbiting the view) while letting real mouse-button events
@@ -61,19 +66,44 @@ DEFAULT_TARGETS = [
     "source/blender/editors/space_view3d/view3d_navigate_view_move.cc",
 ]
 
+# `view_pan_invoke` guards only File Browser / Asset Shelf, so the anchor and
+# replacement differ from the 3D-view ones above.  Same marker, same idea.
+VIEW2D_TARGET = "source/blender/editors/interface/view2d/view2d_ops.cc"
 
-def patch_file(path: pathlib.Path) -> str:
+VIEW2D_ANCHOR = """  /* Only scroll the File/Asset Browser and Asset Shelf views with multiple finger on iOS. */
+  if ((area->spacetype == SPACE_FILE || region->regiontype == RGN_TYPE_ASSET_SHELF) &&
+      !(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS))
+  {
+    return OPERATOR_FINISHED;
+  }"""
+
+VIEW2D_NEW = """  /* IOS-NAVOPS: a mouse-button event must not be filtered out here.
+   *
+   * The stock condition insists on #WM_EVENT_MULTITOUCH_TWO_FINGERS, which only
+   * a two-finger trackpad scroll ever sets.  The middle-button drag synthesized
+   * for a one-finger pan (see `patch_ios_nav.py`) carries no such flag, so this
+   * operator returned #OPERATOR_FINISHED immediately and the File Browser /
+   * Asset Shelf never panned.  Keep the original behaviour for trackpad scrolls. */
+  if ((area->spacetype == SPACE_FILE || region->regiontype == RGN_TYPE_ASSET_SHELF) &&
+      !(event->flag & WM_EVENT_MULTITOUCH_TWO_FINGERS) && event->type != LEFTMOUSE &&
+      event->type != MIDDLEMOUSE && event->type != RIGHTMOUSE)
+  {
+    return OPERATOR_FINISHED;
+  }"""
+
+
+def patch_anchor(path: pathlib.Path, anchor: str, new: str) -> str:
     text = path.read_text(encoding="utf-8")
 
     if MARK in text:
         return "already"
 
-    if text.count(GUARD_ANCHOR) != 1:
+    if text.count(anchor) != 1:
         raise SystemExit(
-            f"{path}: expected exactly one guard anchor, found {text.count(GUARD_ANCHOR)}"
+            f"{path}: expected exactly one guard anchor, found {text.count(anchor)}"
         )
 
-    text = text.replace(GUARD_ANCHOR, GUARD_NEW, 1)
+    text = text.replace(anchor, new, 1)
 
     if MARK not in text:
         raise SystemExit(f"{path}: marker missing after replace")
@@ -90,7 +120,11 @@ def main() -> int:
         target = root / rel
         if not target.exists():
             raise SystemExit(f"missing {target}")
-        print(f"{rel}: {patch_file(target)}")
+        print(f"{rel}: {patch_anchor(target, GUARD_ANCHOR, GUARD_NEW)}")
+    target = root / VIEW2D_TARGET
+    if not target.exists():
+        raise SystemExit(f"missing {target}")
+    print(f"{VIEW2D_TARGET}: {patch_anchor(target, VIEW2D_ANCHOR, VIEW2D_NEW)}")
     return 0
 
 
