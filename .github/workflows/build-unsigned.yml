@@ -189,12 +189,37 @@ jobs:
           grep -c "handlePan is a no-op" intern/ghost/intern/GHOST_WindowIOS.mm
 
       - name: Download startup.blend from Release (main2)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd blender
           mkdir -p release/datafiles
-          curl -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o startup.zip https://github.com/Austinzhao039/blender/releases/download/main2/startup.zip
-          unzip -o startup.zip
-          rm startup.zip
+          # github.com/<repo>/releases/download/... 走 CDN，抖动时直接 504 并让
+          # `bash -e` 中断整个 job（#313 就是这样挂的）。改为优先用 API 资产端点，
+          # 失败再回退到直连 URL / LFS，全程不因下载失败中断。
+          ASSET_ID=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/main2" \
+            | python3 -c "import sys,json;d=json.load(sys.stdin);print(next((a['id'] for a in d.get('assets',[]) if a['name']=='startup.zip'),''))" || true)
+          echo "startup.zip asset id: ${ASSET_ID:-none}"
+          if [ -n "$ASSET_ID" ]; then
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
+              -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+              -o startup.zip \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/$ASSET_ID" || true
+          fi
+          if [ ! -s startup.zip ]; then
+            echo "API asset download failed, trying the plain release URL"
+            curl -L --http1.1 --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+              -o startup.zip \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/main2/startup.zip" || true
+          fi
+          if [ -s startup.zip ] && unzip -tq startup.zip >/dev/null 2>&1; then
+            unzip -o startup.zip
+            rm -f startup.zip
+          else
+            echo "::warning::startup.zip unavailable, falling back to git lfs"
+            rm -f startup.zip
+          fi
           if [ -f "startup.blend" ]; then
             mv startup.blend release/datafiles/
           fi
@@ -203,7 +228,7 @@ jobs:
             rmdir datafiles 2>/dev/null || true
           fi
           if [ ! -f "release/datafiles/startup.blend" ]; then
-            git lfs pull --include="release/datafiles/startup.blend"
+            git lfs pull --include="release/datafiles/startup.blend" || true
           fi
           if [ ! -f "release/datafiles/startup.blend" ]; then
             echo "ERROR: startup.blend still missing!"
