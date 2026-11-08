@@ -636,6 +636,14 @@ jobs:
             touch "$p"
             echo "dropped ${CNT} stale object/dep file(s) for ${base}, source re-stamped"
           done
+          # wm.cc carries the IOS-KEYMAP-BOOTSTRAP fix. Its basename ("wm") is far too
+          # short for the `*name*` glob used above (that would delete half the build),
+          # so handle it explicitly: drop only its own objects, then re-stamp the source.
+          WMOBJ=$(find blender/build_ios/build -type f \( -name "wm.o" -o -name "wm.d" -o -name "wm.cc.o" -o -name "wm.cc.d" \) 2>/dev/null | wc -l | tr -d ' ')
+          find blender/build_ios/build -type f \( -name "wm.o" -o -name "wm.d" -o -name "wm.cc.o" -o -name "wm.cc.d" \) -delete 2>/dev/null || true
+          touch blender/source/blender/windowmanager/intern/wm.cc
+          echo "dropped ${WMOBJ} stale object/dep file(s) for wm.cc, source re-stamped"
+          grep -c "IOS-KEYMAP-BOOTSTRAP" blender/source/blender/windowmanager/intern/wm.cc
           # --- ffmpeg off: drop the objects that were built with -DWITH_FFMPEG ---
           # 这一轮把 WITH_CODEC_FFMPEG 关了。#306 从缓存恢复出来的 movie_*.o 是
           # 带 ffmpeg 编的，链接时正是它们的 av_* 引用没处解。Xcode 的增量构建
@@ -1962,6 +1970,34 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
             HOME="$HOME"
+
+      - name: Verify the keymap bootstrap is inside the linked binary
+        run: |
+          # 只认产物：补丁脚本打印 "patched" 不算，grep 源码通过也不算。
+          # 这一轮的关键修复（IOS-KEYMAP-BOOTSTRAP）必须真的编译链接进 Mach-O，
+          # 否则等于没改 —— 缓存恢复 + mtime 归一化最容易在这里静默丢掉补丁。
+          APP="blender/build_ios/bin/Release/Blender.app"
+          OBJ=$(find blender/build_ios/build -type f \( -name "wm.o" -o -name "wm.cc.o" \) 2>/dev/null | head -1)
+          echo "window-manager object: ${OBJ:-<none>}"
+          if [ -n "$OBJ" ]; then
+            echo "  IOSKM  in object : $(strings "$OBJ" | grep -c "IOSKM" || true)"
+            echo "  MARKER in object : $(strings "$OBJ" | grep -c "IOS-KEYMAP-BOOTSTRAP" || true)"
+          fi
+          EXE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist" 2>/dev/null || echo Blender)
+          BIN="$APP/$EXE"
+          echo "app executable: $BIN"
+          if [ ! -f "$BIN" ]; then
+            echo "::error::$BIN missing"
+            ls -1 "$APP" | head -20
+            exit 1
+          fi
+          C=$(strings "$BIN" | grep -c "IOSKM" || true)
+          echo "  IOSKM in linked binary : $C"
+          if [ "$C" -lt 1 ]; then
+            echo "::error::IOSKM is not in the linked binary - wm.cc was NOT recompiled, the keymap fix is missing"
+            exit 1
+          fi
+          echo "keymap bootstrap confirmed inside the linked binary"
 
       - name: Repair LFS stubs left in the cached app's Assets
         run: |
