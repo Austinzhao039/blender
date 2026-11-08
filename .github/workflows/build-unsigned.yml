@@ -2048,7 +2048,8 @@ jobs:
           echo "app: $APP"
           echo "scripts source: $SCRIPTS"
 
-          for f in presets/keyconfig/keymap_data/blender_default.py; do
+          for f in presets/keyconfig/keymap_data/blender_default.py \
+                   startup/bl_ui/__init__.py; do
             if [ -f "$DST/$f" ]; then
               cp -f "$SCRIPTS/$f" "$DST/$f"
               echo "synced $f"
@@ -2061,6 +2062,12 @@ jobs:
           grep -q "IOS-NAV-DRAG" "$DST/presets/keyconfig/keymap_data/blender_default.py" \
             || { echo "::error::keymap preset not synced into app bundle"; exit 1; }
           ls -l "$DST/presets/keyconfig/keymap_data/blender_default.py"
+
+          # #315: 这一条差点又漏了 —— 包里的 bl_ui/__init__.py 还是上游原版，
+          # 于是 keymap 自愈守卫根本没进包。凡是补丁链改过的 .py 都必须列在上面。
+          grep -q "IOS-KEYMAP-GUARD" "$DST/startup/bl_ui/__init__.py" \
+            || { echo "::error::keymap guard not synced into app bundle"; exit 1; }
+          ls -l "$DST/startup/bl_ui/__init__.py"
 
 
       - name: Embed iOS dylibs into app bundle
