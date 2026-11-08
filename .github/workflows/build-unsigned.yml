@@ -102,6 +102,44 @@ jobs:
       # so "Save As"/export pre-filled an unwritable directory and File > Open
       # started in a folder the user cannot put anything into. Point the default
       # directory at Documents/ (visible in the Files app, UIFileSharingEnabled).
+      # github.com/<repo>/releases/download/... 走的是 CDN，偶发整段 504/超时，
+      # 而 iOS 构建要从 4 个 release 里拉东西（startup.zip、zstd、OpenImageIO、
+      # BeeWare Python）。api.github.com 的 asset 端点在同一时刻是通的，所以统一
+      # 提供一个 helper：先走 API，再回退直连 URL，避免一次 CDN 抖动废掉整轮。
+      - name: Install release-asset download helper
+        run: |
+          cat > "$RUNNER_TEMP/ghdl.sh" <<'EOS'
+          ghdl() {
+            local repo="$1" tag="$2" name="$3" out="$4" url="${5:-}"
+            local id=""
+            id=$(curl -s -H "Authorization: Bearer ${GH_TOKEN:-}" \
+                  "https://api.github.com/repos/$repo/releases/tags/$tag" \
+                | python3 -c "import sys,json;d=json.load(sys.stdin);print(next((a['id'] for a in d.get('assets',[]) if a['name']=='$name'),''))" 2>/dev/null || true)
+            if [ -n "$id" ]; then
+              echo "  ghdl: $repo/$tag/$name via api asset $id"
+              if curl -fsSL -H "Authorization: Bearer ${GH_TOKEN:-}" -H "Accept: application/octet-stream" \
+                   -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+                   -o "$out" "https://api.github.com/repos/$repo/releases/assets/$id"; then
+                return 0
+              fi
+              echo "  ghdl: api asset download failed"
+            fi
+            if [ -n "$url" ]; then
+              echo "  ghdl: falling back to $url"
+              if curl -fsSL -L --http1.1 --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+                   -o "$out" "$url"; then
+                return 0
+              fi
+            fi
+            echo "  ghdl: falling back to the release URL"
+            curl -fsSL -L --http1.1 --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o "$out" \
+              "https://github.com/$repo/releases/download/$tag/$name"
+          }
+          EOS
+          echo "helper written to $RUNNER_TEMP/ghdl.sh"
+          . "$RUNNER_TEMP/ghdl.sh"
+          type ghdl >/dev/null && echo "ghdl available"
+
       - name: Patch iOS sources (gizmo + pointer gesture + wheel + rotate drag + language + probe + keyboard + files)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -628,6 +666,8 @@ jobs:
           echo "iOS libraries cloned and OpenEXR LFS pulled"
 
       - name: Build zstd for iOS (static arm64)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd blender/lib/ios_arm64
           # 之前把 ZSTD_LIBRARY 指向 /opt/homebrew/lib/libzstd.dylib 是错的：
@@ -637,7 +677,13 @@ jobs:
           # 直接删掉，用源码现编一份 iOS arm64 静态库。
           rm -rf zstd zstd-src
           mkdir -p zstd/include zstd/lib
-          curl -sSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o zstd.tar.gz https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+          . "$RUNNER_TEMP/ghdl.sh"
+          # facebook/zstd 的 release 没有 asset（tarball 由 GitHub 自动生成），
+          # 先走 codeload（独立服务），失败再回退 release 直连。
+          curl -fsSL -L --http1.1 --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+            -o zstd.tar.gz https://codeload.github.com/facebook/zstd/tar.gz/refs/tags/v1.5.7 \
+            || ghdl facebook/zstd v1.5.7 zstd-1.5.7.tar.gz zstd.tar.gz
+          tar tzf zstd.tar.gz >/dev/null || { echo "::error::zstd tarball is not a valid gzip"; exit 1; }
           tar xzf zstd.tar.gz
           mv zstd-1.5.7 zstd-src
           rm -f zstd.tar.gz
@@ -933,10 +979,13 @@ jobs:
           echo "Ceres headers verified"
 
       - name: Download OpenImageIO from Release (main)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd blender/lib/ios_arm64/openimageio/lib/
-          curl -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o openimageio-libs.zip https://github.com/Austinzhao039/blender/releases/download/main/openimageio-libs.zip
-          unzip -o openimageio-libs.zip
+          . "$RUNNER_TEMP/ghdl.sh"
+          ghdl "$GITHUB_REPOSITORY" main openimageio-libs.zip openimageio-libs.zip
+          unzip -oq openimageio-libs.zip || { echo "::error::openimageio-libs.zip is not a valid zip"; exit 1; }
           rm openimageio-libs.zip
           ls -lh libOpenImageIO*.dylib
           if [ ! -f libOpenImageIO.dylib ] || [ $(stat -f%z libOpenImageIO.dylib) -lt 1000000 ]; then
@@ -1161,12 +1210,15 @@ jobs:
           echo "OpenEXR is ready"
 
       - name: Download iOS Python 3.13 dynamic library from BeeWare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd blender
           mkdir -p lib/ios_arm64/python/lib
           mkdir -p lib/ios_arm64/python/include
-          curl -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o python-ios.tar.gz \
-            https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-iOS-support.b14.tar.gz
+          . "$RUNNER_TEMP/ghdl.sh"
+          ghdl beeware/Python-Apple-support 3.13-b14 \
+            Python-3.13-iOS-support.b14.tar.gz python-ios.tar.gz
           mkdir -p python_temp
           tar -xzf python-ios.tar.gz -C python_temp/
           XCFRAMEWORK_BASE="python_temp/Python.xcframework/ios-arm64"
