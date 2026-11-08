@@ -54,6 +54,7 @@ STATE_NEW = """/* IOS-PTR: state */
 /* IOS-PTR: state of the tap driven by the view touch callbacks. */
 static BOOL iosptr_down = NO;
 static BOOL iosptr_moved = NO;
+static BOOL iosptr_drag_active = NO;
 static CGPoint iosptr_start = {0.0f, 0.0f};
 static CGPoint iosptr_last = {0.0f, 0.0f};
 static uintptr_t iosptr_token = 0;
@@ -161,16 +162,18 @@ TOUCH_CALLS = [
 METHOD_ANCHOR = """- (void)handleTap:(GHOSTUITapGestureRecognizer *)sender
 {"""
 
-METHOD_NEW = """/* IOS-PTR: tap = click, drag = `handlePan:` (MIDDLEMOUSE).
+METHOD_NEW = """/* IOS-PTR: tap = click, drag = MIDDLEMOUSE.
  *
  * phase: 0 = began, 1 = moved, 2 = ended, 3 = cancelled.
  *
  * No LEFTMOUSE is emitted while the finger moves.  In this port a left-drag has
  * nowhere to go (see the module docstring: `event_queue_check_drag` is never
  * armed), and pressing at touch-down used to start `view3d.select` on every tap.
-
- * The pan recogniser owns the drag: it fires after ~10 px and sends a
- * MIDDLEMOUSE drag, which rotates the viewport and pans 2D views. */
+ *
+ * The MIDDLEMOUSE drag is generated HERE, from the view touch callbacks, because
+ * the UIPanGestureRecognizer does not always fire.  A drag past 14 px sends
+ * MIDDLE_BUTTON_DOWN; continuous moves send CURSOR_MOVE (which drives the
+ * rotation delta); release sends MIDDLE_BUTTON_UP. */
 - (void)iosPointerUpdate:(NSSet<UITouch *> *)touches phase:(int)phase
 {
   const int iosptr_n = int(touches.count);
@@ -190,6 +193,13 @@ METHOD_NEW = """/* IOS-PTR: tap = click, drag = `handlePan:` (MIDDLEMOUSE).
      * second finger arrives as a set of one and looks exactly like a new press
      * - `iosptr_active` is what tells the two apart, otherwise a scroll fired a
      * stray click when those fingers lifted. */
+    if (iosptr_drag_active) {
+      /* Close the MIDDLEMOUSE drag cleanly before abandoning the gesture. */
+      UserInputEvent iosptr_cancel(nullptr, nullptr, nullptr, false);
+      iosptr_cancel.add_event(UserInputEvent::EventTypes::MIDDLE_BUTTON_UP);
+      [self generateUserInputEvents:iosptr_cancel];
+      iosptr_drag_active = NO;
+    }
     if (iosptr_down) {
       iosptr_down = NO;
       iosptr_token = 0;
@@ -214,6 +224,7 @@ METHOD_NEW = """/* IOS-PTR: tap = click, drag = `handlePan:` (MIDDLEMOUSE).
     }
     iosptr_down = YES;
     iosptr_moved = NO;
+    iosptr_drag_active = NO;
     iosptr_token = (uintptr_t)iosptr_touch;
     iosptr_start = iosptr_p;
     iosptr_last = iosptr_p;
@@ -246,8 +257,14 @@ METHOD_NEW = """/* IOS-PTR: tap = click, drag = `handlePan:` (MIDDLEMOUSE).
       if (!iosptr_moved &&
           ((iosptr_dx * iosptr_dx) + (iosptr_dy * iosptr_dy)) > 196.0f)
       {
-        /* 14 px: past a tap, `handlePan:` already turned this into a drag. */
+        /* 14 px: past a tap.  Start a MIDDLEMOUSE drag here so 3D navigation
+         * works even when the pan gesture recogniser never fires. */
         iosptr_moved = YES;
+        iosptr_drag_active = YES;
+        UserInputEvent iosptr_drag(&iosptr_p, nullptr, nullptr, false);
+        iosptr_drag.add_event(UserInputEvent::EventTypes::MIDDLE_BUTTON_DOWN);
+        [self generateUserInputEvents:iosptr_drag];
+        fprintf(stdout, "[IOSPTR] drag-start MID_DOWN xy=%.0f,%.0f\\n", iosptr_p.x, iosptr_p.y);
       }
     }
     return;
@@ -259,7 +276,13 @@ METHOD_NEW = """/* IOS-PTR: tap = click, drag = `handlePan:` (MIDDLEMOUSE).
 
   UserInputEvent iosptr_end(&iosptr_p, nullptr, nullptr, false);
   iosptr_end.add_event(UserInputEvent::EventTypes::CURSOR_MOVE);
-  if ((phase == 2) && !iosptr_moved && iosptr_click_allowed(iosptr_p, NO)) {
+  if (iosptr_drag_active) {
+    /* Finish the MIDDLEMOUSE drag we started on the 14px threshold. */
+    iosptr_end.add_event(UserInputEvent::EventTypes::MIDDLE_BUTTON_UP);
+    iosptr_drag_active = NO;
+    fprintf(stdout, "[IOSPTR] drag-end MID_UP\\n");
+  }
+  else if ((phase == 2) && !iosptr_moved && iosptr_click_allowed(iosptr_p, NO)) {
     /* One press and one release at the same point: Blender turns that into a
      * #KM_CLICK, exactly like a mouse click. */
     iosptr_end.add_event(UserInputEvent::EventTypes::LEFT_BUTTON_DOWN);
