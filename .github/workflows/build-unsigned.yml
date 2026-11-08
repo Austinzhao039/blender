@@ -178,6 +178,10 @@ jobs:
           grep -c "event->type != MIDDLEMOUSE" source/blender/editors/space_view3d/view3d_navigate_view_rotate.cc
           grep -c "event->type != MIDDLEMOUSE" source/blender/editors/space_view3d/view3d_navigate_view_move.cc
           grep -c "event->type != MIDDLEMOUSE" source/blender/editors/interface/view2d/view2d_ops.cc
+          grep -c "iosptr_drag_active" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "drag-start MID_DOWN" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "drag-end MID_UP" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "handlePan is a no-op" intern/ghost/intern/GHOST_WindowIOS.mm
 
       - name: Download startup.blend from Release (main2)
         run: |
