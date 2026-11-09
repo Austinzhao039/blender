@@ -145,7 +145,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_navops.py patch_ios_debug.py patch_ios_pointer.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py patch_ios_wheel.py patch_ios_preset.py patch_ios_lang.py patch_ios_savepref.py patch_ios_keymap.py patch_ios_opfind.py patch_ios_keymap_c.py patch_ios_qprobe.py; do
+          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_navops.py patch_ios_debug.py patch_ios_pointer.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py patch_ios_wheel.py patch_ios_preset.py patch_ios_lang.py patch_ios_savepref.py patch_ios_keymap.py patch_ios_opfind.py patch_ios_keymap_c.py patch_ios_qprobe.py patch_ios_kmio.py patch_ios_kcset.py patch_ios_pencil.py patch_ios_cursorpos.py; do
             curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.raw" \
@@ -176,6 +176,10 @@ jobs:
           python3 /tmp/patch_ios_opfind.py
           python3 /tmp/patch_ios_keymap_c.py
           python3 /tmp/patch_ios_qprobe.py
+          python3 /tmp/patch_ios_kmio.py
+          python3 /tmp/patch_ios_kcset.py
+          python3 /tmp/patch_ios_pencil.py
+          python3 /tmp/patch_ios_cursorpos.py
           grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
             source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
           grep -n "UITouchTypeIndirectPointer" intern/ghost/intern/GHOST_WindowIOS.mm
@@ -234,12 +238,33 @@ jobs:
           grep -c "IOSQ" source/blender/windowmanager/intern/wm_event_system.cc
           grep -c "IOS-OPFIND" source/blender/windowmanager/intern/wm_operator_type.cc
           grep -c "ios_operatortype_find_linear" source/blender/windowmanager/intern/wm_operator_type.cc
+          grep -c "IOS-PENCIL-UP" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-CURSORPOS" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-CURSORPOS" intern/ghost/intern/GHOST_SystemIOS.mm
+          grep -c "IOS-KMI-SKIP" scripts/modules/bl_keymap_utils/io.py
+          grep -c "IOS-KCSET" scripts/modules/bpy/utils/__init__.py
           python3 - <<'PYCHECK'
           src = open('source/blender/windowmanager/intern/wm.cc', encoding='utf-8').read()
           assert 'ios_keyconfig_bootstrap(C);' in src, 'bootstrap never called from the main loop'
           assert src.count('#include <cstdio>') == 1, 'cstdio include missing or duplicated'
           print('wm.cc keymap-bootstrap structure OK')
           PYCHECK
+          python3 - <<'PYCHECK2'
+          # The repair runs as a C++ raw string; a typo there only surfaces at
+          # run time on the device, i.e. 45 minutes later.  Parse it here.
+          import ast, re
+          wm = open('source/blender/windowmanager/intern/wm.cc', encoding='utf-8').read()
+          m = re.search(r'R"PY\((.*?)\)PY"', wm, re.S)
+          assert m, 'keymap repair snippet missing'
+          snippet = m.group(1)
+          ast.parse(snippet)
+          assert 'os.write' in snippet, 'repair snippet must log through fd 1'
+          assert 'register_class' in snippet, 'repair snippet must re-register bl_operators'
+          for p in ('scripts/modules/bl_keymap_utils/io.py',
+                    'scripts/modules/bpy/utils/__init__.py'):
+              ast.parse(open(p, encoding='utf-8').read())
+          print('repair snippet parses; patched python data parses')
+          PYCHECK2
           grep -c "handlePan is a no-op" intern/ghost/intern/GHOST_WindowIOS.mm
 
       - name: Download startup.blend from Release (main2)
@@ -1996,10 +2021,16 @@ jobs:
           fi
           O=$(strings "$BIN" | grep -c "IOSOP" || true)
           C=$(strings "$BIN" | grep -c "IOSKM" || true)
+          P=$(strings "$BIN" | grep -c "IOSPY" || true)
           echo "  IOSKM in linked binary : $C"
           echo "  IOSOP in linked binary : $O"
+          echo "  IOSPY in linked binary : $P"
           if [ "$O" -lt 1 ]; then
             echo "::error::IOSOP is not in the linked binary - wm_operator_type.cc was NOT recompiled"
+            exit 1
+          fi
+          if [ "$P" -lt 1 ]; then
+            echo "::error::IOSPY is not in the linked binary - the startup-module repair snippet is missing"
             exit 1
           fi
           if [ "$C" -lt 1 ]; then
@@ -2107,7 +2138,9 @@ jobs:
           echo "scripts source: $SCRIPTS"
 
           for f in presets/keyconfig/keymap_data/blender_default.py \
-                   startup/bl_ui/__init__.py; do
+                   startup/bl_ui/__init__.py \
+                   modules/bl_keymap_utils/io.py \
+                   modules/bpy/utils/__init__.py; do
             if [ -f "$DST/$f" ]; then
               cp -f "$SCRIPTS/$f" "$DST/$f"
               echo "synced $f"
@@ -2126,6 +2159,22 @@ jobs:
           grep -q "IOS-KEYMAP-GUARD" "$DST/startup/bl_ui/__init__.py" \
             || { echo "::error::keymap guard not synced into app bundle"; exit 1; }
           ls -l "$DST/startup/bl_ui/__init__.py"
+
+          # #316: 同理，键位加载器的容错和 keyconfig_set 的日志也必须进包，
+          # 否则设备上永远只有 12 个键位、且 Python 侧一句诊断都看不到。
+          grep -q "IOS-KMI-SKIP" "$DST/modules/bl_keymap_utils/io.py" \
+            || { echo "::error::fault-tolerant keymap loader not synced"; exit 1; }
+          grep -q "IOS-KCSET" "$DST/modules/bpy/utils/__init__.py" \
+            || { echo "::error::keyconfig_set logger not synced"; exit 1; }
+          python3 - "$DST" <<'PYBUNDLE'
+          import ast, sys
+          dst = sys.argv[1]
+          for rel in ('modules/bl_keymap_utils/io.py', 'modules/bpy/utils/__init__.py'):
+              src = open(dst + '/' + rel, encoding='utf-8').read()
+              ast.parse(src)
+              print('bundled %-40s %6d bytes, parses' % (rel, len(src)))
+          PYBUNDLE
+          ls -l "$DST/modules/bl_keymap_utils/io.py" "$DST/modules/bpy/utils/__init__.py"
 
 
       - name: Embed iOS dylibs into app bundle
