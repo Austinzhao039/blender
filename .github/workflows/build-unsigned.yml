@@ -145,7 +145,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_navops.py patch_ios_debug.py patch_ios_pointer.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py patch_ios_wheel.py patch_ios_preset.py patch_ios_lang.py patch_ios_savepref.py patch_ios_keymap.py patch_ios_keymap_c.py patch_ios_qprobe.py; do
+          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_navops.py patch_ios_debug.py patch_ios_pointer.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py patch_ios_wheel.py patch_ios_preset.py patch_ios_lang.py patch_ios_savepref.py patch_ios_keymap.py patch_ios_opfind.py patch_ios_keymap_c.py patch_ios_qprobe.py; do
             curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.raw" \
@@ -173,6 +173,7 @@ jobs:
           python3 /tmp/patch_ios_lang.py
           python3 /tmp/patch_ios_savepref.py
           python3 /tmp/patch_ios_keymap.py
+          python3 /tmp/patch_ios_opfind.py
           python3 /tmp/patch_ios_keymap_c.py
           python3 /tmp/patch_ios_qprobe.py
           grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
@@ -231,6 +232,8 @@ jobs:
           grep -c "ios_keyconfig_item_count" source/blender/windowmanager/intern/wm.cc
           grep -c "IOSKM" source/blender/windowmanager/intern/wm.cc
           grep -c "IOSQ" source/blender/windowmanager/intern/wm_event_system.cc
+          grep -c "IOS-OPFIND" source/blender/windowmanager/intern/wm_operator_type.cc
+          grep -c "ios_operatortype_find_linear" source/blender/windowmanager/intern/wm_operator_type.cc
           python3 - <<'PYCHECK'
           src = open('source/blender/windowmanager/intern/wm.cc', encoding='utf-8').read()
           assert 'ios_keyconfig_bootstrap(C);' in src, 'bootstrap never called from the main loop'
@@ -609,7 +612,7 @@ jobs:
       # 所以直接看产物是否真的存在。
       - name: Normalize source mtimes for incremental build
         run: |
-          PATCHED_FILES="source/blender/editors/space_view3d/view3d_navigate_view_rotate.cc source/blender/editors/space_view3d/view3d_navigate_view_move.cc source/blender/editors/interface/view2d/view2d_ops.cc source/blender/editors/space_view3d/view3d_gizmo_navigate.cc intern/ghost/intern/GHOST_WindowIOS.mm intern/ghost/intern/GHOST_SystemIOS.mm source/blender/windowmanager/intern/wm_event_system.cc source/blender/blenkernel/intern/appdir.cc source/blender/windowmanager/intern/wm_init_exit.cc"
+          PATCHED_FILES="source/blender/editors/space_view3d/view3d_navigate_view_rotate.cc source/blender/editors/space_view3d/view3d_navigate_view_move.cc source/blender/editors/interface/view2d/view2d_ops.cc source/blender/editors/space_view3d/view3d_gizmo_navigate.cc intern/ghost/intern/GHOST_WindowIOS.mm intern/ghost/intern/GHOST_SystemIOS.mm source/blender/windowmanager/intern/wm_event_system.cc source/blender/blenkernel/intern/appdir.cc source/blender/windowmanager/intern/wm_init_exit.cc source/blender/windowmanager/intern/wm_operator_type.cc"
           if [ -d blender/build_ios/build ]; then
             N=$(find blender/build_ios/build -name "*.o" -type f 2>/dev/null | head -1)
             echo "restored objects found, e.g. ${N:-<none>}"
@@ -1991,8 +1994,14 @@ jobs:
             ls -1 "$APP" | head -20
             exit 1
           fi
+          O=$(strings "$BIN" | grep -c "IOSOP" || true)
           C=$(strings "$BIN" | grep -c "IOSKM" || true)
           echo "  IOSKM in linked binary : $C"
+          echo "  IOSOP in linked binary : $O"
+          if [ "$O" -lt 1 ]; then
+            echo "::error::IOSOP is not in the linked binary - wm_operator_type.cc was NOT recompiled"
+            exit 1
+          fi
           if [ "$C" -lt 1 ]; then
             echo "::error::IOSKM is not in the linked binary - wm.cc was NOT recompiled, the keymap fix is missing"
             exit 1
