@@ -1,42 +1,49 @@
 #!/usr/bin/env python3
-"""Repair the key-configuration from C, at the first main-loop frame on iOS (v2).
+"""Repair the key-configuration from C, at the first main-loop frame on iOS (v3).
 
-What v19 proved
----------------
-The v19 device log printed exactly three ``[IOSKM]`` lines:
+What the device told us, and what it could not
+----------------------------------------------
+v19/v20 proved the populate block **does** run (``flag=1``) and still leaves 12
+items out of 3182, and that the hash-based operator registry is fine
+(``patch_ios_opfind.py``'s linear fallback rescued nothing).  What it could not
+say is *why*, because every Python diagnostic was lost: v20 emitted four
+``[IOSPY]`` lines through ``print()`` and the log contained **zero** of them.
+Python's stdout is buffered and nothing flushes it before iOS kills the app.
+Only C's ``printf`` survives.
 
-    [IOSKM] WM_keyconfig_init py_init=0 flag=0 items=-1
-    [IOSKM] WM_keyconfig_init py_init=1 flag=0 items=0
-    [IOSKM] bootstrap py_init=1 flag=1 items=12
+So v3 has two jobs: instrument with ``os.write`` (fd 1, unbuffered, reaches the
+device log), and repair what the log has already hinted at:
 
-``flag=1`` at the first frame means the upstream populate block **did** run, so
-the trigger was never the problem (the v18 Python guard was a dead end for a
-different reason).  The block ran and still left 12 items -- the same number the
-local build has immediately after ``WM_init()``, before
-``bpy.utils.keyconfig_init()`` has had an effect.  The healthy total is
-**3182 items / 278 key-maps**.
+    [IOSOP] registered=2171 tool_set=0 rotate=1 dropblend=0
+    UILayout.operator_menu_hold(): unknown operator 'wm.tool_set_by_id'
+    Error: dropbox with unknown operator: WM_OT_drop_blend_file
+    UILayout.operator(): 'EXTENSIONS_OT_userpref_show_online' unknown operator
 
-So ``bpy.utils.keyconfig_init()`` produced nothing on device.  It re-executes
-``presets/keyconfig/Blender.py``, whose ``km.keymap_items.new(...)`` calls are
-dropped silently when ``WM_operatortype_find()`` returns NULL -- which the
-upstream ios branch documents as an iOS-specific bug.  ``patch_ios_opfind.py``
-adds the linear fallback for that.  This patch keeps an honest, verbose record
-so the next log says whether that was enough.
+``wm.tool_set_by_id`` / ``wm.drop_blend_file`` are Python operators from
+``scripts/startup/bl_operators/wm.py``; ``extensions.userpref_show_online``
+belongs to the ``bl_pkg`` core add-on.  Both the ``startup`` package and the
+core add-ons are registered by ``bpy.utils.load_scripts()`` /
+``load_scripts_extensions()``, which ``WM_init()`` calls -- so on iOS something
+in that chain did not happen.  This patch re-registers ``bl_operators`` class by
+class (one bad class no longer kills the rest) and enables ``bl_pkg``, then
+reloads the preset.
 
-What this does
+Note the preset itself is *not* all-or-nothing any more: ``patch_ios_kmio.py``
+makes the loader skip an unusable item instead of discarding 3182 of them.  So
+even if the repair below fails, the viewport key-map (``MIDDLEMOUSE`` ->
+``view3d.rotate``) comes back; the ``[IOSPY]`` lines then say why the other 12
+items are still missing.
+
+What it prints
 --------------
-At the first ``WM_main_loop_body()`` frame (= after ``main_ios_callback()`` ran
-``WM_init()``, so Python is up):
-
-1. print the item count and the ``init_flag`` bit,
-2. if the count is already healthy, do nothing,
-3. otherwise print the operator-registry size and three probe lookups,
-4. re-run the populate block (C key-maps + the Python preset load, with the
-   preset path and any traceback printed),
-5. print the resulting item count.
-
-A second attempt happens if the first one still leaves the config empty, because
-nothing was added in that case, so no items can be duplicated.
+    [IOSKM] bootstrap flag=1 items=12
+    [IOSOP] registered=2171 tool_set=0 rotate=1 dropblend=0
+    [IOSPY] mods bl_operators=0 bl_ui=1 bl_pkg=0
+    [IOSPY] paths=[...]
+    [IOSPY] ops_wm=116 tool_set=0 drop_blend=0 ext_online=0
+    [IOSPY] bl_operators classes ok=… fail=…
+    [IOSPY] tool_set now=1
+    [IOSKM] bootstrapped items=3182
 
 Idempotent: guarded by the ``IOS-KEYMAP-BOOTSTRAP`` marker.
 """
@@ -77,6 +84,87 @@ static int ios_keyconfig_item_count(wmKeyConfig *kc)
   return total;
 }
 
+#ifdef WITH_PYTHON
+/* Re-register the Python "startup" modules the key-map preset depends on and
+ * report everything through fd 1, because `print()` never reaches the log. */
+static void ios_startup_modules_repair(bContext *C)
+{
+  const char *imports[] = {"bpy", nullptr};
+  /* Raw string: keeps the Python readable and free of C escapes. */
+  static const char *py =
+      R"PY(
+import bpy, os, sys, traceback
+
+NL = chr(10)
+
+def _w(m):
+    try:
+        os.write(1, (m + NL).encode("utf-8", "replace"))
+    except Exception:
+        pass
+
+def _has(mod_name, op_name):
+    try:
+        return op_name in dir(getattr(bpy.ops, mod_name))
+    except Exception:
+        return False
+
+_w("[IOSPY] mods bl_operators=%d bl_ui=%d bl_pkg=%d" % (
+    "bl_operators" in sys.modules,
+    "bl_ui" in sys.modules,
+    "bl_pkg" in sys.modules))
+try:
+    _w("[IOSPY] paths=%r" % (bpy.utils.script_paths(),))
+except BaseException:
+    _w("[IOSPY] script_paths FAILED")
+    _w(traceback.format_exc())
+_w("[IOSPY] ops_wm=%d tool_set=%d drop_blend=%d ext_online=%d" % (
+    len(dir(bpy.ops.wm)),
+    _has("wm", "tool_set_by_id"),
+    _has("wm", "drop_blend_file"),
+    _has("extensions", "userpref_show_online")))
+
+if not _has("wm", "tool_set_by_id"):
+    try:
+        import bl_operators as _bo
+    except BaseException:
+        _w("[IOSPY] import bl_operators FAILED")
+        _w(traceback.format_exc())
+    else:
+        _ok = 0
+        _fail = 0
+        from bpy.utils import register_class
+        for _mod in getattr(_bo, "_modules_loaded", ()):
+            for _cls in getattr(_mod, "classes", ()):
+                try:
+                    register_class(_cls)
+                    _ok += 1
+                except BaseException:
+                    _fail += 1
+        _w("[IOSPY] bl_operators classes ok=%d fail=%d" % (_ok, _fail))
+    _w("[IOSPY] tool_set now=%d" % _has("wm", "tool_set_by_id"))
+
+if not _has("extensions", "userpref_show_online"):
+    try:
+        import addon_utils as _au
+        _au.enable("bl_pkg")
+        _w("[IOSPY] bl_pkg enabled")
+    except BaseException:
+        _w("[IOSPY] bl_pkg enable FAILED")
+        _w(traceback.format_exc())
+
+try:
+    bpy.utils.keyconfig_init()
+except BaseException:
+    _w("[IOSPY] keyconfig_init FAILED")
+    _w(traceback.format_exc())
+)PY";
+  const bool ok = BPY_run_string_exec(C, imports, py);
+  printf("[IOSKM] python repair ok=%d\\n", int(ok));
+  fflush(stdout);
+}
+#endif
+
 static void ios_keyconfig_bootstrap(bContext *C)
 {
   wmWindowManager *wm = CTX_wm_manager(C);
@@ -94,17 +182,28 @@ static void ios_keyconfig_bootstrap(bContext *C)
          ios_keyconfig_item_count(kc));
   fflush(stdout);
 
-  /* A healthy configuration has ~3182 items; an empty one has 12. */
-  if (ios_keyconfig_item_count(kc) >= 100) {
-    return;
+  /* Diagnose + repair exactly once; the two main-loop attempts must not
+   * register the same classes twice. */
+  static bool ios_repaired = false;
+  if (!ios_repaired) {
+    ios_repaired = true;
+#ifdef WITH_PYTHON
+    printf("[IOSOP] registered=%d tool_set=%d rotate=%d dropblend=%d\\n",
+           int(WM_operatortypes_registered_get().size()),
+           int(WM_operatortype_find("WM_OT_tool_set_by_id", true) != nullptr),
+           int(WM_operatortype_find("VIEW3D_OT_rotate", true) != nullptr),
+           int(WM_operatortype_find("WM_OT_drop_blend_file", true) != nullptr));
+    fflush(stdout);
+    ios_startup_modules_repair(C);
+#endif
   }
 
-  printf("[IOSOP] registered=%d tool_set=%d rotate=%d dropblend=%d\\n",
-         int(WM_operatortypes_registered_get().size()),
-         int(WM_operatortype_find("WM_OT_tool_set_by_id", true) != nullptr),
-         int(WM_operatortype_find("VIEW3D_OT_rotate", true) != nullptr),
-         int(WM_operatortype_find("WM_OT_drop_blend_file", true) != nullptr));
-  fflush(stdout);
+  /* A healthy configuration has ~3182 items; an empty one has 12. */
+  if (ios_keyconfig_item_count(kc) >= 100) {
+    printf("[IOSKM] keymap healthy, nothing to do\\n");
+    fflush(stdout);
+    return;
+  }
 
   if (kc != nullptr && !(kc->flag & KEYCONF_INIT_DEFAULT)) {
     wm_window_keymap(kc);
@@ -115,25 +214,7 @@ static void ios_keyconfig_bootstrap(bContext *C)
 #ifdef WITH_PYTHON
   {
     const char *imports[] = {"bpy", nullptr};
-    const bool ok = BPY_run_string_exec(
-        C,
-        imports,
-        "import bpy, traceback\\n"
-        "try:\\n"
-        "    _p = bpy.utils.preset_find('Blender', 'keyconfig')\\n"
-        "    print('[IOSPY] preset=%r' % (_p,))\\n"
-        "except Exception:\\n"
-        "    print('[IOSPY] preset_find raised')\\n"
-        "    traceback.print_exc()\\n"
-        "try:\\n"
-        "    bpy.utils.keyconfig_init()\\n"
-        "except Exception:\\n"
-        "    print('[IOSPY] keyconfig_init raised')\\n"
-        "    traceback.print_exc()\\n"
-        "kc = bpy.context.window_manager.keyconfigs.active\\n"
-        "print('[IOSPY] after kc=%r kms=%d' % (getattr(kc, 'name', None), len(kc.keymaps) if kc else -1))\\n"
-        "km = kc.keymaps.get('3D View') if kc else None\\n"
-        "print('[IOSPY] 3DView items=%d' % (len(km.keymap_items) if km else -1))\\n");
+    const bool ok = BPY_run_string_exec(C, imports, "import bpy\\nbpy.utils.keyconfig_init()\\n");
     printf("[IOSKM] python keyconfig_init ok=%d\\n", int(ok));
     fflush(stdout);
   }
