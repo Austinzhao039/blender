@@ -39,13 +39,28 @@ NEW = """      eHandlerActionFlag action = WM_HANDLER_CONTINUE;
 #if defined(__APPLE__)
       /* MARK@: window-level probe, see .github/scripts/patch_ios_qprobe.py */
       if (ELEM(event->type, MIDDLEMOUSE, MOUSEPAN)) {
+        wmEventHandler *iosq_head = static_cast<wmEventHandler *>(
+            win.runtime->modalhandlers.first);
+        int iosq_htype = 0;
+        const char *iosq_hop = "-";
+        if (iosq_head != nullptr) {
+          iosq_htype = int(iosq_head->type);
+          if (iosq_head->type == WM_HANDLER_TYPE_OP) {
+            wmEventHandler_Op *iosq_op = reinterpret_cast<wmEventHandler_Op *>(iosq_head);
+            if (iosq_op->op != nullptr) {
+              iosq_hop = iosq_op->op->idname;
+            }
+          }
+        }
         fprintf(stdout,
-                "[MARK@] win %s val=%d xy=(%d,%d) modal=%d\\n",
+                "[MARK@] win %s val=%d xy=(%d,%d) modal_n=%d htype=%d hop=%s\\n",
                 (event->type == MIDDLEMOUSE) ? "MMB" : "PAN",
                 int(event->val),
                 event->xy[0],
                 event->xy[1],
-                BLI_listbase_is_empty(&win.runtime->modalhandlers) ? 0 : 1);
+                BLI_listbase_count(&win.runtime->modalhandlers),
+                iosq_htype,
+                iosq_hop);
         fflush(stdout);
       }
 #endif
