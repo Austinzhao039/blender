@@ -2690,8 +2690,65 @@ jobs:
           du -sh "$APP"
           mkdir -p IPA/Payload
           cp -R "$APP" IPA/Payload/
+
+          # ---- ad-hoc sign nested Mach-O binaries under Assets/ ---------------
+          # iOS refuses to dlopen() any Mach-O with no code signature:
+          #   "mapped file has no cdhash, completely unsigned?
+          #    Code has to be at least ad-hoc signed."
+          # The Python C extensions under Assets/5.1/python/.../lib-dynload are
+          # produced by the Python build step and are never signed, while the
+          # side-loading tools only re-sign the main executable and Frameworks/.
+          # So on device `import math` dies, which kills the whole Python key-map
+          # preset (blender_default.py line 230 is `from math import pi`) and
+          # bl_operators with it -- the key-map table stays empty and the 3D view
+          # never responds. The main executable and Frameworks/ are deliberately
+          # left unsigned so the side-loading tool can re-sign them properly.
+          find "IPA/Payload/Blender.app" -maxdepth 1 -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
+          : > /tmp/nested_macho.txt
+          find "IPA/Payload/Blender.app/Assets" -type f \
+               \( -name "*.so" -o -name "*.so.*" -o -name "*.dylib" \) -print > /tmp/nested_cand.txt
+          SIGN_N=0
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            file -b "$f" 2>/dev/null | grep -q "Mach-O" || continue
+            /usr/bin/codesign --force --sign - --timestamp=none "$f" >/dev/null 2>&1 || {
+              echo "::error::ad-hoc signing failed for $f"; exit 1; }
+            echo "$f" >> /tmp/nested_macho.txt
+            SIGN_N=$((SIGN_N + 1))
+          done < /tmp/nested_cand.txt
+          echo "ad-hoc signed $SIGN_N nested Mach-O files under Assets/"
+          if [ "$SIGN_N" -lt 60 ]; then
+            echo "::error::only $SIGN_N nested Mach-O signed, expected >= 60 (lib-dynload alone ships 68)"
+            exit 1
+          fi
+          BAD=0
+          while IFS= read -r f; do
+            if ! /usr/bin/codesign --display --verbose=2 "$f" 2>&1 | grep -qi "adhoc"; then
+              echo "::error::no ad-hoc signature on $f"
+              BAD=$((BAD + 1))
+            fi
+          done < /tmp/nested_macho.txt
+          if [ "$BAD" -ne 0 ]; then
+            echo "::error::$BAD nested binaries are still unsigned"
+            exit 1
+          fi
+          echo "verified: every nested Mach-O under Assets/ carries an ad-hoc signature"
+
           cd IPA && zip -qry ../Blender.ipa Payload/ && cd ..
           ls -lh Blender.ipa
+
+          # Re-check inside the packaged artifact, not just the staging tree.
+          rm -rf /tmp/vfy && mkdir -p /tmp/vfy
+          unzip -q -o Blender.ipa \
+            "Payload/Blender.app/Assets/5.1/python/lib/python3.13/lib-dynload/math.cpython-313-iphoneos.so" \
+            -d /tmp/vfy
+          /usr/bin/codesign --display --verbose=2 \
+            /tmp/vfy/Payload/Blender.app/Assets/5.1/python/lib/python3.13/lib-dynload/math.cpython-313-iphoneos.so 2>&1 \
+            | grep -qi adhoc || {
+              echo "::error::math.cpython-313-iphoneos.so lost its signature inside the IPA"
+              exit 1
+            }
+          echo "IPA artifact: math.cpython-313-iphoneos.so signature intact"
           unzip -l Blender.ipa | grep -E "Python.framework/(Python|Info.plist)" || {
             echo "::error::Python.framework incomplete inside the IPA"
             exit 1
