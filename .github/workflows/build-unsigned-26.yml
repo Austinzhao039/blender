@@ -1,0 +1,2836 @@
+name: Build Blender iOS IPA 26
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 210
+
+    steps:
+      - name: Install dependencies
+        run: |
+          # fmt 不再依赖 homebrew 版本：12.2.0 的 pragma 宏在 iOS SDK 的 clang 下
+          # 展开失败（ranges.h:26 unknown type name 'diagnostic'）。
+          # 改用 lib-macos_arm64 配套的 12.1.0 头文件，见后面的 fmt 步骤。
+          brew install git-lfs cmake zstd
+          git lfs install
+          if [ ! -f /opt/homebrew/lib/libzstd.dylib ]; then
+            echo "ERROR: zstd not installed correctly!"
+            exit 1
+          fi
+          echo "zstd installed at /opt/homebrew/lib/libzstd.dylib"
+
+      - name: Clone Blender from official source (skip LFS)
+        run: |
+          # projects.blender.org 高峰期会返回 HTTP 524（网关等上游超时），
+          # git 直接 fatal: expected 'packfile'。一轮 40 分钟，克隆必须能自愈。
+          ok=0
+          for attempt in 1 2 3 4; do
+            rm -rf blender
+            if GIT_LFS_SKIP_SMUDGE=1 git -c http.version=HTTP/1.1 \
+                 -c http.postBuffer=524288000 \
+                 clone --depth 1 --branch ios \
+                 https://projects.blender.org/blender/blender.git; then
+              ok=1
+              break
+            fi
+            echo "::warning::git clone failed (attempt $attempt/4)"
+            sleep $((attempt * 15))
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::git clone failed after 4 attempts"
+            exit 1
+          fi
+          cd blender
+          # --- step-normalize-mtime-v1 ---
+          # A fresh clone stamps every file with "now". The build cache we
+          # restore later holds objects built days ago, so make would treat the
+          # whole tree as stale and do a full rebuild (~40 min of macOS time).
+          # Backdate the tree so only files we patch afterwards look newer.
+          find . -path ./.git -prune -o -type f -print0 | xargs -0 touch -t 202001010000
+          echo "source mtimes normalized (patched files will be newer on purpose)"
+
+      - name: Fix submodule URLs
+        run: |
+          cd blender
+          sed -i '' 's/github\.com\/blender/projects.blender.org\/blender/g' .gitmodules
+          git submodule sync --recursive
+
+      - name: Verify blender directory exists
+        run: |
+          if [ ! -d "blender" ]; then
+            echo "ERROR: blender directory missing!"
+            exit 1
+          fi
+          echo "blender directory exists"
+
+      # --- step-gizmo-null-guard-v3 ---
+      # Upstream view3d_gizmo_navigate.cc carries an explicit IOS_FIXME: the
+      # operator lookup "sometimes returns NULL on iOS". The guard right after
+      # it is `#ifndef WITH_PYTHON if (ot != nullptr) #endif`, so WITH_PYTHON
+      # builds never check. NULL then reaches WM_gizmo_operator_set() ->
+      # WM_operator_properties_create_ptr() -> EXC_BAD_ACCESS at +0x88.
+      # Patch guards all four call sites (idempotent, marker based).
+      #
+      # NOTE: there is no actions/checkout in this workflow, so
+      # $GITHUB_WORKSPACE only holds the cloned upstream tree. Fetch the helper
+      # scripts from this repository through the contents API instead.
+      #
+      # patch_ios_input.py: mouse clicks never reached Blender because UIKit
+      # does not deliver UITouchTypeIndirectPointer touches to a gesture
+      # recognizer that omits the type from allowedTouchTypes. Also wires the
+      # scroll wheel (UIEventType.scroll carries no touches at all).
+      #
+      # patch_ios_pointer.py: upstream only emits a click when the finger LIFTS
+      # (handleTap: on state Ended), so nothing can ever be dragged - scrollbars,
+      # sliders, panel borders, box select all need the button held while the
+      # pointer moves. Drive a real press/drag/release from the view's own touch
+      # callbacks, which no gesture recognizer can gate.
+      #
+      # NOTE: 'TRACKPADPAN' / 'TRACKPADZOOM' are only RNA *display* names that
+      # alias MOUSEPAN / MOUSEZOOM (see rna_wm.cc, rna_enum_event_type_items).
+      # There is no such C identifier, so the two events are already bound in
+      # the default key map and renaming them is a no-op.
+      #
+      # patch_ios_keyboard.py: the port has no hardware-keyboard path at all
+      # (no pressesBegan, no HID table, handleKeyEvent is an ASSERT(FALSE)), so
+      # every shortcut was dropped. Generate GHOST key events from UIKit presses.
+      #
+      # patch_ios_files.py: HOME on iOS is the read-only sandbox container root,
+      # so "Save As"/export pre-filled an unwritable directory and File > Open
+      # started in a folder the user cannot put anything into. Point the default
+      # directory at Documents/ (visible in the Files app, UIFileSharingEnabled).
+      # github.com/<repo>/releases/download/... 走的是 CDN，偶发整段 504/超时，
+      # 而 iOS 构建要从 4 个 release 里拉东西（startup.zip、zstd、OpenImageIO、
+      # BeeWare Python）。api.github.com 的 asset 端点在同一时刻是通的，所以统一
+      # 提供一个 helper：先走 API，再回退直连 URL，避免一次 CDN 抖动废掉整轮。
+      - name: Install release-asset download helper
+        run: |
+          cat > "$RUNNER_TEMP/ghdl.sh" <<'EOS'
+          ghdl() {
+            local repo="$1" tag="$2" name="$3" out="$4" url="${5:-}"
+            local id=""
+            id=$(curl -s -H "Authorization: Bearer ${GH_TOKEN:-}" \
+                  "https://api.github.com/repos/$repo/releases/tags/$tag" \
+                | python3 -c "import sys,json;d=json.load(sys.stdin);print(next((a['id'] for a in d.get('assets',[]) if a['name']=='$name'),''))" 2>/dev/null || true)
+            if [ -n "$id" ]; then
+              echo "  ghdl: $repo/$tag/$name via api asset $id"
+              if curl -fsSL -H "Authorization: Bearer ${GH_TOKEN:-}" -H "Accept: application/octet-stream" \
+                   -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+                   -o "$out" "https://api.github.com/repos/$repo/releases/assets/$id"; then
+                return 0
+              fi
+              echo "  ghdl: api asset download failed"
+            fi
+            if [ -n "$url" ]; then
+              echo "  ghdl: falling back to $url"
+              if curl -fsSL -L --http1.1 --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+                   -o "$out" "$url"; then
+                return 0
+              fi
+            fi
+            echo "  ghdl: falling back to the release URL"
+            curl -fsSL -L --http1.1 --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o "$out" \
+              "https://github.com/$repo/releases/download/$tag/$name"
+          }
+          EOS
+          echo "helper written to $RUNNER_TEMP/ghdl.sh"
+          . "$RUNNER_TEMP/ghdl.sh"
+          type ghdl >/dev/null && echo "ghdl available"
+
+      - name: Patch iOS sources (gizmo + pointer gesture + wheel + rotate drag + language + probe + keyboard + files)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          for s in patch_ios_gizmo.py patch_ios_input.py patch_ios_nav.py patch_ios_navops.py patch_ios_debug.py patch_ios_pointer.py patch_ios_probe.py patch_ios_keyboard.py patch_ios_files.py patch_ios_wheel.py patch_ios_preset.py patch_ios_lang.py patch_ios_savepref.py patch_ios_keymap.py patch_ios_opfind.py patch_ios_keymap_c.py patch_ios_qprobe.py patch_ios_kmio.py patch_ios_kcset.py patch_ios_pencil.py patch_ios_cursorpos.py patch_ios_gizdrag.py; do
+            curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github.raw" \
+              -o "/tmp/$s" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/.github/scripts/$s?ref=main"
+            if ! head -c 200 "/tmp/$s" | grep -q "python3"; then
+              echo "::error::failed to fetch $s"
+              head -c 400 "/tmp/$s"
+              exit 1
+            fi
+          done
+          mkdir -p blender
+          cd blender
+          python3 /tmp/patch_ios_gizmo.py
+          python3 /tmp/patch_ios_input.py
+          python3 /tmp/patch_ios_nav.py
+          python3 /tmp/patch_ios_navops.py
+          python3 /tmp/patch_ios_debug.py
+          python3 /tmp/patch_ios_pointer.py
+          python3 /tmp/patch_ios_probe.py
+          python3 /tmp/patch_ios_keyboard.py
+          python3 /tmp/patch_ios_files.py
+          python3 /tmp/patch_ios_wheel.py
+          python3 /tmp/patch_ios_preset.py
+          python3 /tmp/patch_ios_lang.py
+          python3 /tmp/patch_ios_savepref.py
+          python3 /tmp/patch_ios_keymap.py
+          python3 /tmp/patch_ios_opfind.py
+          python3 /tmp/patch_ios_keymap_c.py
+          python3 /tmp/patch_ios_qprobe.py
+          python3 /tmp/patch_ios_kmio.py
+          python3 /tmp/patch_ios_kcset.py
+          python3 /tmp/patch_ios_pencil.py
+          python3 /tmp/patch_ios_cursorpos.py
+          python3 /tmp/patch_ios_gizdrag.py
+          grep -n "IOS_FIXME: WM_operatortype_find() is documented" \
+            source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
+          grep -n "UITouchTypeIndirectPointer" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-NAV-MIDDLE" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOSDBG" source/blender/windowmanager/intern/wm_event_system.cc
+          grep -c "IOS-PTR" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iosptr_down" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iosPointerUpdate:touches phase" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-PROBE" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iosdbg_slot" source/blender/windowmanager/intern/wm_event_system.cc
+          grep -c "iosdbg_slot" intern/ghost/intern/GHOST_SystemIOS.mm
+          grep -c "IOS-KEYBOARD" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "ioskbd_mod_state" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "pressesBegan" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "canBecomeFirstResponder" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iosKeyboardReclaimFocus" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-FILES-DEFAULT" source/blender/blenkernel/intern/appdir.cc
+          grep -c "IOS-FILES-ORROOT" source/blender/blenkernel/intern/appdir.cc
+          grep -c "IOS-FILES-HOME" source/blender/blenkernel/intern/appdir.cc
+          grep -c "px=%dx%d" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "win=%dx%d" source/blender/windowmanager/intern/wm_event_system.cc
+          grep -c "IOS-WHEEL" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-NAV-DRAG" scripts/presets/keyconfig/keymap_data/blender_default.py
+          grep -c "iosptr_active" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iosptr_report_clicks" intern/ghost/intern/GHOST_WindowIOS.mm
+          if grep -q "already driving a left-button drag" intern/ghost/intern/GHOST_WindowIOS.mm; then
+            echo "::error::handlePan is still blocked, no drag can ever reach Blender"
+            exit 1
+          fi
+          grep -c "delaysTouchesBegan = NO" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-LANG" source/blender/windowmanager/intern/wm_init_exit.cc
+          grep -c "ios_language_autodetect" source/blender/windowmanager/intern/wm_init_exit.cc
+          grep -c "ios_system_locale" intern/ghost/intern/GHOST_SystemIOS.mm
+          grep -c "IOS-SAVEPREF" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "ios_wm_request_save" source/blender/windowmanager/intern/wm_event_system.cc
+          grep -c "iosptr_click_allowed" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "iOswheel2f_notches" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "V15 tapclick middrag gzdrag" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-GZDRAG" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "ghost_ios_gizmo_hover = 0" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "ghost_ios_gizmo_hover = (gz" source/blender/windowmanager/intern/wm_event_system.cc
+          grep -c "iosptr_left_active" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "gizmo-press" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-NAVOPS" source/blender/editors/space_view3d/view3d_navigate_view_rotate.cc
+          grep -c "IOS-NAVOPS" source/blender/editors/space_view3d/view3d_navigate_view_move.cc
+          grep -c "IOS-NAVOPS" source/blender/editors/interface/view2d/view2d_ops.cc
+          grep -c "event->type != MIDDLEMOUSE" source/blender/editors/space_view3d/view3d_navigate_view_rotate.cc
+          grep -c "event->type != MIDDLEMOUSE" source/blender/editors/space_view3d/view3d_navigate_view_move.cc
+          grep -c "event->type != MIDDLEMOUSE" source/blender/editors/interface/view2d/view2d_ops.cc
+          grep -c "iosptr_drag_active" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "drag-start MID_DOWN" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "drag-end MID_UP" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-KEYMAP-GUARD" scripts/startup/bl_ui/__init__.py
+          grep -c "_ios_keymap_guard" scripts/startup/bl_ui/__init__.py
+          grep -c "IOSKM" scripts/startup/bl_ui/__init__.py
+          python3 -c "import ast,sys; ast.parse(open('scripts/startup/bl_ui/__init__.py', encoding='utf-8').read()); print('bl_ui/__init__.py parses')"
+          grep -c "IOS-KEYMAP-BOOTSTRAP" source/blender/windowmanager/intern/wm.cc
+          grep -c "ios_keyconfig_bootstrap" source/blender/windowmanager/intern/wm.cc
+          grep -c "ios_keyconfig_item_count" source/blender/windowmanager/intern/wm.cc
+          grep -c "IOSKM" source/blender/windowmanager/intern/wm.cc
+          grep -c "IOSQ" source/blender/windowmanager/intern/wm_event_system.cc
+          grep -c "IOS-OPFIND" source/blender/windowmanager/intern/wm_operator_type.cc
+          grep -c "ios_operatortype_find_linear" source/blender/windowmanager/intern/wm_operator_type.cc
+          grep -c "IOS-PENCIL-UP" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-CURSORPOS" intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOS-CURSORPOS" intern/ghost/intern/GHOST_SystemIOS.mm
+          grep -c "IOS-KMI-SKIP" scripts/modules/bl_keymap_utils/io.py
+          grep -c "IOS-KCSET" scripts/modules/bpy/utils/__init__.py
+          python3 - <<'PYCHECK'
+          src = open('source/blender/windowmanager/intern/wm.cc', encoding='utf-8').read()
+          assert 'ios_keyconfig_bootstrap(C);' in src, 'bootstrap never called from the main loop'
+          assert src.count('#include <cstdio>') == 1, 'cstdio include missing or duplicated'
+          print('wm.cc keymap-bootstrap structure OK')
+          PYCHECK
+          python3 - <<'PYCHECK2'
+          # The repair runs as a C++ raw string; a typo there only surfaces at
+          # run time on the device, i.e. 45 minutes later.  Parse it here.
+          import ast, re
+          wm = open('source/blender/windowmanager/intern/wm.cc', encoding='utf-8').read()
+          m = re.search(r'R"PY\((.*?)\)PY"', wm, re.S)
+          assert m, 'keymap repair snippet missing'
+          snippet = m.group(1)
+          ast.parse(snippet)
+          assert 'os.write' in snippet, 'repair snippet must log through fd 1'
+          assert 'register_class' in snippet, 'repair snippet must re-register bl_operators'
+          for p in ('scripts/modules/bl_keymap_utils/io.py',
+                    'scripts/modules/bpy/utils/__init__.py'):
+              ast.parse(open(p, encoding='utf-8').read())
+          print('repair snippet parses; patched python data parses')
+          PYCHECK2
+          grep -c "handlePan is a no-op" intern/ghost/intern/GHOST_WindowIOS.mm
+
+      - name: Download startup.blend from Release (main2)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd blender
+          mkdir -p release/datafiles
+          # github.com/<repo>/releases/download/... 走 CDN，抖动时直接 504 并让
+          # `bash -e` 中断整个 job（#313 就是这样挂的）。改为优先用 API 资产端点，
+          # 失败再回退到直连 URL / LFS，全程不因下载失败中断。
+          ASSET_ID=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/main2" \
+            | python3 -c "import sys,json;d=json.load(sys.stdin);print(next((a['id'] for a in d.get('assets',[]) if a['name']=='startup.zip'),''))" || true)
+          echo "startup.zip asset id: ${ASSET_ID:-none}"
+          if [ -n "$ASSET_ID" ]; then
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
+              -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+              -o startup.zip \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/$ASSET_ID" || true
+          fi
+          if [ ! -s startup.zip ]; then
+            echo "API asset download failed, trying the plain release URL"
+            curl -L --http1.1 --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+              -o startup.zip \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/main2/startup.zip" || true
+          fi
+          if [ -s startup.zip ] && unzip -tq startup.zip >/dev/null 2>&1; then
+            unzip -o startup.zip
+            rm -f startup.zip
+          else
+            echo "::warning::startup.zip unavailable, falling back to git lfs"
+            rm -f startup.zip
+          fi
+          if [ -f "startup.blend" ]; then
+            mv startup.blend release/datafiles/
+          fi
+          if [ -d "datafiles" ] && [ -f "datafiles/startup.blend" ]; then
+            mv datafiles/* release/datafiles/ 2>/dev/null || true
+            rmdir datafiles 2>/dev/null || true
+          fi
+          if [ ! -f "release/datafiles/startup.blend" ]; then
+            git lfs pull --include="release/datafiles/startup.blend" || true
+          fi
+          if [ ! -f "release/datafiles/startup.blend" ]; then
+            echo "ERROR: startup.blend still missing!"
+            exit 1
+          fi
+          echo "startup.blend ready"
+
+      - name: Restore datafiles from official Blender release
+        run: |
+          cd blender
+          # clone 用了 GIT_LFS_SKIP_SMUDGE=1，release/datafiles 下近 200 个文件只剩
+          # 130 字节的指针文本。两段式补齐，兼顾速度和完整性：
+          #   1) 官方 5.1.2 发行包（~380MB，一次下载）覆盖同名文件 —— 量大、走 CDN；
+          #   2) 官方包不含的那几个（preview.blend / splash.png / 旧图标等）用 LFS
+          #      batch 按 oid 逐个取回。
+          # 只覆盖"当前是 LFS 指针"的文件，源码里本来就正常的资源不碰。
+          #
+          # 范围必须覆盖 ios 分支的**三处**来源，少一处就会漏：
+          #   release/datafiles                     → Assets/5.1/datafiles/*（ICC/图标/studio light）
+          #   release/ios/Blender.app/Assets        → Assets/*.pdf、blender_icon.icns（cursor 图）
+          #   scripts/（或 release/scripts/）        → Assets/5.1/scripts/*（含 App 模板 startup.blend）
+          # #280 就是只扫了第一处，包里留下 222 个 Assets/*.pdf 指针。
+          VER=5.1.2
+          PKG="blender-${VER}-linux-x64"
+          URL="https://download.blender.org/release/Blender${VER%.*}/${PKG}.tar.xz"
+          echo "downloading $URL"
+
+          ok=0
+          for attempt in 1 2 3; do
+            if curl -fL --http1.1 --retry 3 --retry-all-errors --retry-delay 3 \
+                 --connect-timeout 30 -o /tmp/bpkg.tar.xz "$URL"; then
+              ok=1
+              break
+            fi
+            echo "::warning::download failed (attempt $attempt/3)"
+            sleep $((attempt * 20))
+          done
+          [ "$ok" = "1" ] || { echo "::error::cannot download $URL"; exit 1; }
+          ls -lh /tmp/bpkg.tar.xz
+
+          # 整包解开（约 1GB 临时空间）再挑目录。不用 --wildcards：macOS runner 的
+          # tar 是 bsdtar，不认 GNU 的这个选项；用 -T 列成员列表又要先扫一遍。
+          rm -rf /tmp/bpkg && mkdir -p /tmp/bpkg/raw
+          tar -xJf /tmp/bpkg.tar.xz -C /tmp/bpkg/raw
+
+          DATADIR=$(find /tmp/bpkg/raw -maxdepth 3 -type d -name datafiles | head -1)
+          TMPLDIR=$(find /tmp/bpkg/raw -maxdepth 6 -type d -name bl_app_templates_system | head -1)
+          if [ -z "$DATADIR" ]; then
+            echo "::error::datafiles not found inside the release tarball"
+            find /tmp/bpkg/raw -maxdepth 3 -type d | head -20
+            exit 1
+          fi
+          if [ -z "$TMPLDIR" ]; then
+            echo "::error::bl_app_templates_system not found inside the release tarball"
+            find /tmp/bpkg/raw -maxdepth 6 -type d -name "startup*" | head -20
+            exit 1
+          fi
+          echo "datafiles: $DATADIR"
+          echo "templates: $TMPLDIR"
+          du -sh "$DATADIR"
+
+          # 脚本目录的位置随分支而变：ios 分支在仓库根的 scripts/，主线在
+          # release/scripts/。第 272 轮写死 release/scripts，结果 python 在 dst
+          # 不存在时直接 makedirs，把模板塞进了一个凭空的 release/scripts 里，
+          # 真正的 scripts/startup/bl_app_templates_system 一个都没补上。
+          if [ -d release/scripts/startup ]; then
+            SCRIPTS=release/scripts
+          elif [ -d scripts/startup ]; then
+            SCRIPTS=scripts
+          else
+            echo "::error::cannot locate scripts/startup in the source tree"
+            ls -d release/* scripts 2>/dev/null | head
+            exit 1
+          fi
+          TPLDST="$SCRIPTS/startup/bl_app_templates_system"
+          echo "scripts dir: $SCRIPTS  (templates -> $TPLDST)"
+
+          python3 - "$DATADIR" "$TMPLDIR" "$SCRIPTS" <<'PYRESTORE'
+          import os
+          import shutil
+          import sys
+
+          data_src, tpl_src, scripts_dst = sys.argv[1], sys.argv[2], sys.argv[3]
+
+
+          def is_lfs(path):
+              """不存在，或者只是个 git-lfs 指针 —— 都该被官方文件覆盖。"""
+              if not os.path.exists(path):
+                  return True
+              if os.path.getsize(path) > 300:
+                  return False
+              with open(path, "rb") as fh:
+                  return fh.read(40).startswith(b"version https://git-lfs")
+
+
+          n = 0
+          for root, _dirs, files in os.walk(data_src):
+              for name in files:
+                  src = os.path.join(root, name)
+                  dst = os.path.join("release/datafiles", os.path.relpath(src, data_src))
+                  if is_lfs(dst):
+                      os.makedirs(os.path.dirname(dst), exist_ok=True)
+                      shutil.copy2(src, dst)
+                      n += 1
+          print("datafiles restored: %d" % n)
+
+          tpl_dst = os.path.join(scripts_dst, "startup", "bl_app_templates_system")
+          m = 0
+          for root, _dirs, files in os.walk(tpl_src):
+              for name in files:
+                  src = os.path.join(root, name)
+                  dst = os.path.join(tpl_dst, os.path.relpath(src, tpl_src))
+                  if is_lfs(dst):
+                      os.makedirs(os.path.dirname(dst), exist_ok=True)
+                      shutil.copy2(src, dst)
+                      m += 1
+          print("app templates restored: %d" % m)
+          PYRESTORE
+
+          # 官方 Linux 包不含的那几个（preview.blend / splash.png / 旧图标 .dat /
+          # DejaVuSans-Lite.sfd.bz2 / icons_blend/toolbar.blend）在这里补齐。
+          # 这些不能删：preview.blend 是
+          # bf_editor_datafiles 的 PhaseScriptExecution 输入，要被 datatoc 编成
+          # .c；少了它构建直接 "Unable to open input"（#273 就是这么挂的）。
+          #
+          # 用 LFS batch 协议直接按 oid 取对象（不用 git lfs，省得再依赖本地
+          # LFS 配置）。之前那次 422 是请求体格式不对，按规范补上 size 就能取。
+          python3 - release/datafiles release/ios "$SCRIPTS" <<'PYLFS'
+          import hashlib
+          import json
+          import os
+          import sys
+          import time
+          import urllib.request
+
+          LFS_BATCH = ("https://projects.blender.org/blender/blender.git"
+                       "/info/lfs/objects/batch")
+          CHUNK = 40
+
+
+          def collect(roots):
+              """扫出所有仍是指针的文件，连同它声明的 oid / size。"""
+              found = []
+              for top in roots:
+                  for root, _dirs, files in os.walk(top):
+                      for name in files:
+                          path = os.path.join(root, name)
+                          try:
+                              if os.path.getsize(path) > 300:
+                                  continue
+                              with open(path, "rb") as fh:
+                                  head = fh.read(200).decode("utf-8", "replace")
+                          except OSError:
+                              continue
+                          if not head.startswith("version https://git-lfs"):
+                              continue
+                          oid = size = None
+                          for line in head.splitlines():
+                              if line.startswith("oid sha256:"):
+                                  oid = line.split(":", 1)[1].strip()
+                              elif line.startswith("size "):
+                                  try:
+                                      size = int(line.split()[1])
+                                  except (IndexError, ValueError):
+                                      size = None
+                          if oid and size is not None:
+                              found.append((path, oid, size))
+              return found
+
+
+          def batch(objs):
+              body = json.dumps({
+                  "operation": "download",
+                  "transfers": ["basic"],
+                  "objects": [{"oid": o, "size": s} for _p, o, s in objs],
+              }).encode()
+              req = urllib.request.Request(LFS_BATCH, data=body, headers={
+                  "Accept": "application/vnd.git-lfs+json",
+                  "Content-Type": "application/vnd.git-lfs+json",
+              })
+              with urllib.request.urlopen(req, timeout=60) as resp:
+                  return json.loads(resp.read().decode())
+
+
+          def download(href, path, oid, size):
+              for attempt in range(4):
+                  try:
+                      req = urllib.request.Request(
+                          href, headers={"Accept": "application/vnd.git-lfs+json"})
+                      with urllib.request.urlopen(req, timeout=300) as resp:
+                          data = resp.read()
+                      if len(data) != size:
+                          raise RuntimeError("size %d != %d" % (len(data), size))
+                      if hashlib.sha256(data).hexdigest() != oid:
+                          raise RuntimeError("sha256 mismatch")
+                      os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                      with open(path, "wb") as fh:
+                          fh.write(data)
+                      return True
+                  except Exception as exc:            # noqa: BLE001 - 网络抖动都重试
+                      print("  retry %d/4 %s (%s)" % (attempt + 1, path, exc))
+                      time.sleep(3 * (attempt + 1))
+              return False
+
+
+          todo = collect(sys.argv[1:])
+          print("LFS pointers to fetch: %d" % len(todo))
+          done = 0
+          failed = []
+          for k in range(0, len(todo), CHUNK):
+              part = todo[k:k + CHUNK]
+              try:
+                  reply = batch(part)
+              except Exception as exc:               # noqa: BLE001
+                  print("  batch request failed: %s" % exc)
+                  failed.extend(p for p, _o, _s in part)
+                  continue
+              hrefs = {o.get("oid"): (o.get("actions") or {}).get("download", {}).get("href")
+                       for o in reply.get("objects", [])}
+              for path, oid, size in part:
+                  href = hrefs.get(oid)
+                  if not href:
+                      print("  no download action for %s" % path)
+                      failed.append(path)
+                      continue
+                  if download(href, path, oid, size):
+                      done += 1
+                  else:
+                      failed.append(path)
+          print("restored via LFS: %d" % done)
+          if failed:
+              print("::error::%d LFS object(s) could not be fetched" % len(failed))
+              for p in failed[:10]:
+                  print((" " * 10) + p)
+              sys.exit(1)
+          PYLFS
+
+          remain=$(grep -rl "^version https://git-lfs.github.com/spec" \
+                   release/datafiles release/ios "$SCRIPTS" 2>/dev/null | wc -l | tr -d ' ')
+          echo "remaining LFS pointers: $remain"
+          if [ "$remain" != "0" ]; then
+            echo "::error::$remain LFS pointers left - build inputs would be empty stubs"
+            grep -rl "^version https://git-lfs.github.com/spec" release/datafiles release/ios "$SCRIPTS" | head -10
+            exit 1
+          fi
+
+          # 关键资源目录必须真的存在：OCIO 缺 ICC 会 throw，图标表缺 .dat 会告警
+          for crit in release/datafiles/colormanagement/icc \
+                      release/datafiles/icons \
+                      release/datafiles/studiolights \
+                      release/ios/Blender.app/Assets \
+                      "$TPLDST"; do
+            if [ ! -d "$crit" ]; then
+              echo "::error::critical asset dir missing: $crit"
+              exit 1
+            fi
+          done
+
+          echo "--- 关键资源抽样 ---"
+          ls -l release/datafiles/colormanagement/icc
+          echo "icons: $(ls release/datafiles/icons | wc -l | tr -d ' ') files"
+          du -sh release/datafiles "$TPLDST"
+
+      - name: Setup host Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Provide host (macOS) Python for code generation
+        run: |
+          cd blender
+          mkdir -p lib/macos_arm64/python/bin
+          curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o macos-python.zip \
+            https://github.com/Austinzhao039/blender/releases/download/mainly/macos-python.zip || true
+          unzip -oq macos-python.zip || true
+          rm -f macos-python.zip
+          HP=lib/macos_arm64/python/bin/python3.13
+          [ -f "$HP" ] || : > "$HP"
+          chmod +x "$HP" 2>/dev/null || true
+
+          # 这个预编译 python 在 xcodebuild 的 script phase 里可能 exec 不起来
+          # （报 "cannot execute binary file"）。先自检，不行就换成 runner 上真 python 的包装脚本。
+          if ! "$HP" -V > /tmp/hp.out 2>&1; then
+            echo "WARN: bundled host python unusable: $(cat /tmp/hp.out)"
+            REAL=$(command -v python3.13 || command -v python3)
+            echo "falling back to $REAL ($("$REAL" -V 2>&1))"
+            rm -f "$HP"
+            printf '#!/bin/sh\nexec "%s" "$@"\n' "$REAL" > "$HP"
+            chmod +x "$HP"
+          fi
+          echo "host python: $($HP -V 2>&1)"
+          file "$HP" || true
+
+      - name: Record source revision
+        id: src
+        run: |
+          SHA=$(git -C blender rev-parse --short=12 HEAD)
+          echo "Blender (ios branch) HEAD = $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      # 增量编译缓存：build_ios 里是 CMake 生成的 Xcode 工程 + 全部 .o/.a。
+      # object 落在 blender/build_ios/build/<target>.build/Release-iphoneos/Objects-normal/arm64，
+      # 且 runner 工作目录固定为 /Users/runner/work/blender/blender，
+      # 所以恢复后 Xcode 的增量判定依然有效，只重编真正变化的文件。
+      # key 锚定 ios 分支提交 sha（不是 workflow 内容）：只要 Blender 源码没变，
+      # 改 CI 脚本不会再触发全量重编。
+      - name: Restore incremental build cache
+        id: cache-build
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            blender/build_ios
+            !blender/build_ios/IPA
+            !blender/build_ios/Blender.ipa
+          key: ios-build-v1-${{ steps.src.outputs.sha }}-${{ github.run_id }}
+          restore-keys: |
+            ios-build-v1-${{ steps.src.outputs.sha }}-
+
+      # 命中缓存时，build_ios 里的 .o 来自上一次运行，而源码是刚 clone 的
+      # （mtime = 现在）→ Xcode 会认为所有源文件都改过，直接全量重编，缓存白存。
+      # key 已经锚定源码 sha，内容必然一致，所以把源码 mtime 压到固定旧时间点，
+      # 让增量判定回到"文件未变"。build_ios / lib / .git 不动。
+      #
+      # 注意：不能用 steps.cache-build.outputs.cache-hit 判断。
+      # 那个输出只在 key 精确命中时为 true，而我们的 key 带了 run_id（为了保证
+      # 每轮都能写入新的一份），restore-keys 前缀命中的情况它仍然是 false。
+      # 所以直接看产物是否真的存在。
+      - name: Normalize source mtimes for incremental build
+        run: |
+          PATCHED_FILES="source/blender/editors/space_view3d/view3d_navigate_view_rotate.cc source/blender/editors/space_view3d/view3d_navigate_view_move.cc source/blender/editors/interface/view2d/view2d_ops.cc source/blender/editors/space_view3d/view3d_gizmo_navigate.cc intern/ghost/intern/GHOST_WindowIOS.mm intern/ghost/intern/GHOST_SystemIOS.mm source/blender/windowmanager/intern/wm_event_system.cc source/blender/blenkernel/intern/appdir.cc source/blender/windowmanager/intern/wm_init_exit.cc source/blender/windowmanager/intern/wm_operator_type.cc"
+          if [ -d blender/build_ios/build ]; then
+            N=$(find blender/build_ios/build -name "*.o" -type f 2>/dev/null | head -1)
+            echo "restored objects found, e.g. ${N:-<none>}"
+            find blender \( -path blender/build_ios -o -path blender/lib -o -path blender/.git \) -prune -o -type f -print0 \
+              | xargs -0 touch -t 202001010000 2>/dev/null || true
+            echo "source mtimes normalized to 2020-01-01 (cached objects are newer)"
+          else
+            echo "no cached objects - this run will build everything"
+          fi
+          # --- step-force-rebuild-patched-v2 ---
+          # The backdate above also hits the files we patched in an earlier step,
+          # which would make their cached objects look up to date and silently
+          # drop the patches. Delete the stale objects and re-stamp the sources.
+          for f in $PATCHED_FILES; do
+            p="blender/$f"
+            if [ ! -f "$p" ]; then
+              echo "::error::patched source missing: $p"
+              exit 1
+            fi
+            base=$(basename "$f")
+            base="${base%.*}"
+            CNT=$(find blender/build_ios -name "*${base}*" -type f 2>/dev/null | wc -l | tr -d ' ')
+            find blender/build_ios -name "*${base}*" -type f -delete 2>/dev/null || true
+            touch "$p"
+            echo "dropped ${CNT} stale object/dep file(s) for ${base}, source re-stamped"
+          done
+          # wm.cc carries the IOS-KEYMAP-BOOTSTRAP fix. Its basename ("wm") is far too
+          # short for the `*name*` glob used above (that would delete half the build),
+          # so handle it explicitly: drop only its own objects, then re-stamp the source.
+          WMOBJ=$(find blender/build_ios/build -type f \( -name "wm.o" -o -name "wm.d" -o -name "wm.cc.o" -o -name "wm.cc.d" \) 2>/dev/null | wc -l | tr -d ' ')
+          find blender/build_ios/build -type f \( -name "wm.o" -o -name "wm.d" -o -name "wm.cc.o" -o -name "wm.cc.d" \) -delete 2>/dev/null || true
+          touch blender/source/blender/windowmanager/intern/wm.cc
+          echo "dropped ${WMOBJ} stale object/dep file(s) for wm.cc, source re-stamped"
+          grep -c "IOS-KEYMAP-BOOTSTRAP" blender/source/blender/windowmanager/intern/wm.cc
+          # --- ffmpeg off: drop the objects that were built with -DWITH_FFMPEG ---
+          # 这一轮把 WITH_CODEC_FFMPEG 关了。#306 从缓存恢复出来的 movie_*.o 是
+          # 带 ffmpeg 编的，链接时正是它们的 av_* 引用没处解。Xcode 的增量构建
+          # 认不认"编译宏变了"不好赌，直接把这批 .o 删掉强制重编（只有 7 个文件）。
+          rm -rf blender/build_ios/build/bf_imbuf_movie.build/Release-iphoneos/Objects-normal 2>/dev/null || true
+          find blender/build_ios -name "*ffmpeg*" -type f -delete 2>/dev/null || true
+          echo "dropped ffmpeg-dependent objects (bf_imbuf_movie + bpy_app_ffmpeg)"
+          grep -c "IOS_FIXME: WM_operatortype_find() is documented" \
+            blender/source/blender/editors/space_view3d/view3d_gizmo_navigate.cc
+          grep -c "UITouchTypeIndirectPointer" blender/intern/ghost/intern/GHOST_WindowIOS.mm
+          grep -c "IOSDBG" blender/source/blender/windowmanager/intern/wm_event_system.cc
+
+
+      - name: Drop stale IPA left by an older cache
+        run: |
+          # save 时的 "!blender/build_ios/IPA" 只管"写"，管不了"读"：restore-keys 一旦
+          # 回退到更老的缓存，上一轮打好的 IPA/（含整个旧 Blender.app）就跟着回来了。
+          # 不清掉的话 find 会命中它 —— #285 就是这么把校验搞崩的。
+          rm -rf blender/build_ios/IPA blender/build_ios/Blender.ipa
+          echo "build_ios now:"
+          ls -1 blender/build_ios | sed 's/^/  /'
+
+      - name: Cache iOS libraries
+        id: cache-ios
+        uses: actions/cache@v4
+        with:
+          path: blender/lib/ios_arm64
+          key: ios-libs-${{ hashFiles('blender/.gitmodules') }}
+          restore-keys: |
+            ios-libs-
+
+      - name: Clone iOS precompiled libraries (cache miss)
+        if: steps.cache-ios.outputs.cache-hit != 'true'
+        run: |
+          cd blender
+          rm -rf lib/ios_arm64
+          git clone https://projects.blender.org/blender/lib-ios_arm64.git lib/ios_arm64
+          cd lib/ios_arm64
+          git lfs pull --include="openexr/**"
+          cd ../..
+          echo "iOS libraries cloned and OpenEXR LFS pulled"
+
+      - name: Build zstd for iOS (static arm64)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd blender/lib/ios_arm64
+          # 之前把 ZSTD_LIBRARY 指向 /opt/homebrew/lib/libzstd.dylib 是错的：
+          # 那是 macOS 的 dylib，链接 iOS App 时 ld 会报
+          #   building for 'iOS', but linking in dylib built for 'macOS'
+          # ios_arm64 自带的 zstd 目录又会和 homebrew 的头/库打架，所以
+          # 直接删掉，用源码现编一份 iOS arm64 静态库。
+          rm -rf zstd zstd-src
+          mkdir -p zstd/include zstd/lib
+          . "$RUNNER_TEMP/ghdl.sh"
+          # facebook/zstd 的 release 没有 asset（tarball 由 GitHub 自动生成），
+          # 先走 codeload（独立服务），失败再回退 release 直连。
+          curl -fsSL -L --http1.1 --retry 3 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+            -o zstd.tar.gz https://codeload.github.com/facebook/zstd/tar.gz/refs/tags/v1.5.7 \
+            || ghdl facebook/zstd v1.5.7 zstd-1.5.7.tar.gz zstd.tar.gz
+          tar tzf zstd.tar.gz >/dev/null || { echo "::error::zstd tarball is not a valid gzip"; exit 1; }
+          tar xzf zstd.tar.gz
+          mv zstd-1.5.7 zstd-src
+          rm -f zstd.tar.gz
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          CC=$(xcrun --sdk iphoneos --find clang)
+          echo "iOS SDK: $SDK"
+          OBJ=$(mktemp -d)
+          i=0
+          for f in zstd-src/lib/common/*.c zstd-src/lib/compress/*.c \
+                   zstd-src/lib/decompress/*.c zstd-src/lib/dictBuilder/*.c; do
+            i=$((i+1))
+            "$CC" -c -target arm64-apple-ios15.0 -isysroot "$SDK" -O2 \
+              -I zstd-src/lib -I zstd-src/lib/common \
+              -o "$OBJ/$i-$(basename "$f" .c).o" "$f" || exit 1
+          done
+          ar rcs zstd/lib/libzstd.a "$OBJ"/*.o
+          rm -rf "$OBJ"
+          cp zstd-src/lib/zstd.h zstd-src/lib/zstd_errors.h zstd-src/lib/zdict.h zstd/include/ 2>/dev/null || true
+          rm -rf zstd-src
+          ls -l zstd/lib/libzstd.a zstd/include
+          lipo -info zstd/lib/libzstd.a || true
+          echo "ZSTD_LIB_FILE=$PWD/zstd/lib/libzstd.a" >> $GITHUB_ENV
+          echo "ZSTD_INC_DIR=$PWD/zstd/include" >> $GITHUB_ENV
+
+      - name: Install Eigen 3.4 headers for iOS (missing from lib-ios_arm64)
+        run: |
+          # lib-ios_arm64 里没有 eigen/，而 platform_apple.cmake 用
+          #   file(GLOB LIB_SUBDIRS ${LIBDIR}/*) + set(CMAKE_PREFIX_PATH ...)
+          #   find_package(Eigen3 REQUIRED CONFIG)
+          # 因此只需要把标准安装布局的 Eigen 放到 lib/ios_arm64/eigen 即可。
+          cd blender
+          EIGEN_PREFIX="$PWD/lib/ios_arm64/eigen"
+          if [ -f "$EIGEN_PREFIX/include/eigen3/Eigen/Dense" ] && \
+             [ -f "$EIGEN_PREFIX/share/eigen3/cmake/Eigen3Config.cmake" ]; then
+            echo "Eigen already installed at $EIGEN_PREFIX"
+          else
+            rm -rf "$EIGEN_PREFIX" /tmp/eigen-src /tmp/eigen-build
+            curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o /tmp/eigen.tgz "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz"
+            mkdir -p /tmp/eigen-src
+            tar xzf /tmp/eigen.tgz -C /tmp/eigen-src --strip-components=1
+            cmake -S /tmp/eigen-src -B /tmp/eigen-build \
+              -DCMAKE_INSTALL_PREFIX="$EIGEN_PREFIX" \
+              -DBUILD_TESTING=OFF -DEIGEN_BUILD_DOC=OFF -DBUILD_SHARED_LIBS=OFF
+            cmake --install /tmp/eigen-build
+          fi
+          test -f "$EIGEN_PREFIX/include/eigen3/Eigen/Dense"
+          test -f "$EIGEN_PREFIX/share/eigen3/cmake/Eigen3Config.cmake"
+          echo "Eigen version:"
+          grep -m1 -E "define EIGEN_(WORLD|MAJOR|MINOR)_VERSION" "$EIGEN_PREFIX/include/eigen3/Eigen/src/Core/util/Macros.h" | head -1
+          ls "$EIGEN_PREFIX"
+
+      - name: Imath legacy-header compatibility for Alembic
+        run: |
+          # ios_arm64 里的 Alembic 头文件是按 Imath 2.x 的扁平布局写的
+          #   alembic/include/Alembic/Util/Foundation.h:45:  #include <half.h>
+          # 而同一个 lib 里的 imath 是 3.x 布局（只有 include/Imath/ 子目录）。
+          #
+          # 上一版试过在 imath/include 里建扁平软链，但没用：真正缺的不是文件，
+          # 而是 imath 目录压根不在编译器的头搜索路径里（FindAlembic.cmake 只
+          # 返回 alembic/include）。这一版改为在 CMake 侧加路径，见 patch 步骤。
+          # 这里只做前置校验，确认头文件确实存在、后续 patch 有东西可指。
+          cd blender
+          for p in lib/ios_arm64/imath/include/Imath/half.h \
+                   lib/ios_arm64/alembic/include/Alembic/Util/Foundation.h; do
+            if [ -f "$p" ]; then echo "OK   $p"; else echo "MISS $p"; fi
+          done
+          if [ ! -f lib/ios_arm64/imath/include/Imath/half.h ]; then
+            echo "::error::Imath headers missing - cannot satisfy Alembic"
+            exit 1
+          fi
+
+      # lib-ios_arm64 里没有 fmt 目录（lib-macos_arm64 有），原脚本退回用
+      # homebrew 装的 fmt 12.2.0，而它的 pragma 宏在 iOS SDK 的 clang 下展开失败：
+      #   ./fmt/ranges.h:26:18: error: unknown type name 'diagnostic'
+      #       FMT_PRAGMA_CLANG(diagnostic error "-Wreturn-stack-address")
+      # Blender 5.1.2 配套的是 fmt 12.1.0，这里装官方那份头文件。
+      # 预编译库里没有 iOS 版 libfmt.a，所以走 header-only（FMT_HEADER_ONLY）。
+      - name: Provide fmt 12.1 headers for iOS
+        run: |
+          cd blender
+          FMT_DIR="$PWD/lib/ios_arm64/fmt"
+          mkdir -p "$FMT_DIR/include/fmt" "$FMT_DIR/lib/cmake/fmt"
+          BASE="https://projects.blender.org/api/v1/repos/blender/lib-macos_arm64/raw/fmt/include/fmt"
+          # projects.blender.org 走 HTTP/2 偶发 "stream 1 was not closed cleanly:
+          # INTERNAL_ERROR"，curl 的 --retry 默认不重试传输层错误，必须
+          # --retry-all-errors；再强制 --http1.1 兜底。踩过一次整轮白等。
+          fetch() {
+            for attempt in 1 2 3 4; do
+              if curl -fsSL --http1.1 --retry 3 --retry-all-errors --retry-delay 2 \
+                   --connect-timeout 20 -o "$2" "$1"; then
+                return 0
+              fi
+              echo "  retry $attempt for $1"
+              sleep $((attempt * 3))
+            done
+            return 1
+          }
+          for h in args.h base.h chrono.h color.h compile.h core.h \
+                   format-inl.h format.h os.h ostream.h printf.h ranges.h std.h xchar.h; do
+            fetch "$BASE/$h?ref=main" "$FMT_DIR/include/fmt/$h" \
+              || { echo "::error::failed to fetch fmt/$h"; exit 1; }
+          done
+          n=$(ls "$FMT_DIR/include/fmt" | wc -l | tr -d ' ')
+          echo "fetched $n fmt headers"
+          if [ "$n" -lt 14 ]; then echo "::error::incomplete fmt headers"; exit 1; fi
+          # 防止半截文件（curl -f 只挡 HTTP 错误，挡不住传输截断）。
+          # 只查本来就该很大的两个头；core.h 在 fmt 12 里只是 187 字节的转发头。
+          for f in base.h format.h; do
+            sz=$(wc -c < "$FMT_DIR/include/fmt/$f" | tr -d ' ')
+            echo "  $f = $sz bytes"
+            if [ "$sz" -lt 50000 ]; then
+              echo "::error::$f looks truncated ($sz bytes)"
+              exit 1
+            fi
+          done
+          V=$(grep -m1 "define FMT_VERSION" "$FMT_DIR/include/fmt/base.h" | grep -oE "[0-9]+" || true)
+          echo "FMT_VERSION=$V"
+          # base.h 必须真的定义 FMT_PRAGMA_CLANG / FMT_EXPORT，否则说明文件是坏的
+          for sym in FMT_PRAGMA_CLANG FMT_EXPORT FMT_BEGIN_NAMESPACE; do
+            if grep -q "define $sym" "$FMT_DIR/include/fmt/base.h"; then
+              echo "OK   base.h defines $sym"
+            else
+              echo "::error::base.h does not define $sym - header is broken"
+              exit 1
+            fi
+          done
+
+          # 关键：编译单元里不能出现第二份 fmt。
+          # 前面那个 "把所有 ${LIBDIR}/*/include 加进搜索路径" 的补丁可能把某个
+          # 自带 fmt 的依赖也带进来了。老版本 fmt 的 format.h 会先占住
+          # FMT_FORMAT_H_ 这个 include guard，于是我们的 12.1 format.h 被整段跳过，
+          # base.h 也就不会被包含 —— 表现就是 ranges.h 里 FMT_PRAGMA_CLANG /
+          # FMT_EXPORT 全部"未定义"，正是 run#253 的现象。
+          echo "=== unify OIIO's vendored fmt with ours ==="
+          # 这才是 fmt 报错的真正原因（连查四轮才定位到）：
+          #   lib-macos_arm64 里 OIIO 自带 fmt 12.1，与 Blender 用的 12.1 完全同版本，
+          #   两个 format.h 的 include guard 都是 FMT_FORMAT_H_ —— 第二次 include
+          #   直接跳过，天然共用一份，所以 macOS 版从来不出问题。
+          #   但 lib-ios_arm64 里的 OIIO 是旧版，自带 fmt 9.1!
+          #   于是 OIIO 的 format.h 先把 FMT_FORMAT_H_ 占了，Blender 的
+          #   fmt/ranges.h 再 include format.h 时整段被跳过，base.h 根本没机会执行，
+          #   FMT_EXPORT / FMT_PRAGMA_CLANG / fmt::is_tuple_like 全部"未定义"。
+          #
+          # 处理：把 OIIO 的 fmt 引用改指向共用的一份 12.1，并移走它自带的 9.1 副本。
+          OIIO_FMT_H="lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt.h"
+          if [ -f "$OIIO_FMT_H" ]; then
+            perl -pi -e 's{#include <OpenImageIO/detail/fmt/(format|ostream|printf|core|chrono|std)\.h>}{#include <fmt/$1.h>}g' "$OIIO_FMT_H"
+            echo "OIIO detail/fmt.h now points at the shared fmt 12.1"
+            grep -n "include <fmt/" "$OIIO_FMT_H" | head -5
+          fi
+          if [ -d lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt ]; then
+            mv lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt \
+               lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt.disabled
+            echo "moved OIIO's vendored fmt 9.1 aside"
+          fi
+          # 确认 OIIO 头里没有残留引用
+          LEFT=$(grep -rl "OpenImageIO/detail/fmt/" lib/ios_arm64/openimageio/include \
+                   --include="*.h" 2>/dev/null || true)
+          if [ -n "$LEFT" ]; then
+            echo "::warning::still referencing OIIO vendored fmt:"
+            echo "$LEFT"
+          fi
+          if [ ! -f lib/ios_arm64/fmt/include/fmt/format.h ]; then
+            echo "::error::shared fmt missing"
+            exit 1
+          fi
+          # 仅报告，不做处理：OpenImageIO/detail/fmt 是 OIIO 内部实现，属正常
+          DUP=$(find lib/ios_arm64 -name "format.h" -path "*/fmt/*" \
+                  -not -path "lib/ios_arm64/fmt/include/fmt/*" \
+                  -not -path "lib/ios_arm64/openimageio/*" 2>/dev/null || true)
+          if [ -n "$DUP" ]; then
+            echo "::warning::other fmt headers still present:"
+            echo "$DUP"
+          fi
+
+          # homebrew 里也不能有（/opt/homebrew/include 会被 zstd 的
+          # INTERFACE_INCLUDE_DIRECTORIES 带进编译命令）
+          for p in /opt/homebrew/include/fmt /opt/homebrew/Cellar/fmt; do
+            if [ -e "$p" ]; then
+              mv "$p" "${p}.disabled" 2>/dev/null \
+                && echo "disabled homebrew fmt: $p" \
+                || echo "WARN: could not disable $p"
+            fi
+          done
+          if [ -e /opt/homebrew/include/fmt ]; then
+            echo "::error::homebrew fmt headers still visible - version mixing will break the build"
+            exit 1
+          fi
+
+          cat > "$FMT_DIR/lib/cmake/fmt/fmt-config.cmake" <<'CFGEOF'
+          set(fmt_FOUND TRUE)
+          set(FMT_FOUND TRUE)
+          set(fmt_VERSION "12.1.0")
+          set(FMT_VERSION "12.1.0")
+          if(NOT TARGET fmt::fmt)
+            add_library(fmt::fmt INTERFACE IMPORTED)
+            set_target_properties(fmt::fmt PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include"
+              INTERFACE_COMPILE_DEFINITIONS "FMT_HEADER_ONLY=1")
+          endif()
+          if(NOT TARGET fmt::fmt-header-only)
+            add_library(fmt::fmt-header-only INTERFACE IMPORTED)
+            set_target_properties(fmt::fmt-header-only PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include"
+              INTERFACE_COMPILE_DEFINITIONS "FMT_HEADER_ONLY=1")
+          endif()
+          CFGEOF
+          echo "fmt config written:"
+          ls -l "$FMT_DIR/lib/cmake/fmt"
+
+      - name: Ensure Ceres headers are present
+        run: |
+          cd blender
+          CERES_DIR="lib/ios_arm64/ceres"
+          if [ -f "$CERES_DIR/include/ceres/internal/export.h" ] && [ -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
+            echo "Ceres headers already present"
+          else
+            echo "Ceres headers missing, attempting LFS pull..."
+            cd lib/ios_arm64
+            git lfs pull --include="ceres/**" || true
+            if [ ! -f "ceres/include/ceres/internal/export.h" ] || [ ! -f "ceres/include/ceres/internal/config.h" ]; then
+              git lfs pull --include="**/ceres/**" || true
+            fi
+            if [ ! -f "ceres/include/ceres/internal/export.h" ] || [ ! -f "ceres/include/ceres/internal/config.h" ]; then
+              git lfs pull || true
+            fi
+            cd ../..
+            if [ -f "$CERES_DIR/include/ceres/internal/export.h" ] && [ -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
+              echo "Ceres headers pulled via LFS"
+            else
+              echo "LFS failed, downloading from Ceres official and creating missing files..."
+              CERES_VERSION="2.1.0"
+              curl -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o /tmp/ceres-solver.tar.gz \
+                https://github.com/ceres-solver/ceres-solver/archive/refs/tags/${CERES_VERSION}.tar.gz
+              tar -xzf /tmp/ceres-solver.tar.gz -C /tmp
+              mkdir -p "$CERES_DIR/include"
+              cp -r /tmp/ceres-solver-${CERES_VERSION}/include/* "$CERES_DIR/include/"
+              
+              if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
+                mkdir -p "$CERES_DIR/include/ceres/internal"
+                printf '%s\n' \
+                  '// Ceres export macros - dummy for iOS build' \
+                  '#ifndef CERES_EXPORT_H_' \
+                  '#define CERES_EXPORT_H_' \
+                  '' \
+                  '#define CERES_EXPORT' \
+                  '#define CERES_EXPORT_TEMPLATE' \
+                  '#define CERES_NO_EXPORT' \
+                  '#define CERES_DEPRECATED' \
+                  '' \
+                  '#endif  // CERES_EXPORT_H_' \
+                  > "$CERES_DIR/include/ceres/internal/export.h"
+                echo "Created dummy export.h"
+              fi
+              
+              if [ ! -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
+                mkdir -p "$CERES_DIR/include/ceres/internal"
+                printf '%s\n' \
+                  '// Manual config.h for iOS cross-compilation' \
+                  '#ifndef CERES_INTERNAL_CONFIG_H_' \
+                  '#define CERES_INTERNAL_CONFIG_H_' \
+                  '' \
+                  '#define CERES_HAVE_SSE3 0' \
+                  '#define CERES_HAVE_SSE4_1 0' \
+                  '#define CERES_HAVE_SSE4_2 0' \
+                  '#define CERES_HAVE_AVX 0' \
+                  '#define CERES_HAVE_AVX2 0' \
+                  '#define CERES_HAVE_AVX512 0' \
+                  '#define CERES_HAVE_EIGEN 1' \
+                  '#define CERES_HAVE_EIGEN_SPARSE 1' \
+                  '#define CERES_HAVE_OPENMP 0' \
+                  '#define CERES_HAVE_TBB 0' \
+                  '#define CERES_HAVE_CXX11 1' \
+                  '#define CERES_HAVE_THREADS 1' \
+                  '#define CERES_USE_EIGEN_SPARSE 1' \
+                  '' \
+                  '#endif  // CERES_INTERNAL_CONFIG_H_' \
+                  > "$CERES_DIR/include/ceres/internal/config.h"
+                echo "Created dummy config.h"
+              fi
+              
+              rm -rf /tmp/ceres-solver.tar.gz /tmp/ceres-solver-${CERES_VERSION}
+            fi
+          fi
+          if [ ! -f "$CERES_DIR/include/ceres/internal/export.h" ]; then
+            echo "ERROR: ceres/internal/export.h still not found!"
+            exit 1
+          fi
+          if [ ! -f "$CERES_DIR/include/ceres/internal/config.h" ]; then
+            echo "ERROR: ceres/internal/config.h still not found!"
+            exit 1
+          fi
+          echo "Ceres headers verified"
+
+      - name: Download OpenImageIO from Release (main)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd blender/lib/ios_arm64/openimageio/lib/
+          . "$RUNNER_TEMP/ghdl.sh"
+          ghdl "$GITHUB_REPOSITORY" main openimageio-libs.zip openimageio-libs.zip
+          unzip -oq openimageio-libs.zip || { echo "::error::openimageio-libs.zip is not a valid zip"; exit 1; }
+          rm openimageio-libs.zip
+          ls -lh libOpenImageIO*.dylib
+          if [ ! -f libOpenImageIO.dylib ] || [ $(stat -f%z libOpenImageIO.dylib) -lt 1000000 ]; then
+            echo "ERROR: libOpenImageIO.dylib missing or too small!"
+            exit 1
+          fi
+          echo "OpenImageIO dynamic libraries ready"
+
+      - name: Download Eigen headers to quadriflow source
+        run: |
+          cd blender
+          echo "Downloading Eigen 3.4.0 from official repository..."
+          curl -L --http1.1 --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o eigen.tar.gz https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+          tar -xzf eigen.tar.gz
+          mkdir -p extern/quadriflow/src/Eigen
+          cp -r eigen-3.4.0/Eigen/* extern/quadriflow/src/Eigen/
+          rm -rf eigen-3.4.0 eigen.tar.gz
+          if [ -f "extern/quadriflow/src/Eigen/Core" ]; then
+            echo "Eigen headers copied to extern/quadriflow/src/Eigen/"
+          else
+            echo "ERROR: Eigen headers copy failed!"
+            exit 1
+          fi
+          EIGEN_INCLUDE_PATH="$PWD/extern/quadriflow/src"
+          echo "EIGEN_INCLUDE_PATH=$EIGEN_INCLUDE_PATH" >> $GITHUB_ENV
+          echo "EIGEN_INCLUDE_PATH set to $EIGEN_INCLUDE_PATH"
+
+      - name: Fix list(INSERT) error in source/creator/CMakeLists.txt
+        run: |
+          cd blender
+          echo "Before fix:"
+          grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "No matches found"
+          sed -i '' '/list(INSERT/d' source/creator/CMakeLists.txt
+          echo "After fix:"
+          grep -n "list(INSERT" source/creator/CMakeLists.txt || echo "All list(INSERT lines removed"
+
+      - name: Create fake CMake config files
+        run: |
+          cd blender
+          LIB_BASE="$PWD/lib/ios_arm64"
+          # 优先用步骤 10 装好的真正 Eigen 3.4（完整头文件，含 SVD 模块），
+          # 只有它缺失时才退回 quadriflow 自带的那份裁剪头文件。
+          REAL_EIGEN="$LIB_BASE/eigen/include/eigen3"
+          if [ -f "$REAL_EIGEN/Eigen/Dense" ]; then
+            EIGEN_INCLUDE_PATH="$REAL_EIGEN"
+            echo "Using real Eigen from $REAL_EIGEN"
+          else
+            echo "WARNING: real Eigen missing at $REAL_EIGEN, falling back to $EIGEN_INCLUDE_PATH"
+          fi
+          EIGEN_CMAKE_DIR="$LIB_BASE/eigen3-config"
+          mkdir -p "$EIGEN_CMAKE_DIR"
+          cat > "$EIGEN_CMAKE_DIR/Eigen3Config.cmake" <<EOF
+          set(Eigen3_FOUND TRUE)
+          set(EIGEN3_FOUND TRUE)
+          set(EIGEN3_INCLUDE_DIR "${EIGEN_INCLUDE_PATH}")
+          set(EIGEN3_INCLUDE_DIRS "${EIGEN_INCLUDE_PATH}")
+          set(Eigen3_INCLUDE_DIR "${EIGEN_INCLUDE_PATH}")
+          set(Eigen3_INCLUDE_DIRS "${EIGEN_INCLUDE_PATH}")
+          set(EIGEN3_VERSION_STRING "3.4.0")
+          set(Eigen3_VERSION "3.4.0")
+          if(NOT TARGET Eigen3::Eigen)
+            add_library(Eigen3::Eigen INTERFACE IMPORTED)
+            set_target_properties(Eigen3::Eigen PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${EIGEN_INCLUDE_PATH}"
+            )
+          endif()
+          EOF
+          echo "Eigen3_DIR=$EIGEN_CMAKE_DIR" >> $GITHUB_ENV
+
+          OIIO_DIR="$LIB_BASE/openimageio"
+          mkdir -p "$OIIO_DIR"
+          cat > "$OIIO_DIR/OpenImageIOConfig.cmake" <<EOF
+          set(OpenImageIO_FOUND TRUE)
+          set(OPENIMAGEIO_FOUND TRUE)
+          set(OPENIMAGEIO_INCLUDE_DIR "${OIIO_DIR}/include")
+          set(OPENIMAGEIO_LIBRARY "${OIIO_DIR}/lib/libOpenImageIO.dylib")
+          set(OPENIMAGEIO_LIBRARIES ${OPENIMAGEIO_LIBRARY})
+          set(OPENIMAGEIO_VERSION_STRING "2.5.0")
+          set(OpenImageIO_VERSION "2.5.0")
+          if(NOT TARGET OpenImageIO::OpenImageIO)
+            add_library(OpenImageIO::OpenImageIO UNKNOWN IMPORTED)
+            set_target_properties(OpenImageIO::OpenImageIO PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${OPENIMAGEIO_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${OPENIMAGEIO_LIBRARY}"
+            )
+          endif()
+          if(NOT TARGET OpenImageIO::oiiotool)
+            add_executable(OpenImageIO::oiiotool IMPORTED)
+            set_target_properties(OpenImageIO::oiiotool PROPERTIES
+              IMPORTED_LOCATION "/usr/bin/false"
+            )
+          endif()
+          EOF
+          cp "$OIIO_DIR/OpenImageIOConfig.cmake" "$OIIO_DIR/openimageio-config.cmake"
+
+          OPENEXR_DIR="$LIB_BASE/openexr"
+          OPENEXR_INC="$OPENEXR_DIR/include/OpenEXR"
+          OPENEXR_LIB_FILE="$OPENEXR_DIR/lib/libOpenEXR.dylib"
+          cat > "$OPENEXR_DIR/OpenEXRConfig.cmake" <<EOF
+          set(OpenEXR_FOUND TRUE)
+          set(OPENEXR_FOUND TRUE)
+          set(OPENEXR_INCLUDE_DIR "${OPENEXR_INC}")
+          set(OPENEXR_LIBRARY "${OPENEXR_LIB_FILE}")
+          set(OPENEXR_LIBRARIES "${OPENEXR_LIB_FILE}")
+          set(OPENEXR_VERSION_STRING "3.1.0")
+          set(OpenEXR_VERSION "3.1.0")
+          if(NOT TARGET OpenEXR::OpenEXR)
+            add_library(OpenEXR::OpenEXR UNKNOWN IMPORTED)
+            set_target_properties(OpenEXR::OpenEXR PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${OPENEXR_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${OPENEXR_LIBRARY}"
+            )
+          endif()
+          EOF
+          cp "$OPENEXR_DIR/OpenEXRConfig.cmake" "$OPENEXR_DIR/openexr-config.cmake"
+
+          CERES_INC="$LIB_BASE/ceres/include"
+          if [ -d "$CERES_INC" ] && [ -f "$CERES_INC/ceres/ceres.h" ]; then
+            echo "Ceres headers found at $CERES_INC"
+          else
+            echo "ERROR: Ceres headers not found at $CERES_INC"
+            exit 1
+          fi
+          CERES_LIB=$(find "$LIB_BASE" -name "libceres.a" 2>/dev/null | head -1)
+          [ -z "$CERES_LIB" ] && CERES_LIB="$LIB_BASE/ceres/lib/libceres.a"
+          CERES_CMAKE_DIR="$LIB_BASE/ceres-config"
+          mkdir -p "$CERES_CMAKE_DIR"
+          cat > "$CERES_CMAKE_DIR/CeresConfig.cmake" <<EOF
+          set(Ceres_FOUND TRUE)
+          set(CERES_FOUND TRUE)
+          set(CERES_INCLUDE_DIR "${CERES_INC}")
+          set(CERES_INCLUDE_DIRS "${CERES_INC}")
+          set(Ceres_INCLUDE_DIR "${CERES_INC}")
+          set(Ceres_INCLUDE_DIRS "${CERES_INC}")
+          set(CERES_LIBRARY "${CERES_LIB}")
+          set(CERES_LIBRARIES "${CERES_LIB}")
+          set(Ceres_LIBRARY "${CERES_LIB}")
+          set(Ceres_LIBRARIES "${CERES_LIB}")
+          set(CERES_VERSION_STRING "2.0.0")
+          set(Ceres_VERSION "2.0.0")
+          if(NOT TARGET Ceres::Ceres)
+            add_library(Ceres::Ceres UNKNOWN IMPORTED)
+            set_target_properties(Ceres::Ceres PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${CERES_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${CERES_LIBRARY}"
+            )
+          endif()
+          EOF
+          echo "CERES_DIR=$CERES_CMAKE_DIR" >> $GITHUB_ENV
+          echo "Ceres config created with include: $CERES_INC"
+
+          BOOST_INC=$(find "$LIB_BASE" -path "*/boost/version.hpp" -printf "%h\n" 2>/dev/null | head -1)
+          [ -z "$BOOST_INC" ] && BOOST_INC="$LIB_BASE/boost/include"
+          BOOST_CMAKE_DIR="$LIB_BASE/boost-config"
+          mkdir -p "$BOOST_CMAKE_DIR"
+          cat > "$BOOST_CMAKE_DIR/BoostConfig.cmake" <<EOF
+          set(Boost_FOUND TRUE)
+          set(Boost_INCLUDE_DIR "${BOOST_INC}")
+          set(Boost_INCLUDE_DIRS "${BOOST_INC}")
+          set(Boost_VERSION_STRING "1.80.0")
+          set(Boost_VERSION "1.80.0")
+          set(Boost_LIBRARY_DIRS "")
+          set(Boost_LIBRARIES "")
+          EOF
+          cp "$BOOST_CMAKE_DIR/BoostConfig.cmake" "$BOOST_CMAKE_DIR/boost-config.cmake"
+
+          TBB_INC=$(find "$LIB_BASE" -path "*/tbb/tbb.h" -printf "%h\n" 2>/dev/null | head -1)
+          [ -z "$TBB_INC" ] && TBB_INC="$LIB_BASE/tbb/include"
+          TBB_LIB=$(find "$LIB_BASE" -name "libtbb.dylib" 2>/dev/null | head -1)
+          [ -z "$TBB_LIB" ] && TBB_LIB="$LIB_BASE/tbb/lib/libtbb.dylib"
+          TBBMALLOC_LIB=$(find "$LIB_BASE" -name "libtbbmalloc.dylib" 2>/dev/null | head -1)
+          [ -z "$TBBMALLOC_LIB" ] && TBBMALLOC_LIB="$LIB_BASE/tbb/lib/libtbbmalloc.dylib"
+          TBBMALLOC_PROXY_LIB=$(find "$LIB_BASE" -name "libtbbmalloc_proxy.dylib" 2>/dev/null | head -1)
+          [ -z "$TBBMALLOC_PROXY_LIB" ] && TBBMALLOC_PROXY_LIB="$LIB_BASE/tbb/lib/libtbbmalloc_proxy.dylib"
+          TBB_CMAKE_DIR="$LIB_BASE/tbb-config"
+          mkdir -p "$TBB_CMAKE_DIR"
+          cat > "$TBB_CMAKE_DIR/TBBConfig.cmake" <<EOF
+          set(TBB_FOUND TRUE)
+          set(TBB_INCLUDE_DIR "${TBB_INC}")
+          set(TBB_INCLUDE_DIRS "${TBB_INC}")
+          set(TBB_LIBRARY "${TBB_LIB}")
+          set(TBB_LIBRARIES "${TBB_LIB}")
+          set(TBB_VERSION_STRING "2021.8.0")
+          set(TBB_VERSION "2021.8.0")
+          if(NOT TARGET TBB::tbb)
+            add_library(TBB::tbb UNKNOWN IMPORTED)
+            set_target_properties(TBB::tbb PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${TBB_LIBRARY}"
+            )
+          endif()
+          if(NOT TARGET TBB::tbbmalloc)
+            add_library(TBB::tbbmalloc UNKNOWN IMPORTED)
+            set_target_properties(TBB::tbbmalloc PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${TBBMALLOC_LIB}"
+            )
+          endif()
+          if(NOT TARGET TBB::tbbmalloc_proxy)
+            add_library(TBB::tbbmalloc_proxy UNKNOWN IMPORTED)
+            set_target_properties(TBB::tbbmalloc_proxy PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIR}"
+              IMPORTED_LOCATION "${TBBMALLOC_PROXY_LIB}"
+            )
+          endif()
+          EOF
+
+          echo "Boost_DIR=$BOOST_CMAKE_DIR" >> $GITHUB_ENV
+          echo "TBB_DIR=$TBB_CMAKE_DIR" >> $GITHUB_ENV
+          echo "All fake config files created."
+
+      - name: Verify OpenEXR files
+        run: |
+          cd blender/lib/ios_arm64
+          if [ ! -f "openexr/lib/libOpenEXR.dylib" ] && [ ! -f "openexr/lib/libOpenEXR.a" ]; then
+            git lfs pull --include="openexr/**"
+          fi
+          if [ ! -f "openexr/lib/libOpenEXR.dylib" ] && [ ! -f "openexr/lib/libOpenEXR.a" ]; then
+            echo "ERROR: OpenEXR library still missing!"
+            exit 1
+          fi
+          echo "OpenEXR is ready"
+
+      - name: Download iOS Python 3.13 dynamic library from BeeWare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd blender
+          mkdir -p lib/ios_arm64/python/lib
+          mkdir -p lib/ios_arm64/python/include
+          . "$RUNNER_TEMP/ghdl.sh"
+          ghdl beeware/Python-Apple-support 3.13-b14 \
+            Python-3.13-iOS-support.b14.tar.gz python-ios.tar.gz
+          mkdir -p python_temp
+          tar -xzf python-ios.tar.gz -C python_temp/
+          XCFRAMEWORK_BASE="python_temp/Python.xcframework/ios-arm64"
+          if [ -d "$XCFRAMEWORK_BASE" ]; then
+            if [ -f "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" ]; then
+              cp "$XCFRAMEWORK_BASE/lib/libpython3.13.dylib" lib/ios_arm64/python/lib/
+            else
+              echo "ERROR: libpython3.13.dylib not found!"
+              exit 1
+            fi
+            if [ -d "$XCFRAMEWORK_BASE/include/python3.13" ]; then
+              cp -r "$XCFRAMEWORK_BASE/include/python3.13" lib/ios_arm64/python/include/
+            else
+              echo "ERROR: Headers directory not found!"
+              exit 1
+            fi
+          else
+            echo "ERROR: XCFramework not found!"
+            exit 1
+          fi
+          # 官方 Python.framework（扁平布局：Python + Info.plist）。
+          # iOS 的 installd 会校验 Frameworks/ 下每个 .framework 必须带
+          # Info.plist，缺了直接装不上：
+          #   Failed to load Info.plist from bundle at .../Python.framework
+          # Headers 不用拷，运行时不看。
+          if [ -f "$XCFRAMEWORK_BASE/Python.framework/Python" ]; then
+            rm -rf lib/ios_arm64/python/Python.framework
+            mkdir -p lib/ios_arm64/python/Python.framework
+            cp "$XCFRAMEWORK_BASE/Python.framework/Python" lib/ios_arm64/python/Python.framework/
+            if [ -f "$XCFRAMEWORK_BASE/Python.framework/Info.plist" ]; then
+              cp "$XCFRAMEWORK_BASE/Python.framework/Info.plist" lib/ios_arm64/python/Python.framework/
+            fi
+            echo "official Python.framework kept:"
+            ls -l lib/ios_arm64/python/Python.framework/
+          fi
+          # 纯 Python 标准库在 xcframework/lib/python3.13（跨平台共享），
+          # 架构相关的扩展模块在 ios-arm64/lib-arm64/python3.13/lib-dynload。
+          # Blender 的 install 规则会把这个目录整份拷进 App，所以先拼好；
+          # 否则 xcodebuild 会报
+          #   file INSTALL cannot find ".../lib/ios_arm64/python/lib/python3.13"
+          XCF_LIB="python_temp/Python.xcframework/lib/python3.13"
+          if [ -d "$XCF_LIB" ]; then
+            rm -rf lib/ios_arm64/python/lib/python3.13
+            mkdir -p lib/ios_arm64/python/lib/python3.13
+            cp -R "$XCF_LIB/." lib/ios_arm64/python/lib/python3.13/
+            if [ -d "$XCFRAMEWORK_BASE/lib-arm64/python3.13" ]; then
+              cp -R "$XCFRAMEWORK_BASE/lib-arm64/python3.13/." lib/ios_arm64/python/lib/python3.13/
+            fi
+            if [ ! -f lib/ios_arm64/python/lib/python3.13/os.py ]; then
+              echo "ERROR: python stdlib (os.py) missing after copy"
+              exit 1
+            fi
+            # BeeWare 包不带 Modules/Setup*，CPython 找不到静态内置模块的
+            # 初始化表就会在 Py_Initialize 阶段静默 abort（iPad 上表现为闪退）。
+            # 用支持「静态模块」的自定义 Setup 覆盖，剩下的走 lib-dynload。
+            mkdir -p lib/ios_arm64/python/lib/python3.13/Modules
+            printf '%s\n' '*static*' \
+              '_abc _abc' \
+              '_ast _ast' \
+              '_codecs _codecs' \
+              '_collections _collections' \
+              '_functools _functools' \
+              '_imp _imp' \
+              '_io _io' \
+              '_locale _locale' \
+              '_operator _operator' \
+              '_signal _signal' \
+              '_sre _sre' \
+              '_stat _stat' \
+              '_string _string' \
+              '_symtable _symtable' \
+              '_thread _thread' \
+              '_tokenize _tokenize' \
+              '_tracemalloc _tracemalloc' \
+              '_typing _typing' \
+              '_weakref _weakref' \
+              'atexit atexit' \
+              'errno errno' \
+              'faulthandler faulthandler' \
+              'gc gc' \
+              'itertools itertools' \
+              'marshal marshal' \
+              'posix posix' \
+              'pwd pwd' \
+              'time time' \
+              > lib/ios_arm64/python/lib/python3.13/Modules/Setup.local
+            echo "python stdlib installed:"
+            du -sh lib/ios_arm64/python/lib/python3.13
+            ls lib/ios_arm64/python/lib/python3.13 | head -20
+          else
+            echo "ERROR: python stdlib not found in xcframework"
+            exit 1
+          fi
+          rm -rf python_temp python-ios.tar.gz
+          if [ ! -f "lib/ios_arm64/python/lib/libpython3.13.dylib" ]; then
+            echo "ERROR: iOS Python dynamic library not found!"
+            exit 1
+          fi
+          if [ ! -f "lib/ios_arm64/python/include/python3.13/Python.h" ]; then
+            echo "ERROR: iOS Python headers not found!"
+            exit 1
+          fi
+          echo "iOS Python installed"
+
+      - name: Locate library paths dynamically
+        id: locate_libs
+        run: |
+          cd blender
+          LIB_BASE="$PWD/lib/ios_arm64"
+          PYTHON_LIB="$LIB_BASE/python/lib/libpython3.13.dylib"
+          if [ -f "$PYTHON_LIB" ]; then
+            PYTHON_LIB_DIR=$(dirname "$PYTHON_LIB")
+            echo "PYTHON_LIB_DIR=$PYTHON_LIB_DIR" >> $GITHUB_ENV
+            echo "Python library: $PYTHON_LIB"
+          else
+            echo "ERROR: Python library not found!"
+            exit 1
+          fi
+          PYTHON_INC="$LIB_BASE/python/include/python3.13/Python.h"
+          if [ -f "$PYTHON_INC" ]; then
+            PYTHON_INC_DIR=$(dirname "$PYTHON_INC")
+            echo "PYTHON_INC_DIR=$PYTHON_INC_DIR" >> $GITHUB_ENV
+            echo "Python headers: $PYTHON_INC"
+          else
+            echo "ERROR: Python headers not found!"
+            exit 1
+          fi
+          OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.dylib" -type f | head -1)
+          if [ -n "$OPENEXR_LIB" ]; then
+            OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
+            echo "OPENEXR_LIB_DIR=$OPENEXR_LIB_DIR" >> $GITHUB_ENV
+            echo "OPENEXR_LIB_FILE=$OPENEXR_LIB" >> $GITHUB_ENV
+            echo "OpenEXR library: $OPENEXR_LIB"
+          else
+            OPENEXR_LIB=$(find "$LIB_BASE/openexr/lib" -name "libOpenEXR.a" -type f | head -1)
+            if [ -n "$OPENEXR_LIB" ]; then
+              OPENEXR_LIB_DIR=$(dirname "$OPENEXR_LIB")
+              echo "OPENEXR_LIB_DIR=$OPENEXR_LIB_DIR" >> $GITHUB_ENV
+              echo "OPENEXR_LIB_FILE=$OPENEXR_LIB" >> $GITHUB_ENV
+              echo "OpenEXR library (static): $OPENEXR_LIB"
+            else
+              echo "ERROR: OpenEXR library not found!"
+              exit 1
+            fi
+          fi
+          OPENEXR_INC="$LIB_BASE/openexr/include/OpenEXR/OpenEXRConfig.h"
+          if [ -f "$OPENEXR_INC" ]; then
+            OPENEXR_INC_DIR=$(dirname "$OPENEXR_INC")
+            echo "OPENEXR_INC_DIR=$OPENEXR_INC_DIR" >> $GITHUB_ENV
+            echo "OpenEXR headers: $OPENEXR_INC"
+          else
+            echo "ERROR: OpenEXR headers not found!"
+            exit 1
+          fi
+          OIIO_LIB="$LIB_BASE/openimageio/lib/libOpenImageIO.dylib"
+          if [ -f "$OIIO_LIB" ]; then
+            OIIO_LIB_DIR=$(dirname "$OIIO_LIB")
+            echo "OIIO_LIB_DIR=$OIIO_LIB_DIR" >> $GITHUB_ENV
+            echo "OIIO_LIB_FILE=$OIIO_LIB" >> $GITHUB_ENV
+            echo "OpenImageIO library: $OIIO_LIB"
+          else
+            echo "ERROR: OpenImageIO library not found!"
+            exit 1
+          fi
+          OIIO_INC="$LIB_BASE/openimageio/include/OpenImageIO"
+          if [ -d "$OIIO_INC" ]; then
+            OIIO_INC_DIR=$(dirname "$OIIO_INC")
+            echo "OIIO_INC_DIR=$OIIO_INC_DIR" >> $GITHUB_ENV
+            echo "OpenImageIO headers: $OIIO_INC"
+          else
+            echo "ERROR: OpenImageIO headers not found!"
+            exit 1
+          fi
+
+      - name: Setup Xcode
+        run: |
+          XCODE_APP=$(ls /Applications/ | grep -E '^Xcode.*\.app$' | sort -V | tail -1)
+          if [ -z "$XCODE_APP" ]; then
+            echo "No Xcode found!"
+            exit 1
+          fi
+          echo "Using Xcode: $XCODE_APP"
+          sudo xcode-select -s "/Applications/$XCODE_APP"
+          xcodebuild -version
+
+      - name: Patch CMakeLists and platform_apple (jacobiSvd audit only, no source rewriting)
+        run: |
+          cd blender
+          PY_LIB="$PYTHON_LIB_DIR"
+          PY_INC="$PYTHON_INC_DIR"
+          IOS_LIB="$PWD/lib/ios_arm64"
+
+          # 1. Patch CMakeLists.txt
+          cat > /tmp/patch_cmakelists << EOF
+          # --- FORCED PATCH FOR iOS BUILD ---
+          set(ENV{HOME} "/Users/runner")
+          set(LIBDIR "${IOS_LIB}" CACHE PATH "" FORCE)
+          set(PYTHON_VERSION 3.13 CACHE STRING "" FORCE)
+          set(PYTHON_LIBRARY "${PY_LIB}/libpython3.13.dylib" CACHE FILEPATH "" FORCE)
+          set(PYTHON_INCLUDE_DIR "${PY_INC}" CACHE PATH "" FORCE)
+          set(PYTHON_INCLUDE_CONFIG_DIR "${PY_INC}" CACHE PATH "" FORCE)
+          set(PYTHON_LIBPATH "${PY_LIB}" CACHE PATH "" FORCE)
+          set(PYTHONLIBS_FOUND TRUE CACHE BOOL "" FORCE)
+          set(PythonLibsUnix_FOUND TRUE CACHE BOOL "" FORCE)
+          set(WITH_OPENAL OFF CACHE BOOL "" FORCE)
+          set(WITH_JACK OFF CACHE BOOL "" FORCE)
+          set(Epoxy_FOUND TRUE CACHE BOOL "" FORCE)
+          set(EPOXY_FOUND TRUE CACHE BOOL "" FORCE)
+          set(CERES_FOUND TRUE CACHE BOOL "" FORCE)
+          set(CERES_INCLUDE_DIR "${IOS_LIB}/ceres/include" CACHE PATH "" FORCE)
+          set(CERES_INCLUDE_DIRS "${IOS_LIB}/ceres/include" CACHE PATH "" FORCE)
+          set(CERES_LIBRARY "${IOS_LIB}/ceres/lib/libceres.a" CACHE FILEPATH "" FORCE)
+          set(CERES_LIBRARIES "${IOS_LIB}/ceres/lib/libceres.a" CACHE FILEPATH "" FORCE)
+          # zstd：iOS 要用现场编的 iOS 静态库；但 xcodebuild 内部还有一次
+          # 嵌套的【native macOS】configure 用来产宿主工具（makesdna/msgfmt...），
+          # 它链的是 macOS 的 bf_blenlib —— 给它塞 iOS 的 .a 会报
+          #   building for 'macOS', but linking in object file built for 'iOS'
+          # 两次 configure 的差别只在 sysroot（iPhoneOS*.sdk vs MacOSX*.sdk），
+          # 所以按 sysroot 分支给库。
+          if(CMAKE_OSX_SYSROOT MATCHES "iPhoneOS|iphoneos")
+            set(ZSTD_LIBRARY "${ZSTD_LIB_FILE}" CACHE FILEPATH "" FORCE)
+            set(ZSTD_LIBRARIES "${ZSTD_LIB_FILE}" CACHE FILEPATH "" FORCE)
+            set(ZSTD_INCLUDE_DIR "${ZSTD_INC_DIR}" CACHE PATH "" FORCE)
+            set(ZSTD_FOUND TRUE CACHE BOOL "" FORCE)
+            if(NOT TARGET ZSTD::ZSTD)
+              add_library(ZSTD::ZSTD UNKNOWN IMPORTED)
+              set_target_properties(ZSTD::ZSTD PROPERTIES
+                IMPORTED_LOCATION "${ZSTD_LIB_FILE}"
+                INTERFACE_INCLUDE_DIRECTORIES "${ZSTD_INC_DIR}"
+              )
+            endif()
+          else()
+            set(ZSTD_LIBRARY "/opt/homebrew/lib/libzstd.dylib" CACHE FILEPATH "" FORCE)
+            set(ZSTD_LIBRARIES "/opt/homebrew/lib/libzstd.dylib" CACHE FILEPATH "" FORCE)
+            set(ZSTD_INCLUDE_DIR "/opt/homebrew/include" CACHE PATH "" FORCE)
+            set(ZSTD_FOUND TRUE CACHE BOOL "" FORCE)
+            if(NOT TARGET ZSTD::ZSTD)
+              add_library(ZSTD::ZSTD UNKNOWN IMPORTED)
+              set_target_properties(ZSTD::ZSTD PROPERTIES
+                IMPORTED_LOCATION "/opt/homebrew/lib/libzstd.dylib"
+                INTERFACE_INCLUDE_DIRECTORIES "/opt/homebrew/include"
+              )
+            endif()
+          endif()
+          # --- END PATCH ---
+          EOF
+          sed -i '' "1 r /tmp/patch_cmakelists" CMakeLists.txt
+
+          # 2. Disable Epoxy find_package
+          sed -i '' 's/^[[:space:]]*find_package(Epoxy REQUIRED)/# find_package(Epoxy REQUIRED) # disabled by patch/g' build_files/cmake/platform/platform_apple.cmake
+
+          # 2.1 FFmpeg：lib-ios_arm64 的 ffmpeg 包里没有 libavfilter.a。
+          #     platform_apple.cmake 的组件表是从 ffmpeg 官网"标准构建"抄来的
+          #     （源码注释明写），而 Blender 自己的代码并不引用 libavfilter 符号。
+          #     find_library 失败时会把 "FFMPEG_AVFILTER_LIBRARY-NOTFOUND"
+          #     原样塞进 FFMPEG_LIBRARIES，链接器于是报
+          #       library 'FFMPEG_AVFILTER_LIBRARY-NOTFOUND' not found
+          #     把 avfilter 从组件表移除即可（缺失项应当当可选，不能拿 NOTFOUND 占位）。
+          sed -i '' 's/avcodec avdevice avfilter avformat avutil/avcodec avdevice avformat avutil/' \
+            build_files/cmake/platform/platform_apple.cmake
+          if grep -q "avdevice avfilter" build_files/cmake/platform/platform_apple.cmake; then
+            echo "::error::avfilter still listed in FFMPEG_FIND_COMPONENTS"
+            exit 1
+          fi
+          echo "FFMPEG_FIND_COMPONENTS: avfilter removed"
+
+          # 2.5 Alembic 需要 Imath 的旧式扁平头（#include <half.h>）
+          #     lib/ios_arm64 里 alembic 是按 Imath 2.x 的头写的，而 imath 是 3.x
+          #     布局（include/Imath/）。仅仅把文件软链过去不够用——imath 目录
+          #     根本不在头搜索路径里（FindAlembic 只返回 alembic/include）。
+          #     half.h 内部还用相对 include（"ImathExport.h"），所以 Imath/ 目录
+          #     本身也必须在路径里。
+          cat >> build_files/cmake/platform/platform_apple.cmake <<'CMEOF'
+
+          # --- iOS patch: bundled 依赖头路径 ---
+          # lib/ios_arm64 里各依赖（openimageio / openexr / pugixml / opencolorio / ...）
+          # 都是预编译包。Blender 靠 find_package(...) 拿 INTERFACE_INCLUDE_DIRECTORIES，
+          # 但这套 iOS 的伪造 config 只补了部分变量，很多 target 拿不到头路径，
+          # 要编译到 source/blender/imbuf/intern/oiio 这种深层才会报 file not found。
+          # 统一把各依赖的 include 目录加进头搜索路径（AFTER，不抢系统头）。
+          file(GLOB _ios_dep_inc_dirs "${LIBDIR}/*/include")
+          # 这些库头多、与 Blender/系统头容易撞，而且它们的使用方都走各自的
+          # find_package INTERFACE，不需要全局注入（llvm 会带进来一堆冲突定义，
+          # osl/materialx/usd 里也可能夹带自己的第三方头）。
+          set(_ios_skip_deps python zlib llvm osl materialx usd sse2neon shaderc vulkan udev)
+          foreach(_d ${_ios_dep_inc_dirs})
+            get_filename_component(_dep "${_d}" DIRECTORY)
+            get_filename_component(_depname "${_dep}" NAME)
+            list(FIND _ios_skip_deps "${_depname}" _ios_skip_idx)
+            if(_ios_skip_idx GREATER -1)
+              continue()
+            endif()
+            if(IS_DIRECTORY "${_d}")
+              include_directories(AFTER "${_d}")
+            endif()
+          endforeach()
+          message(STATUS "iOS patch: ${LIBDIR}/*/include injected (skipping python/zlib/llvm/osl/materialx/usd)")
+
+          # OpenEXR 的 openexr_config.h 里写的是 #include <IlmThreadConfig.h>，
+          # 而 IlmThreadConfig.h 在 openexr/include/OpenEXR/ 下（不是 include 根），
+          # 所以 OpenEXR 子目录本身也要在路径里。
+          foreach(_sub openexr/include/OpenEXR)
+            if(IS_DIRECTORY "${LIBDIR}/${_sub}")
+              include_directories(AFTER "${LIBDIR}/${_sub}")
+              message(STATUS "iOS patch: extra include ${LIBDIR}/${_sub}")
+            endif()
+          endforeach()
+
+          # Alembic 的头按 Imath 2.x 写（#include <half.h>），而 imath 是 3.x 布局；
+          # 且 half.h 内部用相对 include（"ImathExport.h"），所以 Imath/ 目录本身也要在路径里。
+          if(EXISTS "${LIBDIR}/imath/include/Imath/half.h")
+            include_directories(BEFORE "${LIBDIR}/imath/include/Imath")
+            message(STATUS "iOS patch: Imath legacy headers <- ${LIBDIR}/imath/include/Imath")
+          else()
+            message(WARNING "iOS patch: ${LIBDIR}/imath/include/Imath/half.h not found")
+          endif()
+
+          # fmt：iOS 下只能 header-only（预编译库没有 iOS 版 libfmt.a）。
+          # 用 BEFORE 顶到最前面，避免命中 /opt/homebrew/include 里的 fmt 12.2.0
+          # （那个版本的 pragma 宏在 iOS SDK 的 clang 下会展开失败）。
+          if(EXISTS "${LIBDIR}/fmt/include/fmt/format.h")
+            include_directories(BEFORE "${LIBDIR}/fmt/include")
+            add_definitions(-DFMT_HEADER_ONLY=1)
+            message(STATUS "iOS patch: fmt header-only <- ${LIBDIR}/fmt/include")
+          else()
+            message(WARNING "iOS patch: ${LIBDIR}/fmt/include/fmt/format.h not found")
+          endif()
+          CMEOF
+
+          # 2.6 精准兜底：凡是用 Alembic 的 target 直接带上 Imath 头路径
+          python3 - <<'PYEOF'
+          from pathlib import Path
+          p = Path("build_files/cmake/Modules/FindAlembic.cmake")
+          s = p.read_text()
+          old = "set(ALEMBIC_INCLUDE_DIRS ${ALEMBIC_INCLUDE_DIR})"
+          new = (
+              "set(ALEMBIC_INCLUDE_DIRS ${ALEMBIC_INCLUDE_DIR})\n"
+              '  if(EXISTS "${ALEMBIC_INCLUDE_DIR}/../../imath/include/Imath/half.h")\n'
+              "    list(APPEND ALEMBIC_INCLUDE_DIRS\n"
+              '      "${ALEMBIC_INCLUDE_DIR}/../../imath/include"\n'
+              '      "${ALEMBIC_INCLUDE_DIR}/../../imath/include/Imath")\n'
+              "  endif()"
+          )
+          if old not in s:
+              raise SystemExit("FindAlembic.cmake: ALEMBIC_INCLUDE_DIRS assignment not found")
+          p.write_text(s.replace(old, new, 1))
+          print("FindAlembic.cmake patched (Imath include appended)")
+          PYEOF
+
+          # 3. Force Ceres include in libmv
+          cat > /tmp/libmv_patch.txt << 'EOF'
+          # Added by iOS patch: force Ceres include path
+          include_directories(BEFORE SYSTEM "${CERES_INCLUDE_DIR}")
+          EOF
+          { cat /tmp/libmv_patch.txt; cat intern/libmv/CMakeLists.txt; } > intern/libmv/CMakeLists.txt.tmp && mv intern/libmv/CMakeLists.txt.tmp intern/libmv/CMakeLists.txt
+
+          # 4. jacobiSvd：ios_arm64 用的 Eigen 3.4 只提供运行时选项版本
+          #      MatrixBase::jacobiSvd(unsigned int computationOptions)
+          #    没有模板版本，所以源码里的 `.jacobiSvd<Opts>()` 必须改写成
+          #      `.jacobiSvd(Opts)`
+          #    关键是【一次性】同时吃掉 <...> 和后面的 ()：分两步做会留下
+          #      `.jacobiSvd(Opts)()`
+          #    clang 会报 "JacobiSVD does not provide a call operator"
+          #    （历次运行就是这么倒在第 25 步的）。
+          echo "=== Normalizing jacobiSvd (Eigen 3.4 runtime-options form) ==="
+          JACOBI='s/\.jacobiSvd<([^>]*)>\s*\(\)/.jacobiSvd($1)/g'
+
+          perl -pi -e "$JACOBI" \
+            intern/libmv/libmv/multiview/euclidean_resection.cc \
+            intern/libmv/libmv/tracking/track_region.cc \
+            intern/dualcon/intern/octree.cpp
+          find intern source/blender -type f \( -name "*.cc" -o -name "*.cpp" \) -print0 \
+            | xargs -0 perl -pi -e "$JACOBI"
+
+          # octree.cpp 显式写了 Eigen::JacobiSVD<Eigen::Matrix3f, Options> svd = ...
+          # 运行时版本返回的是 JacobiSVD<PlainObject, 默认前置条件>，
+          # 两者是不同类型、无隐式转换，所以改用 auto 接收。
+          perl -pi -e 's/Eigen::JacobiSVD<\s*Eigen::Matrix3f\s*,\s*Options\s*>\s+svd\s*=/auto svd =/g' \
+            intern/dualcon/intern/octree.cpp
+
+          # 5. 审计（这一步必须真的干净，否则一定编译失败）
+          echo "--- 关键调用点改写结果 ---"
+          grep -n "jacobiSvd" intern/libmv/libmv/multiview/euclidean_resection.cc \
+                            intern/libmv/libmv/tracking/track_region.cc \
+                            intern/dualcon/intern/octree.cpp || true
+
+          RESID=$(grep -rln "jacobiSvd<" intern source/blender \
+                    --include="*.cc" --include="*.cpp" 2>/dev/null || true)
+          DOUBLECALL=$(grep -rln -E "jacobiSvd\([^)]*\)[[:space:]]*\(\)" intern source/blender \
+                    --include="*.cc" --include="*.cpp" 2>/dev/null || true)
+          if [ -n "$RESID" ]; then
+            echo "::error::Still using template form jacobiSvd<...> in:"
+            echo "$RESID"
+            exit 1
+          fi
+          if [ -n "$DOUBLECALL" ]; then
+            echo "::error::Malformed jacobiSvd(...)() (invalid C++) in:"
+            echo "$DOUBLECALL"
+            exit 1
+          fi
+          echo "jacobiSvd normalized and verified"
+
+          # 6. iOS 依赖的 imported target 缺 IMPORTED_LOCATION。
+          #    CMake 的 CMP0111 旧行为会把 "<target>-NOTFOUND" 当成文件路径写进
+          #    链接命令，clang++ 于是报:
+          #      no such file or directory: 'OpenImageIO::OpenImageIO-NOTFOUND'
+          #    这些 target 由 lib/ios_arm64 各包的 xxxConfig.cmake 创建，但该 iOS
+          #    包只带 .dylib，config 没给出实现文件位置。
+          #    IMPORTED_LOCATION 在 generate 阶段才解析，所以追加到顶层
+          #    CMakeLists.txt 末尾同样生效（不必改各包的 config）。
+          cat >> CMakeLists.txt <<'IOSEOF'
+
+          # --- iOS: 给缺 IMPORTED_LOCATION 的依赖 target 补真实 dylib ---
+          if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+            file(GLOB _ios_dylibs "${LIBDIR}/*/lib/*.dylib")
+            list(LENGTH _ios_dylibs _ios_ndylib)
+            message(STATUS "iOS patch: ${_ios_ndylib} dylibs under ${LIBDIR}/*/lib")
+            foreach(_t
+                OpenImageIO::OpenImageIO
+                OpenImageIO::OpenImageIO_Util
+                OpenEXR::OpenEXR
+                OpenEXR::OpenEXRCore
+                OpenEXR::Iex
+                OpenEXR::IlmThread
+                OpenEXR::Imath
+                Imath::Imath
+                OpenColorIO::OpenColorIO
+                TBB::tbb)
+              if(TARGET ${_t})
+                get_target_property(_cur ${_t} IMPORTED_LOCATION)
+                if(NOT _cur OR _cur MATCHES "NOTFOUND$" OR NOT EXISTS "${_cur}")
+                  string(REGEX REPLACE "^.*::" "" _nm "${_t}")
+                  set(_hit "")
+                  foreach(_d ${_ios_dylibs})
+                    get_filename_component(_stem "${_d}" NAME_WE)
+                    if(_stem STREQUAL "lib${_nm}")
+                      set(_hit "${_d}")
+                      break()
+                    endif()
+                  endforeach()
+                  if(_hit)
+                    set_target_properties(${_t} PROPERTIES
+                      IMPORTED_LOCATION "${_hit}"
+                      IMPORTED_LOCATION_DEBUG "${_hit}"
+                      IMPORTED_LOCATION_RELEASE "${_hit}"
+                      IMPORTED_LOCATION_MINSIZEREL "${_hit}"
+                      IMPORTED_LOCATION_RELWITHDEBINFO "${_hit}"
+                      IMPORTED_CONFIGURATIONS "DEBUG;RELEASE;MINSIZEREL;RELWITHDEBINFO")
+                    message(STATUS "iOS patch: ${_t} -> ${_hit}")
+                  else()
+                    message(WARNING "iOS patch: ${_t} has no IMPORTED_LOCATION and no matching dylib")
+                  endif()
+                endif()
+              endif()
+            endforeach()
+          endif()
+          # --- iOS: 补齐"兄弟库"的链接 ---
+          # 这套 iOS 依赖包只提供 .dylib，而上游 xxxConfig.cmake 没有把
+          # 兄弟库串进 INTERFACE_LINK_LIBRARIES，于是：
+          #   OpenImageIO 的 Filesystem/ParamValue/ustring -> 在 libOpenImageIO_Util
+          #   Iex_3_3 / _imath_half_to_float_table -> 在 libIex / libImath
+          #   ceres::* -> libceres.a 根本没被链（libmv 的
+          #              bf::dependencies::optional::ceres 是空壳）
+          # 这段代码跑在顶层 CMakeLists.txt 末尾（所有 subdir 之后、
+          # "Configuring done" 之前），target_link_libraries 在 generate
+          # 阶段才展开，所以此时追加是有效的。
+          if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+            # 这段在顶层目录，而 target blender 是在 source/creator 里建的，
+            # 跨目录 target_link_libraries 必须开 CMP0079 NEW，否则报
+            #   Attempt to add link library ... to target "blender" which is
+            #   not built in this directory
+            if(POLICY CMP0079)
+              cmake_policy(SET CMP0079 NEW)
+            endif()
+            set(_ios_extra "")
+            foreach(_n Iex Imath IlmThread OpenEXRCore)
+              file(GLOB _cand "${LIBDIR}/*/lib/lib${_n}.dylib")
+              if(_cand)
+                list(APPEND _ios_extra ${_cand})
+              endif()
+            endforeach()
+            file(GLOB _cand "${LIBDIR}/openimageio/lib/libOpenImageIO_Util.dylib")
+            if(_cand)
+              list(APPEND _ios_extra ${_cand})
+            endif()
+            list(REMOVE_DUPLICATES _ios_extra)
+            if(TARGET blender)
+              target_link_libraries(blender PRIVATE ${_ios_extra})
+              if(EXISTS "${LIBDIR}/ceres/lib/libceres.a")
+                target_link_libraries(blender PRIVATE "${LIBDIR}/ceres/lib/libceres.a")
+              endif()
+              message(STATUS "iOS patch: blender link extras: ${_ios_extra} + libceres.a")
+            else()
+              message(WARNING "iOS patch: target 'blender' not found, extras not linked")
+            endif()
+            # 顺带让这两个 imported target 也带上兄弟库，给其它消费者用
+            foreach(_t OpenImageIO::OpenImageIO OpenEXR::OpenEXR)
+              if(TARGET ${_t})
+                set_property(TARGET ${_t} APPEND PROPERTY INTERFACE_LINK_LIBRARIES ${_ios_extra})
+              endif()
+            endforeach()
+          endif()
+          IOSEOF
+
+          echo "All patches applied"
+
+      # #306 的教训：链接阶段 85 个 av*/avcodec_* 符号全部 undefined ——
+      # libav*.a 一个都没进 Blender 这个 target 的链接行，可是 configure 明明
+      # 打印了 Found FFmpeg。开关是 WITH_CODEC_FFMPEG（WITH_FFMPEG 只是它产生
+      # 的编译宏），而本轮 build_ios 是从 #305 结束时的缓存恢复出来的，
+      # CMakeCache 里的 FFMPEG_* 与工程的 OTHER_LDFLAGS 对不上：编译带
+      # -DWITH_FFMPEG（于是 movie_*.o 引用了 av_*），链接却没有那几个 .a。
+      # 这一轮先把 FFmpeg 整段关掉：iOS 端要验证的是触摸/滚轮/语言，不需要
+      # 视频编解码，而链接问题是二选一的死结，不该拿 45 分钟机时去赌。
+      # 顺手把静态库体检结果打进日志，将来要恢复 FFmpeg 时不用再猜库坏没坏。
+      - name: Diagnose FFmpeg static libraries (informational)
+        run: |
+          cd blender
+          L=lib/ios_arm64/ffmpeg/lib
+          for a in libavcodec.a libavutil.a libavformat.a libswscale.a; do
+            if [ -f "$L/$a" ]; then
+              echo "$a size=$(stat -f%z "$L/$a") members=$(ar t "$L/$a" 2>/dev/null | wc -l | tr -d ' ') arch=$(lipo -info "$L/$a" 2>&1 | tail -1)"
+            else
+              echo "$a MISSING"
+            fi
+          done
+          nm -gm "$L/libavcodec.a" 2>/dev/null | grep -c "_avcodec_open2" || true
+
+      - name: Generate Xcode project
+        id: cmake_config
+        run: |
+          if [ ! -d "blender" ]; then
+            echo "ERROR: blender directory missing!"
+            exit 1
+          fi
+          cd blender
+          # 注意：这里绝对不能 rm -rf build_ios。
+          # 增量构建缓存恢复的就是这个目录（含 CMakeCache 和全部 .o），
+          # 删掉等于每次从零编译。CMake 会复用已有配置做增量更新。
+          cmake -G Xcode -S . -B build_ios \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DWITH_GTESTS=OFF \
+            -DWITH_TESTS=OFF \
+            -DWITH_DOCS=OFF \
+            -DWITH_RUBBERBAND=OFF \
+            -DWITH_OPENIMAGEIO=ON \
+            -DWITH_LIBMV=OFF \
+            -DWITH_CODEC_FFMPEG=OFF \
+            -DWITH_OPENMP=OFF \
+            -DWITH_TBB=OFF \
+            -DZSTD_ROOT_DIR="$PWD/lib/ios_arm64/zstd" \
+            -DOPENEXR_ROOT_DIR="$PWD/lib/ios_arm64/openexr" \
+            -DOpenEXR_DIR="$PWD/lib/ios_arm64/openexr" \
+            -Dfmt_DIR="$PWD/lib/ios_arm64/fmt/lib/cmake/fmt" \
+            -DOPENIMAGEIO_ROOT_DIR="$PWD/lib/ios_arm64/openimageio" \
+            -DOPENIMAGEIO_INCLUDE_DIR="${OIIO_INC_DIR}" \
+            -DOPENIMAGEIO_LIBRARY="${OIIO_LIB_FILE}" \
+            -DOpenImageIO_DIR="$PWD/lib/ios_arm64/openimageio" \
+            -DEigen3_DIR="$Eigen3_DIR" \
+            -DCeres_DIR="$CERES_DIR" \
+            -DBoost_DIR="$Boost_DIR" \
+            2>&1 | tee cmake_output.txt
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "ERROR: CMake configuration failed!"
+            exit 1
+          fi
+
+      - name: Upload CMake output (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmake-output
+          path: |
+            blender/cmake_output.txt
+            blender/build_ios/CMakeFiles/CMakeError.log
+            blender/build_ios/CMakeFiles/CMakeOutput.log
+          retention-days: 7
+
+      - name: Verify Xcode project exists
+        run: |
+          if [ ! -d "blender/build_ios/Blender.xcodeproj" ]; then
+            echo "ERROR: Blender.xcodeproj not found!"
+            echo "Contents of build_ios:"
+            ls -la blender/build_ios/ || echo "build_ios directory not found!"
+            echo "CMake output (last 100 lines):"
+            tail -100 blender/cmake_output.txt
+            exit 1
+          fi
+          echo "Blender.xcodeproj found"
+
+      # 头搜索路径要是没进 Xcode 工程，要等到 xcodebuild 跑十几分钟后才报
+      # 'half.h' file not found。这里做静态检查，秒级失败，省一轮 13 分钟。
+      - name: Verify Imath include path reached the Xcode project
+        run: |
+          if grep -q "iOS patch: Imath legacy headers" blender/cmake_output.txt 2>/dev/null; then
+            echo "OK: CMake patch ran ->"
+            grep "iOS patch" blender/cmake_output.txt | head -2
+          else
+            echo "::warning::CMake patch message not in configure output"
+          fi
+          PBX=blender/build_ios/Blender.xcodeproj/project.pbxproj
+          if [ ! -f "$PBX" ]; then
+            echo "::error::project.pbxproj missing"
+            exit 1
+          fi
+          if grep -qi "imath" "$PBX"; then
+            echo "OK: imath include path present in project.pbxproj"
+            grep -o "[^ \"\\]*imath[^ \"\\]*" "$PBX" | sort -u | head -5
+          else
+            echo "::error::imath include path NOT in project.pbxproj - xcodebuild would fail on <half.h>"
+            echo "--- HEADER_SEARCH_PATHS sample ---"
+            grep -o "HEADER_SEARCH_PATHS = [^;]*;" "$PBX" | head -3
+            exit 1
+          fi
+          if grep -qi "openimageio" "$PBX"; then
+            echo "OK: openimageio include path present in project.pbxproj"
+          else
+            echo "::error::openimageio include path NOT in project.pbxproj - build would fail on <OpenImageIO/imageio.h>"
+            exit 1
+          fi
+          # fmt 必须来自我们装的 12.1.0，不能是 /opt/homebrew 的 12.2.0
+          if grep -q "lib/ios_arm64/fmt" "$PBX"; then
+            echo "OK: fmt resolves to bundled 12.1.0"
+          else
+            echo "::error::fmt does not point at lib/ios_arm64/fmt - homebrew fmt 12.2 would break the build"
+            grep -o "[^ \"\\]*fmt[^ \"\\]*" "$PBX" | sort -u | head -5
+            exit 1
+          fi
+          if grep -q "opt/homebrew/Cellar/fmt" "$PBX"; then
+            echo "::error::homebrew Cellar fmt leaked into the Xcode project"
+            exit 1
+          fi
+          # #306 的链接失败是 ffmpeg 半开半关造成的（编译引用 av_*，链接没有
+          # libav*.a）。这一轮显式关掉，就在这里用秒级断言确认它真的关了 ——
+          # 否则要等到 27 分钟编译完的 Ld 才暴露。
+          if grep -q "^WITH_CODEC_FFMPEG:BOOL=ON" blender/build_ios/CMakeCache.txt; then
+            echo "::error::WITH_CODEC_FFMPEG is still ON - the cached CMakeCache overrode it"
+            grep -i "ffmpeg" blender/build_ios/CMakeCache.txt | head -10 || true
+            exit 1
+          fi
+          echo "OK: WITH_CODEC_FFMPEG is off"
+          if grep -qi "libavcodec" "$PBX"; then
+            echo "::error::libavcodec.a still referenced by the Xcode project while FFmpeg is off"
+            grep -i "libavcodec" "$PBX" | head -5
+            exit 1
+          fi
+          echo "OK: no ffmpeg archive in the link"
+
+      # Frameworks/ 是手写进 app bundle 的（Embed 步骤在 build 之后才跑）。
+      # 但如果它被当成「Folder reference」进了 Resources 阶段，xcodebuild 会用
+      # mkdir -p 建目录，再往里面 cp 我们手工放的 dylib，install_name 就全废。
+      - name: Ensure Frameworks/ is not bundled as a resource
+        run: |
+          cd blender/build_ios
+          PBX=Blender.xcodeproj/project.pbxproj
+          python3 - "$PBX" <<'PYEOF'
+          import re, sys
+          p = sys.argv[1]
+          src = open(p, encoding="utf-8", errors="replace").read()
+          # 资源阶段里每个 PBXBuildFile 形如  1234 /* X in Resources */ = {isa = PBXBuildFile; fileRef = ...}
+          res_buildfiles = re.findall(
+              r"([0-9A-F]{24}) /\* .*? in Resources \*/ = \{isa = PBXBuildFile; fileRef = ([0-9A-F]{24})",
+              src)
+          # folder reference 的 fileRef 长这样：... /* Frameworks */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ...
+          folder_refs = set(re.findall(
+              r"([0-9A-F]{24}) /\* Frameworks \*/ = \{isa = PBXFileReference;[^}]*?lastKnownFileType = folder;",
+              src, re.S))
+          hits = [bf for bf, ref in res_buildfiles if ref in folder_refs]
+          if not hits:
+              print("OK: Frameworks/ is not copied by the Resources phase")
+              sys.exit(0)
+          print("WARN: Frameworks/ is a Resources entry, removing %d build file(s)" % len(hits))
+          for bf in hits:
+              src = re.sub(r"\t\t%s /\* .*? in Resources \*/ = \{isa = PBXBuildFile;.*?\};\n" % bf,
+                           "", src)
+              src = re.sub(r"\t\t\t\t%s /\* .*? in Resources \*/,\n" % bf, "", src)
+          open(p, "w", encoding="utf-8").write(src)
+          print("patched", p)
+          PYEOF
+
+      - name: Build cross compile tools first
+        if: steps.cmake_config.outcome == 'success'
+        run: |
+          cd blender/build_ios
+          export HOME="/Users/runner"
+          xcodebuild \
+            -project Blender.xcodeproj \
+            -target blender_cross_tools_compile \
+            -sdk iphoneos \
+            -configuration Release \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
+            HOME="$HOME"
+
+      - name: Build Blender.app for iOS
+        if: steps.cmake_config.outcome == 'success'
+        run: |
+          cd blender
+          # 构建前再确认一次宿主 python 可用：xcodebuild 的 script phase 会用它的绝对路径
+          HP=lib/macos_arm64/python/bin/python3.13
+          ls -l "$HP" || true
+          file "$HP" || true
+          if ! "$HP" -V; then
+            echo "WARN: host python broken at build time, re-wrapping"
+            REAL=$(command -v python3.13 || command -v python3)
+            rm -f "$HP"
+            printf '#!/bin/sh\nexec "%s" "$@"\n' "$REAL" > "$HP"
+            chmod +x "$HP"
+            "$HP" -V
+          fi
+          cd build_ios
+          export HOME="/Users/runner"
+          xcodebuild \
+            -project Blender.xcodeproj \
+            -target install \
+            -sdk iphoneos \
+            -configuration Release \
+            -parallelizeTargets \
+            -jobs 4 \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            HOME="$HOME"
+
+      - name: Verify the keymap bootstrap is inside the linked binary
+        run: |
+          # 只认产物：补丁脚本打印 "patched" 不算，grep 源码通过也不算。
+          # 这一轮的关键修复（IOS-KEYMAP-BOOTSTRAP）必须真的编译链接进 Mach-O，
+          # 否则等于没改 —— 缓存恢复 + mtime 归一化最容易在这里静默丢掉补丁。
+          APP="blender/build_ios/bin/Release/Blender.app"
+          OBJ=$(find blender/build_ios/build -type f \( -name "wm.o" -o -name "wm.cc.o" \) 2>/dev/null | head -1)
+          echo "window-manager object: ${OBJ:-<none>}"
+          if [ -n "$OBJ" ]; then
+            echo "  IOSKM  in object : $(strings "$OBJ" | grep -c "IOSKM" || true)"
+            echo "  MARKER in object : $(strings "$OBJ" | grep -c "IOS-KEYMAP-BOOTSTRAP" || true)"
+          fi
+          EXE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist" 2>/dev/null || echo Blender)
+          BIN="$APP/$EXE"
+          echo "app executable: $BIN"
+          if [ ! -f "$BIN" ]; then
+            echo "::error::$BIN missing"
+            ls -1 "$APP" | head -20
+            exit 1
+          fi
+          O=$(strings "$BIN" | grep -c "IOSOP" || true)
+          C=$(strings "$BIN" | grep -c "IOSKM" || true)
+          P=$(strings "$BIN" | grep -c "IOSPY" || true)
+          echo "  IOSKM in linked binary : $C"
+          echo "  IOSOP in linked binary : $O"
+          echo "  IOSPY in linked binary : $P"
+          if [ "$O" -lt 1 ]; then
+            echo "::error::IOSOP is not in the linked binary - wm_operator_type.cc was NOT recompiled"
+            exit 1
+          fi
+          if [ "$P" -lt 1 ]; then
+            echo "::error::IOSPY is not in the linked binary - the startup-module repair snippet is missing"
+            exit 1
+          fi
+          if [ "$C" -lt 1 ]; then
+            echo "::error::IOSKM is not in the linked binary - wm.cc was NOT recompiled, the keymap fix is missing"
+            exit 1
+          fi
+          echo "keymap bootstrap confirmed inside the linked binary"
+
+      - name: Repair LFS stubs left in the cached app's Assets
+        run: |
+          cd blender
+          APP="build_ios/bin/Release/Blender.app"
+          if [ ! -d "$APP" ]; then
+            APP=$(find build_ios -path "build_ios/IPA" -prune -o -name "Blender.app" -type d -print | head -1)
+          fi
+          SCRIPTS=scripts
+          [ -d "$SCRIPTS/startup" ] || SCRIPTS=release/scripts
+          echo "app: $APP"
+          echo "scripts source: $SCRIPTS"
+
+          # 为什么需要这一步：
+          #   iOS 的 Blender.app/Assets 由三处 install 规则拼成（release/ios/Blender.app/Assets、
+          #   release/datafiles、scripts）。缓存里的 app 是从上一轮带回来的，而 CMake 的
+          #   install(DIRECTORY) 对"目标已存在"的文件会静默跳过，于是旧轮次留下的 130 字节
+          #   LFS 指针就一直躺在包里，源树明明已经还原干净也没用（#286：223 → 32 个残留）。
+          #   这里以源树为准，把 app 里仍是指针的资产就地替换；替换不了就立刻失败，
+          #   绝不让"格式不对的空壳"进到 IPA。
+          python3 - "$APP" "$SCRIPTS" <<'PYSYNC'
+          import os
+          import sys
+
+          app, scripts = sys.argv[1], sys.argv[2]
+          assets = os.path.join(app, "Assets")
+          if not os.path.isdir(assets):
+              sys.exit("::error::app has no Assets dir: " + assets)
+
+          # 前缀 → 源目录。""  放最后，否则会抢走所有匹配。
+          roots = [
+              ("5.1/datafiles/", "release/datafiles"),
+              ("5.1/scripts/", scripts),
+              ("", "release/ios/Blender.app/Assets"),
+          ]
+
+          MARK = b"version https://git-lfs"
+
+
+          def is_pointer(path):
+              try:
+                  if os.path.getsize(path) > 300:
+                      return False
+                  with open(path, "rb") as fh:
+                      return fh.read(40).startswith(MARK)
+              except OSError:
+                  return False
+
+
+          fixed, missing = 0, []
+          for root, _dirs, files in os.walk(assets):
+              for name in files:
+                  dst = os.path.join(root, name)
+                  if not is_pointer(dst):
+                      continue
+                  rel = os.path.relpath(dst, assets).replace(os.sep, "/")
+                  src = None
+                  for prefix, srcdir in roots:
+                      if rel.startswith(prefix):
+                          cand = os.path.join(srcdir, rel[len(prefix):])
+                          if os.path.isfile(cand) and not is_pointer(cand):
+                              src = cand
+                              break
+                  if src is None:
+                      missing.append(rel)
+                      continue
+                  with open(src, "rb") as fh:
+                      data = fh.read()
+                  with open(dst, "wb") as fh:
+                      fh.write(data)
+                  fixed += 1
+
+          print("assets repaired from source: %d" % fixed)
+          if missing:
+              for one in missing[:15]:
+                  print("::error::cannot repair %s (source missing or still a pointer)" % one)
+              print("::error::%d assets left as LFS stubs" % len(missing))
+              sys.exit(1)
+          PYSYNC
+      - name: Force-sync patched python data into app bundle (cache bypass)
+        run: |
+          cd blender
+          # 为什么需要这一步（#305 实测）：
+          #   CMake 的 install(DIRECTORY) 对"目标已存在"的文件是静默跳过的，而
+          #   Blender.app 是从构建缓存里恢复出来的 —— 于是源树里改过的 .py 永远不会
+          #   进包。上一轮 `patch_ios_preset.py` 明明打印了 "patched ..."、grep 断言
+          #   也通过了，可包里的 blender_default.py 还是上游原版（440058 字节、无
+          #   IOS-NAV-DRAG 标记），3D 视图的"左键拖动旋转"因此完全没生效。
+          #   这里以源树为准，把补丁链改过的 .py 强制覆盖进 app bundle，并断言标记。
+          APP="build_ios/bin/Release/Blender.app"
+          if [ ! -d "$APP" ]; then
+            APP=$(find build_ios -path "build_ios/IPA" -prune -o -name "Blender.app" -type d -print | head -1)
+          fi
+          SCRIPTS=scripts
+          [ -d "$SCRIPTS/startup" ] || SCRIPTS=release/scripts
+          DST="$APP/Assets/5.1/scripts"
+          echo "app: $APP"
+          echo "scripts source: $SCRIPTS"
+
+          for f in presets/keyconfig/keymap_data/blender_default.py \
+                   startup/bl_ui/__init__.py \
+                   modules/bl_keymap_utils/io.py \
+                   modules/bpy/utils/__init__.py; do
+            if [ -f "$DST/$f" ]; then
+              cp -f "$SCRIPTS/$f" "$DST/$f"
+              echo "synced $f"
+            else
+              echo "::error::missing in app bundle: $f"
+              exit 1
+            fi
+          done
+
+          grep -q "IOS-NAV-DRAG" "$DST/presets/keyconfig/keymap_data/blender_default.py" \
+            || { echo "::error::keymap preset not synced into app bundle"; exit 1; }
+          ls -l "$DST/presets/keyconfig/keymap_data/blender_default.py"
+
+          # #315: 这一条差点又漏了 —— 包里的 bl_ui/__init__.py 还是上游原版，
+          # 于是 keymap 自愈守卫根本没进包。凡是补丁链改过的 .py 都必须列在上面。
+          grep -q "IOS-KEYMAP-GUARD" "$DST/startup/bl_ui/__init__.py" \
+            || { echo "::error::keymap guard not synced into app bundle"; exit 1; }
+          ls -l "$DST/startup/bl_ui/__init__.py"
+
+          # #316: 同理，键位加载器的容错和 keyconfig_set 的日志也必须进包，
+          # 否则设备上永远只有 12 个键位、且 Python 侧一句诊断都看不到。
+          grep -q "IOS-KMI-SKIP" "$DST/modules/bl_keymap_utils/io.py" \
+            || { echo "::error::fault-tolerant keymap loader not synced"; exit 1; }
+          grep -q "IOS-KCSET" "$DST/modules/bpy/utils/__init__.py" \
+            || { echo "::error::keyconfig_set logger not synced"; exit 1; }
+          python3 - "$DST" <<'PYBUNDLE'
+          import ast, sys
+          dst = sys.argv[1]
+          for rel in ('modules/bl_keymap_utils/io.py', 'modules/bpy/utils/__init__.py'):
+              src = open(dst + '/' + rel, encoding='utf-8').read()
+              ast.parse(src)
+              print('bundled %-40s %6d bytes, parses' % (rel, len(src)))
+          PYBUNDLE
+          ls -l "$DST/modules/bl_keymap_utils/io.py" "$DST/modules/bpy/utils/__init__.py"
+
+
+      - name: Embed iOS dylibs into app bundle
+        if: steps.cmake_config.outcome == 'success'
+        run: |
+          cd blender
+          # 只认这次真正构建出来的 app。缓存 restore-keys 会回退匹配到更老的
+          # ios-build-v1-<sha>-*，而那里面带着上一轮的 build_ios/IPA/Payload/Blender.app。
+          # find 按目录遍历顺序会先命中 "IPA"（大写排在小写前），于是嵌 dylib / 校验
+          # 全部作用在旧产物上，报出一堆早已修好的错（#285）。
+          APP="build_ios/bin/Release/Blender.app"
+          if [ ! -d "$APP" ]; then
+            APP=$(find build_ios -path "build_ios/IPA" -prune -o -name "Blender.app" -type d -print | head -1)
+          fi
+          if [ -z "$APP" ]; then
+            echo "ERROR: Blender.app missing"
+            exit 1
+          fi
+          echo "app bundle: $APP"
+          python3 - "$APP" "$PWD/lib/ios_arm64" <<'PYEOF'
+          import os, plistlib, struct, shutil, subprocess, sys
+
+          app, libroot = sys.argv[1], sys.argv[2]
+          binary = os.path.join(app, "Blender")
+          fwdir = os.path.join(app, "Frameworks")
+          os.makedirs(fwdir, exist_ok=True)
+
+          # LC_LOAD_DYLIB / LC_LAZY_LOAD_DYLIB / LC_LOAD_WEAK_DYLIB /
+          # LC_REEXPORT_DYLIB / LC_LOAD_UPWARD_DYLIB
+          DYLIB_CMDS = {0xC, 0x20, 0x80000018, 0x8000001F, 0x80000023}
+
+          def load_deps(path):
+              with open(path, "rb") as fh:
+                  b = fh.read()
+              if len(b) < 32 or struct.unpack("<I", b[:4])[0] != 0xFEEDFACF:
+                  return []
+              ncmds = struct.unpack("<I", b[16:20])[0]
+              off, out = 32, []
+              for _ in range(ncmds):
+                  if off + 8 > len(b):
+                      break
+                  cmd, size = struct.unpack("<II", b[off:off + 8])
+                  if size == 0:
+                      break
+                  if cmd in DYLIB_CMDS:
+                      nmoff = struct.unpack("<I", b[off + 8:off + 12])[0]
+                      name = b[off + nmoff:off + size].split(b"\x00")[0]
+                      out.append(name.decode("utf-8", "replace"))
+                  off += size
+              return out
+
+          # 库索引：lib/ios_arm64/*/lib/*.dylib（按文件名索引，先到先得）
+          index = {}
+          for root, _dirs, files in os.walk(libroot):
+              for f in files:
+                  if f.endswith(".dylib"):
+                      index.setdefault(f, os.path.join(root, f))
+
+          def resolve(base):
+              if base in index:
+                  return index[base]
+              # 带版本号的库（libz.1.dylib -> libz.1.3.1.dylib）
+              for k in index:
+                  if k.startswith(base + "."):
+                      return index[k]
+              return None
+
+          # Assets/lib 里已经有一批 dylib（Blender 自带的 install 产物），也纳入闭包来源
+          extra_roots = []
+          for root, _dirs, files in os.walk(app):
+              if os.path.basename(root) == "lib":
+                  extra_roots.append(root)
+
+          def resolve_any(base):
+              src = resolve(base)
+              if src:
+                  return src
+              for r in extra_roots:
+                  p = os.path.join(r, base)
+                  if os.path.isfile(p):
+                      return p
+              return None
+
+          copied, rewritten, seen = [], [], set()
+          queue = [binary] + [os.path.join(r, f)
+                              for r in extra_roots
+                              for f in (os.listdir(r) if os.path.isdir(r) else [])
+                              if f.endswith(".dylib")]
+          while queue:
+              cur = queue.pop(0)
+              if cur in seen:
+                  continue
+              seen.add(cur)
+              for dep in load_deps(cur):
+                  if dep.startswith("/usr/lib") or dep.startswith("/System"):
+                      continue
+                  base = os.path.basename(dep)
+                  src = resolve_any(base)
+                  if src is None:
+                      print("  MISSING dylib:", dep)
+                      continue
+                  dst = os.path.join(fwdir, base)
+                  if dep.startswith("/"):
+                      # 绝对路径依赖改成 @rpath，否则 iOS 上 dyld 一定找不到
+                      rewritten.append((cur, dep, "@rpath/" + base))
+                  if not os.path.exists(dst):
+                      shutil.copy2(src, dst)
+                      copied.append(base)
+                      queue.append(dst)
+
+          for parent, old, new in rewritten:
+              subprocess.run(["install_name_tool", "-change", old, new, parent], check=False)
+          for base in copied:
+              dst = os.path.join(fwdir, base)
+              subprocess.run(["install_name_tool", "-id", "@rpath/" + base, dst], check=False)
+
+          # Python 是 PyApple-support 的 framework，install name 固定写死为
+          # @rpath/Python.framework/Python。
+          # ★ 必须是「扁平」布局：Python.framework/Python + Info.plist。
+          #   iOS 的 installd 在安装阶段会校验 Frameworks/ 下每个 .framework
+          #   都带 Info.plist，缺了直接报
+          #     Failed to load Info.plist from bundle at .../Python.framework
+          #   而且 macOS 那种 Versions/A + 软链的布局在 zip 里会被压成
+          #   三份实体文件（白涨 10 MB），平铺同时解决这两个问题。
+          PY_VER = "3.13"
+
+          py_src = None
+          for cand in ("python/Python.framework/Python", "python/lib/libpython3.13.dylib"):
+              p = os.path.join(libroot, cand)
+              if os.path.isfile(p):
+                  py_src = p
+                  break
+          if py_src is None:
+              for root, _dirs, files in os.walk(libroot):
+                  if "Python.framework" in root and "Python" in files:
+                      py_src = os.path.join(root, "Python")
+                      break
+          if py_src is None:
+              print("ERROR: Python framework binary not found under", libroot)
+              sys.exit(1)
+
+          pyf = os.path.join(fwdir, "Python.framework")
+          # 缓存复用场景下这里可能残留上一版的 Versions/A + 软链布局，
+          # copy2 会顺着软链写进去，所以先整个清掉，保证幂等。
+          if os.path.isdir(pyf):
+              shutil.rmtree(pyf, ignore_errors=True)
+          os.makedirs(pyf, exist_ok=True)
+          py_bin = os.path.join(pyf, "Python")
+          shutil.copy2(py_src, py_bin)
+          os.chmod(py_bin, 0o755)
+          subprocess.run(["install_name_tool", "-id", "@rpath/Python.framework/Python", py_bin],
+                         check=False)
+
+          # Info.plist：优先照抄官方那份；拿不到就按 FMWK 模板生成。
+          py_plist = os.path.join(pyf, "Info.plist")
+          official = os.path.join(os.path.dirname(py_src), "Info.plist")
+          if os.path.isfile(official):
+              shutil.copy2(official, py_plist)
+              print("   Python.framework/Info.plist <- official")
+          else:
+              with open(py_plist, "wb") as fh:
+                  plistlib.dump({
+                      "CFBundleDevelopmentRegion": "en",
+                      "CFBundleExecutable": "Python",
+                      "CFBundleIdentifier": "org.python.python",
+                      "CFBundleInfoDictionaryVersion": "6.0",
+                      "CFBundleName": "Python",
+                      "CFBundlePackageType": "FMWK",
+                      "CFBundleShortVersionString": PY_VER,
+                      "CFBundleVersion": PY_VER,
+                      "CFBundleSupportedPlatforms": ["iPhoneOS"],
+                      "MinimumOSVersion": "13.0",
+                  }, fh)
+              print("   Python.framework/Info.plist <- generated (FMWK template)")
+          print("   Python.framework (src %s) -> Frameworks/Python.framework, %d bytes"
+                % (py_src, os.path.getsize(py_bin)))
+
+          for target in [binary] + [os.path.join(fwdir, b) for b in copied] + [py_bin]:
+              subprocess.run(
+                  ["install_name_tool", "-add_rpath", "@executable_path/Frameworks", target],
+                  check=False, stderr=subprocess.DEVNULL)
+
+          # osxcross 的 install_name_tool -add_rpath 偶尔会因为空间不足失败；
+          # 缺 @executable_path/Frameworks 时 dyld 一定找不到 Python。
+          def has_rpath(path):
+              with open(path, "rb") as fh:
+                  b = fh.read()
+              if struct.unpack("<I", b[:4])[0] != 0xFEEDFACF:
+                  return True
+              ncmds = struct.unpack("<I", b[16:20])[0]
+              off = 32
+              for _ in range(ncmds):
+                  cmd, size = struct.unpack("<II", b[off:off + 8])
+                  if size == 0:
+                      break
+                  if cmd == 0x8000001C:
+                      nmoff = struct.unpack("<I", b[off + 8:off + 12])[0]
+                      name = b[off + nmoff:off + size].split(b"\x00")[0].decode("utf-8", "replace")
+                      if name == "@executable_path/Frameworks":
+                          return True
+                  off += size
+              return False
+
+          for target in [binary, py_bin]:
+              if not has_rpath(target):
+                  print("WARN: @executable_path/Frameworks rpath missing on", target)
+
+          print("copied %d dylibs into Frameworks/:" % len(copied))
+          for base in copied:
+              print("   ", base, os.path.getsize(os.path.join(fwdir, base)))
+          print("rewritten absolute deps: %d" % len(rewritten))
+          PYEOF
+          echo "--- Frameworks tree ---"
+          find "$APP/Frameworks" -maxdepth 4 | sort | head -40
+          echo "--- otool -L Blender (tail) ---"
+          otool -L "$APP/Blender" | tail -20 || true
+          echo "--- python lib-dynload count ---"
+          ls "$APP/Assets/5.1/python/lib/python3.13/lib-dynload" 2>/dev/null | wc -l
+          du -sh "$APP"
+
+      - name: Add iOS app icon and fix launch screen
+        run: |
+          set -e
+          SRC="$GITHUB_WORKSPACE/blender"
+          APP=$(find "$SRC/build_ios" -path "*/IPA" -prune -o -name "Blender.app" -type d -print | head -1)
+          if [ -z "$APP" ]; then echo "::error::Blender.app not found"; exit 1; fi
+          echo "patching $APP"
+
+          # 1) 图标。CFBundleIconFile 指向 Assets/blender_icon.icns：
+          #    a) .icns 这个格式 iOS 根本不认；
+          #    b) 而且那个文件是 LFS 指针，只有 131 字节。
+          #    所以 SpringBoard 拿不到图标 —— 桌面空白、设置里显示云朵占位。
+          #    这里用 sips 从 icns 转 PNG；icns 不可用就画一个确定性图标。
+          WORK=$(mktemp -d)
+          ICNS="$SRC/release/datafiles/blender_icon.icns"
+          if [ -f "$ICNS" ] && [ "$(wc -c < "$ICNS")" -gt 2000 ]; then
+            sips -s format png "$ICNS" --out "$WORK/icon.png" >/dev/null 2>&1 || true
+          fi
+          if [ ! -f "$WORK/icon.png" ]; then
+            echo "::warning::icns unusable -> drawing deterministic icon"
+            python3 - "$WORK/icon.png" <<'PYICON'
+          import math
+          import struct
+          import sys
+          import zlib
+
+          SIZE = 512
+          ORANGE = (0xE8, 0x7D, 0x0F)   # Blender 品牌橙
+          WHITE = (0xFF, 0xFF, 0xFF)
+
+
+          def pixel(x, y):
+              """橙色底 + 白色圆环 + 中心小白点，形似 Blender 的圆环标志。"""
+              cx = cy = (SIZE - 1) / 2.0
+              r = math.hypot(x - cx, y - cy) / (SIZE / 2.0)
+              if 0.30 <= r <= 0.46:
+                  return WHITE
+              if r <= 0.13:
+                  return WHITE
+              return ORANGE
+
+
+          rows = []
+          for y in range(SIZE):
+              row = bytearray(b"\x00")
+              for x in range(SIZE):
+                  row.extend(pixel(x, y))
+              rows.append(bytes(row))
+          raw = b"".join(rows)
+
+
+          def chunk(tag, data):
+              body = tag + data
+              return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+
+          png = (b"\x89PNG\r\n\x1a\n"
+                 + chunk(b"IHDR", struct.pack(">IIBBBBB", SIZE, SIZE, 8, 2, 0, 0, 0))
+                 + chunk(b"IDAT", zlib.compress(raw, 9))
+                 + chunk(b"IEND", b""))
+          with open(sys.argv[1], "wb") as fh:
+              fh.write(png)
+          print("generated %d bytes" % len(png))
+          PYICON
+          fi
+
+          for spec in "120:AppIcon60x60@2x.png" \
+                      "180:AppIcon60x60@3x.png" \
+                      "76:AppIcon76x76@1x~ipad.png" \
+                      "152:AppIcon76x76@2x~ipad.png" \
+                      "167:AppIcon83.5x83.5@2x~ipad.png"; do
+            size="${spec%%:*}"; name="${spec#*:}"
+            sips -z "$size" "$size" "$WORK/icon.png" --out "$APP/$name" >/dev/null 2>&1
+            echo "  icon $name ${size}x${size} $(wc -c < "$APP/$name") bytes"
+          done
+
+          # 2) Info.plist：UILaunchStoryboardName=LaunchScreen，但 bundle 里没有
+          #    LaunchScreen.storyboardc，于是启动画面纯黑。改成 iOS 14+ 的
+          #    UILaunchScreen 字典（空字典 = 系统底色），并补齐图标键。
+          python3 - "$APP" <<'PYPLIST'
+          import os
+          import plistlib
+          import sys
+
+          app = sys.argv[1]
+          path = os.path.join(app, "Info.plist")
+          with open(path, "rb") as fh:
+              info = plistlib.load(fh)
+
+          info.pop("UILaunchStoryboardName", None)
+          info["UILaunchScreen"] = {}
+          info.pop("CFBundleIconFile", None)
+          info["CFBundleIcons"] = {
+              "CFBundlePrimaryIcon": {
+                  "CFBundleIconFiles": ["AppIcon60x60"],
+              }
+          }
+          info["CFBundleIcons~ipad"] = {
+              "CFBundlePrimaryIcon": {
+                  "CFBundleIconFiles": ["AppIcon60x60", "AppIcon76x76", "AppIcon83.5x83.5"],
+              }
+          }
+          with open(path, "wb") as fh:
+              plistlib.dump(info, fh)
+          print("Info.plist: UILaunchStoryboardName removed, UILaunchScreen + CFBundleIcons written")
+          PYPLIST
+
+          rm -rf "$WORK"
+          ls -1 "$APP" | head -20
+
+      - name: Validate app bundle is installable
+        if: steps.cmake_config.outcome == 'success'
+        run: |
+          cd blender
+          # 只认这次真正构建出来的 app。缓存 restore-keys 会回退匹配到更老的
+          # ios-build-v1-<sha>-*，而那里带着上一轮的 build_ios/IPA/Payload/Blender.app；
+          # find 按目录序会先命中 "IPA"（大写排在小写前），校验就会去查旧产物（#285）。
+          APP="build_ios/bin/Release/Blender.app"
+          if [ ! -d "$APP" ]; then
+            APP=$(find build_ios -path "build_ios/IPA" -prune -o -name "Blender.app" -type d -print | head -1)
+          fi
+          if [ -z "$APP" ]; then echo "::error::Blender.app not found"; exit 1; fi
+          echo "app bundle: $APP"
+          python3 - "$APP" <<'PYEOF'
+          import os
+          import plistlib
+          import sys
+
+          app = sys.argv[1]
+          bad = 0
+
+
+          def err(msg):
+              global bad
+              print("::error::" + msg)
+              bad += 1
+
+
+          # 1) 顶层 Info.plist
+          info = {}
+          top = os.path.join(app, "Info.plist")
+          if not os.path.isfile(top):
+              err("Blender.app has no Info.plist")
+          else:
+              info = plistlib.load(open(top, "rb"))
+              print("  app: %s  %s  minOS=%s"
+                    % (info.get("CFBundleIdentifier"),
+                       info.get("CFBundleShortVersionString"),
+                       info.get("MinimumOSVersion")))
+              exe = info.get("CFBundleExecutable")
+              if not exe or not os.path.isfile(os.path.join(app, exe)):
+                  err("CFBundleExecutable %r missing" % exe)
+
+          # 2) Frameworks/*.framework：installd 会逐个校验，缺 Info.plist 直接拒装
+          fwdir = os.path.join(app, "Frameworks")
+          if os.path.isdir(fwdir):
+              for name in sorted(os.listdir(fwdir)):
+                  fw = os.path.join(fwdir, name)
+                  if not (os.path.isdir(fw) and name.endswith(".framework")):
+                      continue
+                  pl = os.path.join(fw, "Info.plist")
+                  if not os.path.isfile(pl):
+                      err("%s: missing Info.plist" % name)
+                      continue
+                  try:
+                      fwinfo = plistlib.load(open(pl, "rb"))
+                  except Exception as exc:                      # noqa: BLE001
+                      err("%s: Info.plist unparsable (%s)" % (name, exc))
+                      continue
+                  fexe = fwinfo.get("CFBundleExecutable")
+                  binp = os.path.join(fw, fexe or "\x00")
+                  if not fexe or not os.path.isfile(binp):
+                      err("%s: CFBundleExecutable %r missing on disk" % (name, fexe))
+                      continue
+                  if fwinfo.get("CFBundlePackageType") != "FMWK":
+                      print("::warning::%s: CFBundlePackageType=%r (expect FMWK)"
+                            % (name, fwinfo.get("CFBundlePackageType")))
+                  if not os.access(binp, os.X_OK):
+                      print("::warning::%s: %s is not executable" % (name, fexe))
+                  print("  framework OK: %s/%s  id=%s  minOS=%s"
+                        % (name, fexe, fwinfo.get("CFBundleIdentifier"),
+                           fwinfo.get("MinimumOSVersion")))
+
+          # 3) 不允许断链（打包成 zip 后软链可能失效）
+          for root, dirs, files in os.walk(app):
+              for entry in dirs + files:
+                  path = os.path.join(root, entry)
+                  if os.path.islink(path) and not os.path.exists(path):
+                      err("broken symlink: %s" % os.path.relpath(path, app))
+
+          # 4) Python 标准库与静态模块表
+          pylib = os.path.join(app, "Assets", "5.1", "python", "lib", "python3.13")
+          if not os.path.isfile(os.path.join(pylib, "os.py")):
+              err("python stdlib missing at %s" % pylib)
+          dyn = os.path.join(pylib, "lib-dynload")
+          nmod = len(os.listdir(dyn)) if os.path.isdir(dyn) else 0
+          print("  lib-dynload modules: %d" % nmod)
+          if nmod < 20:
+              err("lib-dynload looks empty (%d)" % nmod)
+          if not os.path.isfile(os.path.join(pylib, "Modules", "Setup.local")):
+              print("::warning::Modules/Setup.local missing (Py_Initialize may abort)")
+          else:
+              print("  Modules/Setup.local: present")
+
+          # 5) LFS 空壳：130 字节的指针文本会被当 .icc/.dat 解析，OCIO 直接 throw。
+          #    注意源树被还原干净还不够 —— 缓存里旧 Blender.app/Assets 的副本也得清掉。
+          assets = os.path.join(app, "Assets")
+          ptr = []
+          for root, _dirs, files in os.walk(assets):
+              for name in files:
+                  path = os.path.join(root, name)
+                  try:
+                      if os.path.getsize(path) > 200:
+                          continue
+                      with open(path, "rb") as fh:
+                          if fh.read(40).startswith(b"version https://git-lfs"):
+                              ptr.append(os.path.relpath(path, app))
+                  except OSError:
+                      pass
+          print("  LFS pointer files: %d" % len(ptr))
+          # 5b) Assets/*.pdf 是 iOS 的鼠标光标图（eyedropper/pen/arrow*）。它们是 LFS 对象，
+          #     官方 Linux 包里没有，只能从 projects.blender.org 的 LFS 取。真的 PDF 以 %PDF 开头，
+          #     130 字节的指针则是 "version https://git-lfs"。
+          pdfbad = []
+          if os.path.isdir(assets):
+              for name in sorted(os.listdir(assets)):
+                  if not name.endswith(".pdf"):
+                      continue
+                  path = os.path.join(assets, name)
+                  try:
+                      with open(path, "rb") as fh:
+                          if not fh.read(5).startswith(b"%PDF"):
+                              pdfbad.append(name)
+                  except OSError:
+                      pdfbad.append(name)
+          if pdfbad:
+              err("%d Assets/*.pdf are not real PDFs (e.g. %s)" % (len(pdfbad), pdfbad[0]))
+          else:
+              print("  Assets/*.pdf: all real PDFs")
+          if ptr:
+              for one in ptr[:10]:
+                  err("LFS pointer (empty asset): %s" % one)
+              if len(ptr) > 10:
+                  print("::error::... and %d more" % (len(ptr) - 10))
+
+          # 6) 启动画面：UILaunchStoryboardName 指向的 .storyboardc 必须真存在
+          launch = info.get("UILaunchStoryboardName")
+          if launch:
+              sb = os.path.join(app, launch + ".storyboardc")
+              if not os.path.isdir(sb):
+                  err("UILaunchStoryboardName=%r but %s missing (black launch screen)"
+                      % (launch, os.path.basename(sb)))
+          elif "UILaunchScreen" not in info:
+              print("::warning::no launch screen declared")
+
+          # 7) 图标：iOS 不认 .icns，必须有 CFBundleIcons + 散装 PNG
+          icons = info.get("CFBundleIcons") or info.get("CFBundleIcons~ipad")
+          if not icons:
+              err("CFBundleIcons missing - SpringBoard shows no icon")
+          else:
+              for key in ("AppIcon60x60@2x.png", "AppIcon60x60@3x.png"):
+                  if not os.path.isfile(os.path.join(app, key)):
+                      err("app icon %s missing" % key)
+              print("  app icon png: present")
+
+          if bad:
+              print("::error::bundle validation failed with %d problem(s)" % bad)
+              sys.exit(1)
+          print("bundle validation: OK")
+          PYEOF
+
+      - name: Package unsigned IPA
+        if: steps.cmake_config.outcome == 'success'
+        run: |
+          cd blender/build_ios
+          # 增量缓存会把上一轮打好的 IPA/ 一起带回来（含 586MB 的 Payload）。
+          # 不清掉的话 find 先命中 ./IPA/Payload/Blender.app，接着
+          #   cp -r ./IPA/Payload/Blender.app IPA/Payload/
+          # 源 = 目的地，cp 直接报
+          #   cp: ... and ... are identical (not copied). exit 1
+          rm -rf IPA Blender.ipa
+          APP=$(find . -path ./IPA -prune -o -name "Blender.app" -type d -print | head -1)
+          if [ -z "$APP" ]; then
+            echo "ERROR: Blender.app not found!"
+            find . -name "*.app" -type d
+            exit 1
+          fi
+          echo "Found app at: $APP"
+          if [ ! -f "$APP/Frameworks/Python.framework/Info.plist" ]; then
+            echo "::error::$APP/Frameworks/Python.framework/Info.plist missing - package would not install"
+            exit 1
+          fi
+          du -sh "$APP"
+          mkdir -p IPA/Payload
+          cp -R "$APP" IPA/Payload/
+
+          # ---- ad-hoc sign nested Mach-O binaries under Assets/ ---------------
+          # iOS refuses to dlopen() any Mach-O with no code signature:
+          #   "mapped file has no cdhash, completely unsigned?
+          #    Code has to be at least ad-hoc signed."
+          # The Python C extensions under Assets/5.1/python/.../lib-dynload are
+          # produced by the Python build step and are never signed, while the
+          # side-loading tools only re-sign the main executable and Frameworks/.
+          # So on device `import math` dies, which kills the whole Python key-map
+          # preset (blender_default.py line 230 is `from math import pi`) and
+          # bl_operators with it -- the key-map table stays empty and the 3D view
+          # never responds. The main executable and Frameworks/ are deliberately
+          # left unsigned so the side-loading tool can re-sign them properly.
+          find "IPA/Payload/Blender.app" -maxdepth 1 -type d -name "_CodeSignature" -exec rm -rf {} + 2>/dev/null || true
+          : > /tmp/nested_macho.txt
+          find "IPA/Payload/Blender.app/Assets" -type f \
+               \( -name "*.so" -o -name "*.so.*" -o -name "*.dylib" \) -print > /tmp/nested_cand.txt
+          SIGN_N=0
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            file -b "$f" 2>/dev/null | grep -q "Mach-O" || continue
+            /usr/bin/codesign --force --sign - --timestamp=none "$f" >/dev/null 2>&1 || {
+              echo "::error::ad-hoc signing failed for $f"; exit 1; }
+            echo "$f" >> /tmp/nested_macho.txt
+            SIGN_N=$((SIGN_N + 1))
+          done < /tmp/nested_cand.txt
+          echo "ad-hoc signed $SIGN_N nested Mach-O files under Assets/"
+          if [ "$SIGN_N" -lt 60 ]; then
+            echo "::error::only $SIGN_N nested Mach-O signed, expected >= 60 (lib-dynload alone ships 68)"
+            exit 1
+          fi
+          BAD=0
+          while IFS= read -r f; do
+            if ! /usr/bin/codesign --display --verbose=2 "$f" 2>&1 | grep -qi "adhoc"; then
+              echo "::error::no ad-hoc signature on $f"
+              BAD=$((BAD + 1))
+            fi
+          done < /tmp/nested_macho.txt
+          if [ "$BAD" -ne 0 ]; then
+            echo "::error::$BAD nested binaries are still unsigned"
+            exit 1
+          fi
+          echo "verified: every nested Mach-O under Assets/ carries an ad-hoc signature"
+
+          cd IPA && zip -qry ../Blender.ipa Payload/ && cd ..
+          ls -lh Blender.ipa
+
+          # Re-check inside the packaged artifact, not just the staging tree.
+          rm -rf /tmp/vfy && mkdir -p /tmp/vfy
+          unzip -q -o Blender.ipa \
+            "Payload/Blender.app/Assets/5.1/python/lib/python3.13/lib-dynload/math.cpython-313-iphoneos.so" \
+            -d /tmp/vfy
+          /usr/bin/codesign --display --verbose=2 \
+            /tmp/vfy/Payload/Blender.app/Assets/5.1/python/lib/python3.13/lib-dynload/math.cpython-313-iphoneos.so 2>&1 \
+            | grep -qi adhoc || {
+              echo "::error::math.cpython-313-iphoneos.so lost its signature inside the IPA"
+              exit 1
+            }
+          echo "IPA artifact: math.cpython-313-iphoneos.so signature intact"
+          unzip -l Blender.ipa | grep -E "Python.framework/(Python|Info.plist)" || {
+            echo "::error::Python.framework incomplete inside the IPA"
+            exit 1
+          }
+
+      - name: Upload IPA
+        if: steps.cmake_config.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender-ipad-unsigned
+          path: blender/build_ios/Blender.ipa
+          retention-days: 30
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            blender/build_ios/**/*.log
+            blender/build_ios/**/*.txt
+            blender/build_ios/CMakeCache.txt
+            blender/build_ios/CMakeFiles/CMakeError.log
+          retention-days: 7
+
+      # 构建失败也保存：这一版能编到 90%，下一版就从 90% 接着编。
+      # 只有真正产出了大量 object 时才占用缓存配额，避免"早期失败把大缓存挤掉"的倒退。
+      - name: Decide whether to refresh build cache
+        id: cachesave
+        if: always()
+        run: |
+          SZ=$(du -sm blender/build_ios 2>/dev/null | cut -f1); SZ=${SZ:-0}
+          echo "build_ios size = ${SZ} MB"
+          if [ "$SZ" -ge 200 ] && [ -d blender/build_ios/build ]; then
+            echo "save=true"  >> "$GITHUB_OUTPUT"
+            echo "worth caching (>=200MB of objects)"
+          else
+            echo "save=false" >> "$GITHUB_OUTPUT"
+            echo "too small / no objects - keep the existing cache instead"
+          fi
+
+      # 仓库缓存总额度是 10GB。上一版的大缓存必须先删，否则新版存不进去。
+      # 放在 save 之前，保证同一时刻只有一份 build_ios 缓存。
+      - name: Prune previous build cache
+        if: always() && steps.cachesave.outputs.save == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PREFIX="ios-build-v1-${{ steps.src.outputs.sha }}-"
+          KEEP="ios-build-v1-${{ steps.src.outputs.sha }}-${{ github.run_id }}"
+          echo "prefix=$PREFIX keep=$KEEP"
+          IDS=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+                    -H "Accept: application/vnd.github+json" \
+                    "https://api.github.com/repos/${{ github.repository }}/actions/caches?per_page=100" \
+                 | jq -r --arg p "$PREFIX" --arg k "$KEEP" \
+                     '.actions_caches[]? | select(.key | startswith($p)) | select(.key != $k) | .id')
+          if [ -z "$IDS" ]; then echo "no stale cache to prune"; fi
+          for id in $IDS; do
+            echo "deleting cache id=$id"
+            curl -s -o /dev/null -w "  http=%{http_code}\n" -X DELETE \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/caches/$id"
+          done
+
+      - name: Save incremental build cache
+        id: cache-save
+        # 缓存只是加速手段，绝不能因为它失败（超配额/超时）把成功的构建判成红
+        continue-on-error: true
+        timeout-minutes: 20
+        if: always() && steps.cachesave.outputs.save == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            blender/build_ios
+            !blender/build_ios/IPA
+            !blender/build_ios/Blender.ipa
+          key: ios-build-v1-${{ steps.src.outputs.sha }}-${{ github.run_id }}
