@@ -1,9 +1,0 @@
-name: probe-ubuntu
-on:
-  workflow_dispatch:
-jobs:
-  p:
-    runs-on: ubuntu-latest
-    steps:
-      - name: hi
-        run: echo PROBE_OK && date -u
