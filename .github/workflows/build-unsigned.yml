@@ -5,7 +5,13 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    # macOS runner 池的容量天天在变，记两条实测（2026-11）：
+    #   macos-14 —— 已退役，label 无效，job 1 秒内 cancelled、steps 为空
+    #   macos-15 —— 2026-11-24 全天零容量：排队 15:00 整被 cancel，runner_name 为空、steps=0
+    #   macos-26 —— 同一时刻秒级分配到机器，54 步全绿
+    # 15 分钟才死 = 没抢到机器（不是代码问题）；1 秒就死 = label 无效。这两种要分开判。
+    # 若 macos-26 也开始排队，另开一份只改 runs-on 的副本并行排队，谁先拿到机器留谁。
+    runs-on: macos-26
     timeout-minutes: 210
 
     steps:
